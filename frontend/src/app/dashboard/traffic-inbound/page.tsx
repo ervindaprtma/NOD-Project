@@ -122,9 +122,10 @@ export default function TrafficInboundPage() {
       let totalBytes = 0;
       for (const svc of chart.service_names || []) totalBytes += Number(row[svc]) || 0;
       const ms = row.timestampMs || (row.timestamp ? new Date(row.timestamp).getTime() : 0);
-      return { timestamp: ms ? new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Jakarta" }) : row.timestamp, total_bytes: totalBytes };
+      const mbps = parseFloat(((totalBytes * 8) / bucketSeconds / 1_000_000).toFixed(2));
+      return { timestamp: ms ? new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Jakarta" }) : row.timestamp, mbps };
     });
-  }, [chart]);
+  }, [chart, bucketSeconds]);
 
   function handlePreset(seconds: number, label: string) {
     const now = Date.now();
@@ -258,8 +259,8 @@ export default function TrafficInboundPage() {
                 <Title className="mb-3">Total Throughput Over Time</Title>
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText />
                   : throughputTimeline.length > 0 ? (
-                    <AreaChart data={throughputTimeline} categories={["total_bytes"]} index="timestamp"
-                      valueFormatter={formatBytes} colors={["#3b82f6"]} showLegend={false} showGridLines={true} showXAxis={true} showYAxis={true}
+                    <AreaChart data={throughputTimeline} categories={["mbps"]} index="timestamp"
+                      valueFormatter={(v: number) => v >= 100 ? `${v.toFixed(0)} Mbps` : `${v.toFixed(2)} Mbps`} colors={["#3b82f6"]} showLegend={false} showGridLines={true} showXAxis={true} showYAxis={true}
                       className="h-72 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400" />
                   ) : <EmptyState message="No throughput timeline data" />}
               </Card>
@@ -511,7 +512,7 @@ function StackedBarChart({ data, serviceNames }: { data: Record<string, any>[]; 
         {serviceNames.length > 25 && <span className="text-[11px] text-muted-foreground">+{serviceNames.length - 25} more</span>}
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420 }}>
-        {yTickValues.map((v) => <g key={v}><line x1={pad.left} x2={W - pad.right} y1={yScale(v)} y2={yScale(v)} className="stroke-muted-foreground/15" strokeWidth={0.5} /><text x={pad.left - 6} y={yScale(v) + 4} textAnchor="end" className="text-[10px] fill-muted-foreground">{v >= 1 ? v.toFixed(1) : (v * 1000).toFixed(0)}</text></g>)}
+        {yTickValues.map((v) => <g key={v}><line x1={pad.left} x2={W - pad.right} y1={yScale(v)} y2={yScale(v)} className="stroke-muted-foreground/15" strokeWidth={0.5} /><text x={pad.left - 6} y={yScale(v) + 4} textAnchor="end" className="text-[10px] fill-muted-foreground">{v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v >= 0.01 ? v.toFixed(2) : v.toFixed(4)}</text></g>)}
         {data.map((row, i) => {
           const x = xScale(i); let yOff = yScale(0);
           return <g key={i}>{serviceNames.map((svc) => {
@@ -534,7 +535,7 @@ function StackedBarChart({ data, serviceNames }: { data: Record<string, any>[]; 
       {hoveredBar && (
         <div className="fixed z-50 bg-card border rounded-lg shadow-lg p-3 text-xs pointer-events-none" style={{ left: Math.min(hoveredBar.x, window.innerWidth - 260), top: 60, maxWidth: 250 }}>
           <p className="font-semibold mb-2 text-muted-foreground">{formatStackTs(data[hoveredBar.barIndex])}</p>
-          {hoveredBar.sBreakdown.map(({ svc, mbps, color }) => <div key={svc} className="flex items-center justify-between gap-3 py-0.5"><div className="flex items-center gap-1.5 min-w-0"><span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: color }} /><span className="truncate">{svc}</span></div><span className="font-mono font-medium shrink-0">{mbps >= 1 ? `${mbps.toFixed(2)} Mbps` : `${(mbps * 1000).toFixed(0)} Kbps`}</span></div>)}
+          {hoveredBar.sBreakdown.map(({ svc, mbps, color }) => <div key={svc} className="flex items-center justify-between gap-3 py-0.5"><div className="flex items-center gap-1.5 min-w-0"><span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: color }} /><span className="truncate">{svc}</span></div><span className="font-mono font-medium shrink-0">{mbps >= 100 ? `${mbps.toFixed(0)} Mbps` : mbps >= 1 ? `${mbps.toFixed(2)} Mbps` : mbps >= 0.01 ? `${mbps.toFixed(2)} Mbps` : `${mbps.toFixed(4)} Mbps`}</span></div>)}
           <div className="border-t mt-2 pt-1.5 flex justify-between font-semibold"><span>Total</span><span className="font-mono">{hoveredBar.sBreakdown.reduce((s, a) => s + a.mbps, 0).toFixed(2)} Mbps</span></div>
         </div>
       )}

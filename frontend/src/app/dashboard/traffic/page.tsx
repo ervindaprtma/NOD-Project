@@ -216,12 +216,13 @@ export default function TrafficPage() {
         totalBytes += Number(row[app]) || 0;
       }
       const ms = row.timestampMs || (row.timestamp ? new Date(row.timestamp).getTime() : 0);
+      const mbps = parseFloat(((totalBytes * 8) / bucketSeconds / 1_000_000).toFixed(2));
       return {
         timestamp: ms ? new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Jakarta" }) : row.timestamp,
-        total_bytes: totalBytes,
+        mbps,
       };
     });
-  }, [chart]);
+  }, [chart, bucketSeconds]);
 
   const stackedBarData = useMemo(() => {
     if (!chart?.chart_data || !chart?.app_names) return { data: [], appNames: [] };
@@ -509,9 +510,9 @@ export default function TrafficPage() {
                 ) : throughputTimeline.length > 0 ? (
                   <AreaChart
                     data={throughputTimeline}
-                    categories={["total_bytes"]}
+                    categories={["mbps"]}
                     index="timestamp"
-                    valueFormatter={formatBytes}
+                    valueFormatter={(v: number) => v >= 100 ? `${v.toFixed(0)} Mbps` : v >= 1 ? `${v.toFixed(2)} Mbps` : `${v.toFixed(2)} Mbps`}
                     colors={["#3b82f6"]}
                     showLegend={false}
                     showGridLines={true}
@@ -1059,7 +1060,7 @@ function StackedBarChart({
               className="stroke-muted-foreground/15" strokeWidth={0.5} />
             <text x={pad.left - 6} y={yScale(v) + 4} textAnchor="end"
               className="text-[10px] fill-muted-foreground">
-              {v >= 1 ? v.toFixed(1) : (v * 1000).toFixed(0)}
+              {v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v >= 0.01 ? v.toFixed(2) : v.toFixed(4)}
             </text>
           </g>
         ))}
@@ -1135,7 +1136,7 @@ function StackedBarChart({
                 <span className="truncate">{app}</span>
               </div>
               <span className="font-mono font-medium shrink-0">
-                {mbps >= 1 ? `${mbps.toFixed(2)} Mbps` : `${(mbps * 1000).toFixed(0)} Kbps`}
+                {mbps >= 100 ? `${mbps.toFixed(0)} Mbps` : mbps >= 1 ? `${mbps.toFixed(2)} Mbps` : mbps >= 0.01 ? `${mbps.toFixed(2)} Mbps` : `${mbps.toFixed(4)} Mbps`}
               </span>
             </div>
           ))}
