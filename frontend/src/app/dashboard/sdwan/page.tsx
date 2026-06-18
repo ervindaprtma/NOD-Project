@@ -4,9 +4,10 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatMs, formatPercent, formatNumber, getDefaultTimeRange } from "@/lib/constants";
+import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatMs, formatAlwaysMs, formatPercent, formatNumber, getDefaultTimeRange } from "@/lib/constants";
 import type { SDWANData } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
+import { Card, AreaChart as TremorAreaChart } from "@tremor/react";
 
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
 
@@ -16,10 +17,7 @@ const SITE_BADGES: Record<string, string> = {
   "Site_FGT_Office": "Office",
 };
 
-const WAN_COLORS = ["#3b82f6", "#f59e0b"];
-const MPLS_COLORS = ["#10b981", "#8b5cf6"];
-
-type SectionId = "linkStatus" | "summary" | "wanLatency" | "mplsLatency" | "wanJitter" | "mplsJitter" | "wanLoss" | "mplsLoss";
+type SectionId = "linkStatus" | "summary" | "latency" | "jitter" | "packetLoss";
 
 export default function SDWANPage() {
   const defaultRange = getDefaultTimeRange();
@@ -96,20 +94,7 @@ export default function SDWANPage() {
     );
   }
 
-  function pointsByType(raw: { timestamp: number; value: number; label: string; link_type: string }[]) {
-    const wan = raw.filter((p) => p.link_type === "WAN");
-    const mpls = raw.filter((p) => p.link_type === "MPLS");
-    const groups: Record<string, { timestamp: number; value: number }[]> = {};
-    const uniqueLabels = [...new Set(raw.map((p) => p.label))];
-    for (const label of uniqueLabels) {
-      groups[label] = raw.filter((p) => p.label === label);
-    }
-    return { wan, mpls, groups, uniqueLabels };
-  }
-
-  const latGroups = sdwan ? pointsByType(sdwan.latency_timeline.links) : null;
-  const jitGroups = sdwan ? pointsByType(sdwan.jitter_timeline.links) : null;
-  const lossGroups = sdwan ? pointsByType(sdwan.packet_loss_timeline.links) : null;
+  // Data is directly available from API — no grouping needed
 
   if (expanded) {
     return (
@@ -127,7 +112,8 @@ export default function SDWANPage() {
         </div>
         {expanded === "linkStatus" && renderLinkStatus(sdwan, isLoading)}
         {expanded === "summary" && renderSummary(sdwan)}
-        {expanded.startsWith("wan") || expanded.startsWith("mpls") ? renderExpandedChart(expanded, latGroups, jitGroups, lossGroups, sdwan, isLoading) : null}
+        {(expanded === "latency" || expanded === "jitter" || expanded === "packetLoss") &&
+          renderExpandedChart(expanded, sdwan, isLoading)}
         <TimeRangePicker
           isOpen={showCustomPicker}
           onApply={handleCustomApply}
@@ -311,7 +297,7 @@ export default function SDWANPage() {
                   </div>
                   <div>
                     <span className="text-[9px] text-muted-foreground">Jitter</span>
-                    <p className="text-sm font-bold">{formatMs(sdwan.summary.avg_jitter[i])}</p>
+                    <p className="text-sm font-bold">{formatAlwaysMs(sdwan.summary.avg_jitter[i])}</p>
                   </div>
                   <div>
                     <span className="text-[9px] text-muted-foreground">Loss</span>
@@ -326,52 +312,25 @@ export default function SDWANPage() {
         )}
       </SectionBlock>
 
-      {/* WAN Latency */}
-      <MultiLinkChart
-        title="WAN Latency (ms)" loading={isLoading} section="wanLatency" onViewMore={() => setExpanded("wanLatency")}
-        groups={latGroups?.groups}
-        wanLabels={latGroups?.uniqueLabels.filter((l) => sdwan?.latency_timeline.links.find((p) => p.label === l)?.link_type === "WAN") || []}
-        colors={WAN_COLORS} format={formatMs}
+      {/* Latency (all links) */}
+      <SlaTimeseriesChart
+        title="Latency (ms)" loading={isLoading} section="latency"
+        onViewMore={() => setExpanded("latency")}
+        links={sdwan?.latency_timeline?.links} color="blue" format={formatMs}
       />
 
-      {/* MPLS Latency */}
-      <MultiLinkChart
-        title="MPLS Latency (ms)" loading={isLoading} section="mplsLatency" onViewMore={() => setExpanded("mplsLatency")}
-        groups={latGroups?.groups}
-        wanLabels={latGroups?.uniqueLabels.filter((l) => sdwan?.latency_timeline.links.find((p) => p.label === l)?.link_type === "MPLS") || []}
-        colors={MPLS_COLORS} format={formatMs}
+      {/* Jitter (all links) */}
+      <SlaTimeseriesChart
+        title="Jitter (ms)" loading={isLoading} section="jitter"
+        onViewMore={() => setExpanded("jitter")}
+        links={sdwan?.jitter_timeline?.links} color="orange" format={formatAlwaysMs}
       />
 
-      {/* WAN Jitter */}
-      <MultiLinkChart
-        title="WAN Jitter (ms)" loading={isLoading} section="wanJitter" onViewMore={() => setExpanded("wanJitter")}
-        groups={jitGroups?.groups}
-        wanLabels={jitGroups?.uniqueLabels.filter((l) => sdwan?.jitter_timeline.links.find((p) => p.label === l)?.link_type === "WAN") || []}
-        colors={WAN_COLORS} format={formatMs}
-      />
-
-      {/* MPLS Jitter */}
-      <MultiLinkChart
-        title="MPLS Jitter (ms)" loading={isLoading} section="mplsJitter" onViewMore={() => setExpanded("mplsJitter")}
-        groups={jitGroups?.groups}
-        wanLabels={jitGroups?.uniqueLabels.filter((l) => sdwan?.jitter_timeline.links.find((p) => p.label === l)?.link_type === "MPLS") || []}
-        colors={MPLS_COLORS} format={formatMs}
-      />
-
-      {/* WAN Packet Loss */}
-      <MultiLinkChart
-        title="WAN Packet Loss (%)" loading={isLoading} section="wanLoss" onViewMore={() => setExpanded("wanLoss")}
-        groups={lossGroups?.groups}
-        wanLabels={lossGroups?.uniqueLabels.filter((l) => sdwan?.packet_loss_timeline.links.find((p) => p.label === l)?.link_type === "WAN") || []}
-        colors={WAN_COLORS} format={formatPercent}
-      />
-
-      {/* MPLS Packet Loss */}
-      <MultiLinkChart
-        title="MPLS Packet Loss (%)" loading={isLoading} section="mplsLoss" onViewMore={() => setExpanded("mplsLoss")}
-        groups={lossGroups?.groups}
-        wanLabels={lossGroups?.uniqueLabels.filter((l) => sdwan?.packet_loss_timeline.links.find((p) => p.label === l)?.link_type === "MPLS") || []}
-        colors={MPLS_COLORS} format={formatPercent}
+      {/* Packet Loss (all links) */}
+      <SlaTimeseriesChart
+        title="Packet Loss (%)" loading={isLoading} section="packetLoss"
+        onViewMore={() => setExpanded("packetLoss")}
+        links={sdwan?.packet_loss_timeline?.links} color="red" format={formatPercent}
       />
 
       <TimeRangePicker
@@ -390,12 +349,9 @@ export default function SDWANPage() {
 const SECTION_LABELS: Record<SectionId, string> = {
   linkStatus: "Link Status",
   summary: "SLA Summary KPIs",
-  wanLatency: "WAN Latency",
-  mplsLatency: "MPLS Latency",
-  wanJitter: "WAN Jitter",
-  mplsJitter: "MPLS Jitter",
-  wanLoss: "WAN Packet Loss",
-  mplsLoss: "MPLS Packet Loss",
+  latency: "Latency",
+  jitter: "Jitter",
+  packetLoss: "Packet Loss",
 };
 
 function renderLinkStatus(sdwan: SDWANData | undefined, loading: boolean) {
@@ -452,7 +408,7 @@ function renderSummary(sdwan: SDWANData | undefined) {
             <div className="grid grid-cols-2 gap-2">
               <div><span className="text-[9px] text-muted-foreground">Lat</span><p className="text-lg font-bold">{formatMs(sdwan.summary.avg_latency[i])}</p></div>
               <div><span className="text-[9px] text-muted-foreground">Max</span><p className="text-lg font-bold">{formatMs(sdwan.summary.max_latency[i])}</p></div>
-              <div><span className="text-[9px] text-muted-foreground">Jitter</span><p className="text-lg font-bold">{formatMs(sdwan.summary.avg_jitter[i])}</p></div>
+              <div><span className="text-[9px] text-muted-foreground">Jitter</span><p className="text-lg font-bold">{formatAlwaysMs(sdwan.summary.avg_jitter[i])}</p></div>
               <div><span className="text-[9px] text-muted-foreground">Loss</span><p className="text-lg font-bold">{formatPercent(sdwan.summary.avg_packet_loss[i])}</p></div>
             </div>
           </div>
@@ -464,34 +420,27 @@ function renderSummary(sdwan: SDWANData | undefined) {
 
 function renderExpandedChart(
   section: SectionId,
-  latGroups: any, jitGroups: any, lossGroups: any,
   sdwan: SDWANData | undefined, loading: boolean
 ) {
   if (loading) return <div className="h-64 bg-muted animate-pulse rounded-lg" />;
-  let groups: any; let wanLabels: string[]; let colors: string[]; let formatFn = formatMs; let title = SECTION_LABELS[section];
-  const raw = section.startsWith("wan") ? sdwan?.[
-    section.includes("Latency") ? "latency_timeline" : section.includes("Jitter") ? "jitter_timeline" : "packet_loss_timeline"
-  ] : sdwan?.[
-    section.includes("Latency") ? "latency_timeline" : section.includes("Jitter") ? "jitter_timeline" : "packet_loss_timeline"
-  ];
-  // Simplified: use the groups from the main component
   if (!sdwan) return <p className="text-sm text-muted-foreground text-center py-12">No data</p>;
-  const typedSdwan = sdwan as any;
-  let links: { timestamp: number; value: number; label: string; link_type: string }[] = [];
-  if (section.includes("Latency")) links = typedSdwan?.latency_timeline?.links || [];
-  else if (section.includes("Jitter")) links = typedSdwan?.jitter_timeline?.links || [];
-  else links = typedSdwan?.packet_loss_timeline?.links || [];
-  const typeFilter = section.startsWith("wan") ? "WAN" : "MPLS";
-  const filtered = links.filter((l: any) => l.link_type === typeFilter);
-  if (filtered.length === 0) return <p className="text-sm text-muted-foreground text-center py-12">No data for this metric</p>;
-  const byLabel: Record<string, { timestamp: number; value: number }[]> = {};
-  for (const p of filtered) { if (!byLabel[p.label]) byLabel[p.label] = []; byLabel[p.label].push(p); }
-  const labels = Object.keys(byLabel);
-  if (section.includes("Loss")) formatFn = formatPercent;
-  const c = typeFilter === "WAN" ? WAN_COLORS : MPLS_COLORS;
+
+  const metricMap: Record<string, { links: { timestamp: number; value: number; label: string; link_type: string }[]; color: string; format: (v: number) => string }> = {
+    latency: { links: sdwan.latency_timeline?.links || [], color: "blue", format: formatMs },
+    jitter: { links: sdwan.jitter_timeline?.links || [], color: "orange", format: formatAlwaysMs },
+    packetLoss: { links: sdwan.packet_loss_timeline?.links || [], color: "red", format: formatPercent },
+  };
+
+  const metric = metricMap[section];
+  if (!metric || metric.links.length === 0) {
+    return <p className="text-sm text-muted-foreground text-center py-12">No data for this metric</p>;
+  }
+
   return (
     <div className="bg-card border rounded-lg p-6">
-      <MultiLinkChartInner title={title} groups={byLabel} wanLabels={labels} colors={c} format={formatFn} />
+      <div className="h-64 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
+        <SlaAreaChart links={metric.links} color={metric.color} format={metric.format} />
+      </div>
     </div>
   );
 }
@@ -517,15 +466,14 @@ function SectionBlock({
   );
 }
 
-// ── Multi-Link Timeline Chart ───────────────────────────────────
+// ── SLA Timeseries Chart (compact card) ────────────────────────
 
-function MultiLinkChart({
-  title, loading, section, onViewMore,
-  groups, wanLabels, colors, format,
+function SlaTimeseriesChart({
+  title, loading, section, onViewMore, links, color, format,
 }: {
   title: string; loading: boolean; section: string; onViewMore: () => void;
-  groups?: Record<string, { timestamp: number; value: number }[]>;
-  wanLabels: string[]; colors: string[]; format: (v: number) => string;
+  links?: { timestamp: number; value: number; label: string; link_type: string }[];
+  color: string; format: (v: number) => string;
 }) {
   return (
     <div className="bg-card border rounded-lg p-4 group">
@@ -540,87 +488,66 @@ function MultiLinkChart({
       </div>
       {loading ? (
         <div className="h-48 bg-muted animate-pulse rounded" />
+      ) : links && links.length > 0 ? (
+        <div className="h-48 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
+          <SlaAreaChart links={links} color={color} format={format} />
+        </div>
       ) : (
-        <MultiLinkChartInner title={title} groups={groups} wanLabels={wanLabels} colors={colors} format={format} />
+        <p className="text-xs text-muted-foreground text-center py-8">No data</p>
       )}
     </div>
   );
 }
 
-function MultiLinkChartInner({
-  title, groups, wanLabels, colors, format,
+// ── SLA Area Chart (Tremor) ────────────────────────────────────
+
+function SlaAreaChart({
+  links, color, format,
 }: {
-  title: string;
-  groups?: Record<string, { timestamp: number; value: number }[]>;
-  wanLabels: string[]; colors: string[]; format: (v: number) => string;
+  links: { timestamp: number; value: number; label: string; link_type: string }[];
+  color: string; format: (v: number) => string;
 }) {
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
-  if (!groups || !wanLabels || wanLabels.length === 0) {
-    return <p className="text-xs text-muted-foreground text-center py-8">No data</p>;
+  const labels = [...new Set(links.map(l => l.label))];
+
+  // Build Tremor-compatible data: each timestamp row has one value per link label
+  const byTs: Record<number, Record<string, number>> = {};
+  for (const p of links) {
+    if (!byTs[p.timestamp]) byTs[p.timestamp] = {};
+    byTs[p.timestamp][p.label] = p.value;
   }
-  const displayLabels = wanLabels.filter((l) => visible[l] !== false);
-  if (displayLabels.length === 0) {
-    wanLabels.forEach((l) => { if (visible[l] === undefined) setVisible(prev => ({ ...prev, [l]: true })); });
-  }
-  const finalLabels = wanLabels.filter((l) => visible[l] !== false);
-  const allValues = wanLabels.flatMap((l) => (groups[l] || []).map((d) => d.value));
-  const min = Math.min(...allValues, 0);
-  const max = Math.max(...allValues, 1);
-  const range = max - min || 1;
-  const W = 700; const H = 220; const pad = { top: 10, right: 20, bottom: 30, left: 65 };
-  const allTimestamps = [...new Set(wanLabels.flatMap((l) => (groups[l] || []).map((d) => d.timestamp)))].sort((a, b) => a - b);
-  function xScale(i: number) { return pad.left + (i / (allTimestamps.length - 1 || 1)) * (W - pad.left - pad.right); }
-  function yScale(v: number) { return pad.top + (1 - (v - min) / range) * (H - pad.top - pad.bottom); }
+  const chartData = Object.entries(byTs)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([ts, vals]) => ({
+      timestamp: new Date(Number(ts)).toLocaleTimeString("en-US", {
+        hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Jakarta",
+      }),
+      ...vals,
+    }));
+
+  // Map color name to Tremor color
+  const tremorColor: Record<string, string> = {
+    blue: "blue", orange: "orange", red: "red",
+  };
 
   return (
-    <div>
-      <div className="flex items-center gap-3 mb-2 flex-wrap">
-        {wanLabels.map((label, i) => (
-          <label key={label} className="flex items-center gap-1.5 text-xs cursor-pointer">
-            <input type="checkbox" checked={visible[label] !== false}
-              onChange={() => setVisible(prev => ({ ...prev, [label]: prev[label] === false ? true : false }))}
-              className="rounded" />
-            <span style={{ color: colors[i % colors.length] }}>{label}</span>
-          </label>
-        ))}
-      </div>
-      {allTimestamps.length === 0 ? (
-        <p className="text-xs text-muted-foreground text-center py-8">No data for selected time range</p>
-      ) : (
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 240 }}>
-          {[0, 0.25, 0.5, 0.75, 1].map((frac) => {
-            const y = yScale(min + frac * range);
-            return (
-              <g key={frac}>
-                <line x1={pad.left} x2={W - pad.right} y1={y} y2={y} className="stroke-muted-foreground/15" strokeWidth={0.5} />
-                <text x={pad.left - 6} y={y + 4} textAnchor="end" className="text-[10px] fill-muted-foreground">
-                  {format(min + frac * range)}
-                </text>
-              </g>
-            );
-          })}
-          {finalLabels.map((label, idx) => {
-            const pts = groups[label] || [];
-            if (pts.length < 2) return null;
-            const points = pts.map((d) => {
-              const i = allTimestamps.indexOf(d.timestamp);
-              return `${xScale(i)},${yScale(d.value)}`;
-            }).join(" ");
-            return <polyline key={label} points={points} fill="none"
-              stroke={colors[idx % colors.length]} strokeWidth={2} />;
-          })}
-          {allTimestamps.length > 0 && (
-            <>
-              <text x={pad.left} y={H - 8} textAnchor="start" className="text-[10px] fill-muted-foreground">
-                {new Date(allTimestamps[0]).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })}
-              </text>
-              <text x={W - pad.right} y={H - 8} textAnchor="end" className="text-[10px] fill-muted-foreground">
-                {new Date(allTimestamps[allTimestamps.length - 1]).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })}
-              </text>
-            </>
-          )}
-        </svg>
-      )}
-    </div>
+    <TremorAreaChart
+      className="h-full"
+      data={chartData}
+      index="timestamp"
+      categories={labels}
+      colors={labels.map(() => tremorColor[color] || color)}
+      valueFormatter={format}
+      showLegend={labels.length > 1}
+      showGridLines={false}
+      showXAxis={true}
+      showYAxis={true}
+      showTooltip={true}
+      autoMinValue
+      allowDecimals
+      curveType="monotone"
+      showGradient={false}
+      tickGap={30}
+      yAxisWidth={60}
+    />
   );
 }

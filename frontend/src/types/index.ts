@@ -217,7 +217,7 @@ export interface TrafficFlowSummary {
   protocol_dist: TrafficFlowProtocolItem[]; egress_breakdown: TrafficFlowEgressItem[];
   top_src_as_org: TrafficFlowSrcASOrgItem[];
 }
-export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; global_speed_by_app: Record<string, number>; }
+export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; global_speed_by_app?: Record<string, number>; }
 export interface TrafficFlowTableRecord { client_ip: string; server_ip: string; app_name: string; bytes: number; packets: number; sessions: number; }
 export interface TrafficFlowTableData { records: TrafficFlowTableRecord[]; after_key: any; }
 
@@ -367,14 +367,30 @@ export interface SankeyResponse { nodes: SankeyNode[]; links: SankeyLink[]; }
 // ── Traffic Inbound v2.0 ──────────────────────────────────────────
 
 export interface TrafficInboundServiceItem { service_name: string; service_port: number | string; total_bytes: number; speed_mbps: number; percentage: number; }
-export interface TrafficInboundCategoryItem { category_name: string; total_bytes: number; count: number; }
 export interface TrafficInboundSummary {
-  top_services: TrafficInboundServiceItem[]; service_categories: TrafficInboundCategoryItem[];
-  top_dst_as_org: TrafficFlowASOrgItem[]; top_dst_as_country: TrafficFlowASCountryItem[];
-  top_clients: TrafficFlowClientItem[]; top_servers: TrafficFlowServerItem[];
-  protocol_dist: TrafficFlowProtocolItem[]; egress_breakdown: TrafficFlowEgressItem[];
-  top_src_as_org: TrafficFlowSrcASOrgItem[];
+  top_services: TrafficInboundServiceItem[];
+  service_categories?: { category_name: string; total_bytes: number; count: number }[];
+  top_dst_as_org?: TrafficFlowASOrgItem[];
+  top_dst_as_country?: TrafficFlowASCountryItem[];
+  top_src_as_org: TrafficFlowASOrgItem[];
+  top_src_as_country: TrafficFlowASCountryItem[];
+  top_clients: TrafficFlowClientItem[];
+  top_servers: TrafficFlowServerItem[];
+  protocol_dist: { protocol: string; total_bytes: number }[];
+  egress_breakdown: TrafficFlowEgressItem[];
 }
-export interface TrafficInboundChartData { chart_data: Record<string, any>[]; service_names: string[]; global_speed_by_service: Record<string, number>; }
-export interface TrafficInboundTableRecord { client_ip: string; server_ip: string; service_name: string; service_port: number | string; bytes: number; packets: number; sessions: number; }
-export interface TrafficInboundTableData { records: TrafficInboundTableRecord[]; after_key: any; }
+export interface TrafficInboundChartData { chart_data: Record<string, any>[]; service_names: string[]; }
+export interface TrafficInboundTableRecord { client_ip: string; server_ip: string; service: string; bytes: number; packets: number; sessions: number; }
+export interface TrafficInboundTableData { records: TrafficInboundTableRecord[]; after_key: any; total: number; }
+
+// ── Traffic Internal v2.0 ──────────────────────────────────────────
+
+export interface TrafficInternalSummary {
+  top_services: TrafficInboundServiceItem[];
+  top_clients: TrafficFlowClientItem[];
+  top_servers: TrafficFlowServerItem[];
+  ingress_breakdown: { interface: string; total_bytes: number }[];
+  egress_breakdown: TrafficFlowEgressItem[];
+  protocol_dist: { protocol: string; total_bytes: number }[];
+}
+export interface TrafficInternalChartData { chart_data: Record<string, any>[]; service_names: string[]; }

@@ -84,7 +84,6 @@ class TrafficSummaryResponse(BaseModel):
     top_servers: list[TopServerItem]
     protocol_dist: list[ProtocolDistItem]
     egress_breakdown: list[EgressBreakdownItem]
-    top_src_as_org: list[TopSrcASOrgItem]
 
 
 # ── CHART RESPONSE ───────────────────────────────────────────────
@@ -93,7 +92,7 @@ class TrafficSummaryResponse(BaseModel):
 class TrafficChartResponse(BaseModel):
     chart_data: list[dict]  # [{timestamp, timestampMs, app1: bytes, app2: bytes, ...}]
     app_names: list[str]
-    global_speed_by_app: dict[str, float]  # app_name -> Mbps
+    global_speed_by_app: dict[str, float] = {}
 
 
 # ── TABLE RESPONSE ───────────────────────────────────────────────

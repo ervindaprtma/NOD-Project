@@ -20,12 +20,6 @@ class TopServiceItem(BaseModel):
     percentage: float
 
 
-class ServiceCategoryItem(BaseModel):
-    category_name: str
-    total_bytes: int
-    count: int
-
-
 class TopASOrgItem(BaseModel):
     org_name: str
     total_bytes: int
@@ -51,16 +45,10 @@ class TopServerItem(BaseModel):
 class ProtocolDistItem(BaseModel):
     protocol: str
     total_bytes: int
-    percentage: float
 
 
 class EgressBreakdownItem(BaseModel):
     interface: str
-    total_bytes: int
-
-
-class TopSrcASOrgItem(BaseModel):
-    org_name: str
     total_bytes: int
 
 
@@ -69,14 +57,12 @@ class TopSrcASOrgItem(BaseModel):
 
 class TrafficInboundSummaryResponse(BaseModel):
     top_services: list[TopServiceItem]
-    service_categories: list[ServiceCategoryItem]
-    top_dst_as_org: list[TopASOrgItem]
-    top_dst_as_country: list[TopASCountryItem]
+    top_src_as_org: list[TopASOrgItem]
+    top_src_as_country: list[TopASCountryItem]
     top_clients: list[TopClientItem]
     top_servers: list[TopServerItem]
     protocol_dist: list[ProtocolDistItem]
     egress_breakdown: list[EgressBreakdownItem]
-    top_src_as_org: list[TopSrcASOrgItem]
 
 
 # ── CHART RESPONSE ───────────────────────────────────────────────
@@ -85,7 +71,6 @@ class TrafficInboundSummaryResponse(BaseModel):
 class TrafficInboundChartResponse(BaseModel):
     chart_data: list[dict]
     service_names: list[str]
-    global_speed_by_service: dict[str, float]
 
 
 # ── TABLE RESPONSE ───────────────────────────────────────────────
@@ -94,8 +79,7 @@ class TrafficInboundChartResponse(BaseModel):
 class InboundFlowTableRecord(BaseModel):
     client_ip: str
     server_ip: str
-    service_name: str = "Unknown"
-    service_port: int | str = 0
+    service: str = "Unknown"
     bytes: int = 0
     packets: int = 0
     sessions: int = 0
@@ -104,6 +88,7 @@ class InboundFlowTableRecord(BaseModel):
 class TrafficInboundTableResponse(BaseModel):
     records: list[InboundFlowTableRecord]
     after_key: Optional[dict] = None
+    total: int = 0
 
 
 # ── SANKEY RESPONSE ──────────────────────────────────────────────
@@ -124,3 +109,5 @@ class SankeyLink(BaseModel):
 class SankeyResponse(BaseModel):
     nodes: list[SankeyNode]
     links: list[SankeyLink]
+    as_country_nodes: list[dict] = []
+    as_country_links: list[dict] = []

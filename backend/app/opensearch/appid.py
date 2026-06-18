@@ -627,16 +627,18 @@ async def raw_flows(
     Q-03: _source includes only required fields.
     Q-04: no scroll API — uses search_after.
     Q-08: valid search_after pagination.
-    Routes to correct cluster via SITE_FLOW_MAP (dc/drc).
+    Routes to correct cluster per site (dc/drc).
     Returns {"records": [...], "search_after": [...]}
     """
     if client is None:
         # Route to correct cluster per site
-        from app.opensearch.traffic_flow import SITE_FLOW_MAP, _get_client as _tf_get_client
+        from app.opensearch.traffic_flow import _get_client as _tf_get_client
         try:
             client = _tf_get_client(site_name)
         except Exception:
             client = get_drc_client()
+
+    from app.opensearch.traffic_flow import _site_filter as _tf_site_filter
 
     # Q-08: page_size max 500
     if page_size > 500:
@@ -660,7 +662,7 @@ async def raw_flows(
         "flow.correlation_direction",
     ]
 
-    must_filters = [_time_range(gte_ms, lte_ms)]
+    must_filters = [_time_range(gte_ms, lte_ms), _tf_site_filter(site_name)]
     must_not_filters = [_exclude_app0(), _exclude_private_as()]
 
     # Apply additional filters

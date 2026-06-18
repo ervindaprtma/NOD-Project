@@ -56,7 +56,7 @@ export default function RawDataPage() {
     packets: true, ingress_zone: true, egress_link: true,
     correlation_id: true, correlation_direction: true,
   });
-  const [siteName, setSiteName] = useState("Site_FGT_Office");
+  const [siteName, setSiteName] = useState("Site_FGT-DC");
 
   // Build query params
   const queryParams = useMemo(() => {
@@ -209,9 +209,9 @@ export default function RawDataPage() {
             }}
             className="px-3 py-1.5 rounded-md border border-border/60 bg-background text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
           >
-            <option value="Site_FGT_Office">Site_FGT_Office</option>
             <option value="Site_FGT-DC">Site_FGT-DC</option>
             <option value="Site_FGT-DRC">Site_FGT-DRC</option>
+            <option value="Site_FGT_Office">Site_FGT_Office</option>
           </select>
           <div className="flex gap-1 bg-muted/40 dark:bg-muted/30 rounded-md p-1">
             {TIME_PRESETS.map((p) => (

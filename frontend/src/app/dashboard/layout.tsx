@@ -6,6 +6,7 @@ import Link from "next/link";
 import { getAccessToken, setAccessToken, apiFetch, ensureValidToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { Network } from "lucide-react";
 import type { Notification as NotifType } from "@/types";
 
 const NAV_ITEMS = [
@@ -144,9 +145,10 @@ export default function DashboardLayout({
         <div className="flex items-center h-14 px-4 border-b">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="text-sm font-bold tracking-tight"
+            className="text-sm font-bold tracking-tight flex items-center gap-2"
           >
-            {sidebarOpen ? "NOD" : "N"}
+            <Network className="h-5 w-5 text-primary shrink-0" />
+            {sidebarOpen ? "NOD" : ""}
           </button>
         </div>
         <nav className="flex-1 overflow-y-auto py-2">

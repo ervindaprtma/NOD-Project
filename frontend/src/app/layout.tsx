@@ -5,6 +5,9 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "NOD — Network Observability Dashboard",
   description: "Enterprise-grade FortiGate network observability platform",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

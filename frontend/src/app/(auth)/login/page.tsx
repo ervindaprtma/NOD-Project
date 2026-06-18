@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { setAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { Network } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -45,7 +46,10 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-muted/30">
       <div className="w-full max-w-md p-8 space-y-6 bg-card rounded-xl border shadow-sm">
         <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold tracking-tight">NOD</h1>
+          <div className="flex items-center justify-center gap-2">
+            <Network className="h-6 w-6 text-primary" />
+            <h1 className="text-2xl font-bold tracking-tight">NOD</h1>
+          </div>
           <p className="text-sm text-muted-foreground">
             Network Observability Dashboard
           </p>

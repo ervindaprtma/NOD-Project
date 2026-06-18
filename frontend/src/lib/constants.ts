@@ -67,6 +67,11 @@ export function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(2)} s`;
 }
 
+/** Format milliseconds — always show as ms (no µs/s conversion). */
+export function formatAlwaysMs(ms: number): string {
+  return `${ms.toFixed(1)} ms`;
+}
+
 /** Format large numbers (K/M). */
 export function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;

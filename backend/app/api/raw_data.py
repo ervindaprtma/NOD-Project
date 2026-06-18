@@ -46,7 +46,7 @@ async def get_raw_flows(
     dst_port: Optional[int] = Query(default=None),
     ingress_zone: Optional[str] = Query(default=None),
     egress_link: Optional[str] = Query(default=None),
-    site_name: str = Query(default="Site_FGT_Office", description="Site: Site_FGT-DC, Site_FGT-DRC, Site_FGT_Office"),
+    site_name: str = Query(default="Site_FGT-DC", description="Site: Site_FGT-DC, Site_FGT-DRC, Site_FGT_Office"),
     current_user=Depends(require_role("operator")),
 ):
     """

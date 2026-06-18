@@ -6,7 +6,7 @@ import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, formatNumber, getDefaultTimeRange } from "@/lib/constants";
-import type { OverviewData, TopASOrg, TopInboundService, WanInterfaceSummary, SiteWanBandwidth } from "@/types";
+import type { OverviewData, TopASOrg, WanInterfaceSummary, SiteWanBandwidth } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 
 const SITE_OPTIONS = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
@@ -45,6 +45,7 @@ export default function OverviewPage() {
   const [appSite, setAppSite] = useState("Site_FGT-DC");
   const [asSite, setAsSite] = useState("Site_FGT-DC");
   const [wanSite, setWanSite] = useState("Site_FGT-DC");
+  const [inboundSite, setInboundSite] = useState("Site_FGT-DC");
 
   const token = typeof window !== "undefined" ? getAccessToken() : null;
   const [currentGteMs, setCurrentGteMs] = useState(defaultRange.gte_ms);
@@ -89,6 +90,13 @@ export default function OverviewPage() {
     : null;
   const { data: asData } = useSWR<{ data: any }>(asKey, swrFetcher, { refreshInterval: 0 });
   const asItems = asData?.data?.top_dst_as_org || [];
+
+  // Per-site inbound VIP fetches
+  const inboundKey = token
+    ? `/api/v1/traffic-inbound/summary?site_name=${inboundSite}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}`
+    : null;
+  const { data: inboundData } = useSWR<{ data: any }>(inboundKey, swrFetcher, { refreshInterval: 0 });
+  const inboundItems = inboundData?.data?.top_services || [];
 
   function selectPreset(preset: typeof TIME_PRESETS[0]) {
     const now = Date.now();
@@ -341,15 +349,22 @@ export default function OverviewPage() {
 
         {/* Inbound VIP Services */}
         <ClickCard onClick={() => router.push("/dashboard/traffic-inbound")}>
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
             <h2 className="text-lg font-semibold">Inbound VIP — Top Services</h2>
-            <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View details →</span>
+            <div className="flex items-center gap-2">
+              <select value={inboundSite} onChange={(e) => setInboundSite(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                className="px-2 py-1 text-xs rounded border bg-background">
+                {SITE_OPTIONS.filter(s => s !== "Site_FGT_Office").map(s => <option key={s} value={s}>{SITE_LABELS[s] || s}</option>)}
+              </select>
+              <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+            </div>
           </div>
-          {isLoading ? <SkeletonBars count={5} /> : overview?.inbound_vip_services?.length ? (
+          {isLoading ? <SkeletonBars count={5} /> : inboundItems.length > 0 ? (
             <div className="space-y-2">
-              {overview.inbound_vip_services.map((svc, i) => (
-                <BarRow key={svc.service_name} rank={i + 1} label={svc.service_name} bytes={svc.total_bytes} bytesHuman={svc.bytes_human}
-                  max={overview.inbound_vip_services[0]?.total_bytes || 1} color="bg-violet-500" />
+              {inboundItems.slice(0, 5).map((svc: any, i: number) => (
+                <BarRow key={svc.service_name || svc.service} rank={i + 1} label={svc.service_name || svc.service} bytes={svc.total_bytes} bytesHuman={formatBytes(svc.total_bytes)}
+                  max={inboundItems[0]?.total_bytes || 1} color="bg-violet-500" />
               ))}
             </div>
           ) : <EmptyText />}
