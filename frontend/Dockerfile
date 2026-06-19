@@ -6,9 +6,9 @@ ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
 WORKDIR /app
 
-# Copy package.json first for better layer caching
-COPY package.json ./
-RUN npm install
+# Copy package files first for better layer caching
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . .
 
@@ -21,9 +21,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Copy package.json and install only production deps
-COPY --from=builder /app/package.json ./
-RUN npm install --omit=dev
+# Copy package files and install only production deps
+COPY --from=builder /app/package.json /app/package-lock.json ./
+RUN npm ci --omit=dev
 
 # Copy built artifacts
 COPY --from=builder /app/.next ./.next
