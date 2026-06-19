@@ -210,7 +210,7 @@ async def flow_summary(
 
 async def flow_chart(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
-    site_name: str = "Site_FGT-DC", top_n: int = 20, path_filter: str = "internet",
+    site_name: str = "Site_FGT-DC", top_n: int = 50, path_filter: str = "internet",
     bucket_seconds: int = 60, app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None,
