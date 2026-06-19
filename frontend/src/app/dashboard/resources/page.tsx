@@ -316,7 +316,7 @@ export default function ResourcesPage() {
 
       {/* ── Tab Group ────────────────────────────────────────────── */}
       <Tabs value={tabIndex === 0 ? "resources" : "bandwidth"} onValueChange={(val) => setTabIndex(val === "resources" ? 0 : 1)}>
-        <TabsList className="mb-4 p-1 bg-muted/40 dark:bg-muted/30 rounded-lg">
+        <TabsList className="mb-4 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex">
           <TabsTrigger value="resources">Resource Usage</TabsTrigger>
           <TabsTrigger value="bandwidth">Interface Bandwidth</TabsTrigger>
         </TabsList>

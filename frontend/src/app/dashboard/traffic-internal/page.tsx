@@ -180,7 +180,7 @@ export default function TrafficInternalPage() {
       </div>
 
       <Tabs defaultValue="overview">
-        <TabsList className="mb-6 p-1 bg-muted/40 dark:bg-muted/30 rounded-lg"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="sankey">Sankey Diagram</TabsTrigger></TabsList>
+        <TabsList className="mb-6 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="sankey">Sankey Diagram</TabsTrigger></TabsList>
         <TabsContent value="overview">
             {!summaryLoading && !chartLoading && !tableLoading && !hasError && !summary && (
               <div className="p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-sm">No internal traffic data for {SITE_LABELS[siteName] || siteName}.</div>

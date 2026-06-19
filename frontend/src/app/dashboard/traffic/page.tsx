@@ -406,7 +406,7 @@ export default function TrafficPage() {
 
       {/* ── Tab Navigation ── */}
       <Tabs defaultValue={activeTab === "overview" ? "overview" : "sankey"} onValueChange={(v) => setActiveTab(v as "overview" | "sankey")}>
-        <TabsList className="mb-6 p-1 bg-muted/40 dark:bg-muted/30 rounded-lg">
+        <TabsList className="mb-6 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="sankey">Sankey Diagram</TabsTrigger>
         </TabsList>
