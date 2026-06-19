@@ -187,3 +187,99 @@ def render_vpn_bar_chart(
     plt.close(fig)
     buf.seek(0)
     return buf.read()
+
+
+def render_pie_chart(
+    labels: list[str],
+    values: list[float],
+    title: str,
+    width: int = 600,
+    height: int = 400,
+    dpi: int = 150,
+) -> bytes:
+    """Render a pie chart for protocol distribution or traffic type breakdown."""
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    colors = ["#2563eb", "#7c3aed", "#f59e0b", "#10b981", "#ef4444", "#06b6d4", "#8b5cf6", "#f97316"]
+    wedges, texts, autotexts = ax.pie(
+        values, labels=labels, autopct="%1.1f%%",
+        colors=colors[:len(labels)], startangle=90,
+        textprops={"fontsize": 8},
+    )
+    for t in autotexts:
+        t.set_fontsize(7)
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def render_gauge_chart(
+    label: str,
+    value: float,
+    max_value: float = 100,
+    unit: str = "%",
+    width: int = 300,
+    height: int = 200,
+    dpi: int = 150,
+) -> bytes:
+    """Render a gauge/donut chart for KPI values like CPU/Memory usage."""
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    pct = min(100, max(0, (value / max_value) * 100))
+    if pct < 60:
+        color = "#10b981"
+    elif pct < 80:
+        color = "#f59e0b"
+    else:
+        color = "#ef4444"
+    remaining = 100 - pct
+    ax.pie([pct, remaining], colors=[color, "#e5e7eb"], startangle=90,
+           counterclock=False, wedgeprops={"width": 0.3})
+    ax.text(0, 0, f"{value:.1f}{unit}", ha="center", va="center", fontsize=16, fontweight="bold", color=color)
+    ax.set_title(label, fontsize=10, fontweight="bold")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def render_stacked_area_chart(
+    data: list[dict],
+    series_names: list[str],
+    title: str,
+    ylabel: str = "Mbps",
+    x_key: str = "timestamp",
+    width: int = 800,
+    height: int = 400,
+    dpi: int = 150,
+) -> bytes:
+    """Render a stacked area chart for multi-series throughput (In/Out)."""
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    colors = ["#2563eb", "#f97316", "#10b981", "#7c3aed"]
+    xs = []
+    series_data = {name: [] for name in series_names}
+    for point in data:
+        ts = point.get(x_key, 0)
+        if isinstance(ts, (int, float)) and ts > 1e12:
+            ts = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+        xs.append(ts)
+        for name in series_names:
+            series_data[name].append(point.get(name, 0))
+    ax.stackplot(xs, *[series_data[name] for name in series_names],
+                 labels=series_names, colors=colors[:len(series_names)], alpha=0.8)
+    ax.legend(loc="upper left", fontsize=8)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    fig.autofmt_xdate(rotation=30, ha="right")
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    ax.set_ylabel(ylabel, fontsize=10)
+    ax.grid(True, alpha=0.3, linestyle="--")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()

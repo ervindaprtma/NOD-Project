@@ -37,11 +37,59 @@ interface StatusResponse {
 // ── Constants ─────────────────────────────────────────────────
 
 const REPORT_TYPES = [
-  { id: "R-01", title: "Traffic Flow", desc: "Top applications, throughput timeline, total bandwidth" },
-  { id: "R-02", title: "Resource Usage", desc: "Per-device CPU, memory, sessions, HA sync status" },
-  { id: "R-03", title: "Active VPN Users", desc: "SSL VPN & IPsec VPN active user counts" },
-  { id: "R-04", title: "All-in-One", desc: "Combined report: traffic + resources + VPN" },
+  { id: "R-01", title: "Traffic Overview", desc: "Top apps, throughput, AS, countries, protocol, per-site" },
+  { id: "R-02", title: "Resource Usage", desc: "Per-device CPU, memory, sessions, HA status" },
+  { id: "R-03", title: "VPN Users", desc: "SSL VPN & IPsec VPN active user counts" },
+  { id: "R-04", title: "SD-WAN SLA", desc: "Latency, jitter, packet loss, link status per site" },
+  { id: "R-05", title: "Traffic Inbound", desc: "Top services, client AS, countries, egress interfaces" },
+  { id: "R-06", title: "Traffic Internal", desc: "Intra-LAN, inter-site flow, top services" },
+  { id: "R-07", title: "Executive Summary", desc: "KPI dashboard, 1-page overview" },
+  { id: "R-08", title: "All-in-One", desc: "Combined report: all sections" },
 ];
+
+const SITES = [
+  { id: "Site_FGT-DC", label: "DC" },
+  { id: "Site_FGT-DRC", label: "DRC" },
+  { id: "Site_FGT_Office", label: "Office" },
+];
+
+const SECTIONS: Record<string, { id: string; label: string }[]> = {
+  "R-01": [
+    { id: "top_apps", label: "Top Applications" },
+    { id: "throughput", label: "Throughput Timeline" },
+    { id: "top_as", label: "Top AS Orgs" },
+    { id: "top_countries", label: "Top Countries" },
+    { id: "protocol_dist", label: "Protocol Distribution" },
+    { id: "per_site", label: "Per-Site Breakdown" },
+  ],
+  "R-02": [
+    { id: "device_status", label: "Device Status" },
+    { id: "cpu_timeline", label: "CPU Timeline" },
+    { id: "memory_timeline", label: "Memory Timeline" },
+    { id: "session_timeline", label: "Session Timeline" },
+  ],
+  "R-03": [
+    { id: "ssl_vpn", label: "SSL VPN" },
+    { id: "ipsec_vpn", label: "IPsec VPN" },
+  ],
+  "R-04": [
+    { id: "latency", label: "Latency" },
+    { id: "jitter", label: "Jitter" },
+    { id: "packet_loss", label: "Packet Loss" },
+    { id: "link_status", label: "Link Status" },
+  ],
+  "R-05": [
+    { id: "top_services", label: "Top Services" },
+    { id: "top_client_as", label: "Top Client AS" },
+    { id: "top_countries", label: "Top Countries" },
+    { id: "egress", label: "Egress Interfaces" },
+  ],
+  "R-06": [
+    { id: "top_services", label: "Top Services" },
+    { id: "top_clients", label: "Top Client IPs" },
+    { id: "top_servers", label: "Top Server IPs" },
+  ],
+};
 
 const FORMATS = [
   { id: "pdf", label: "PDF", ext: ".pdf" },
@@ -109,6 +157,10 @@ export default function ReportsPage() {
   const [generating, setGenerating] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [showWarning, setShowWarning] = useState(false);
+
+  // Site & section selection
+  const [selectedSites, setSelectedSites] = useState<string[]>(["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"]);
+  const [selectedSections, setSelectedSections] = useState<string[]>([]);
 
   // Distribute state
   const [distChannels, setDistChannels] = useState<string[]>([]);
@@ -183,6 +235,8 @@ export default function ReportsPage() {
           output_format: outputFormat,
           time_range_start: gte,
           time_range_end: lte,
+          sites: selectedSites,
+          sections: selectedSections.length > 0 ? selectedSections : undefined,
         }),
       });
       const data: GenerateResponse = await res.json();
@@ -262,7 +316,7 @@ export default function ReportsPage() {
         {/* Report Type */}
         <div>
           <label className="text-sm font-medium mb-2 block">Report Type</label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             {REPORT_TYPES.map((rt) => (
               <button
                 key={rt.id}
@@ -280,6 +334,80 @@ export default function ReportsPage() {
             ))}
           </div>
         </div>
+
+        {/* Sites */}
+        <div>
+          <label className="text-sm font-medium mb-2 block">Sites</label>
+          <div className="flex gap-2">
+            {SITES.map((site) => (
+              <label
+                key={site.id}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-2 rounded-md border text-sm font-medium cursor-pointer transition-colors",
+                  selectedSites.includes(site.id)
+                    ? "border-primary bg-primary/5 text-foreground"
+                    : "border-border text-muted-foreground hover:bg-muted"
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedSites.includes(site.id)}
+                  onChange={() =>
+                    setSelectedSites((prev) =>
+                      prev.includes(site.id) ? prev.filter((s) => s !== site.id) : [...prev, site.id]
+                    )
+                  }
+                  className="h-3.5 w-3.5 rounded border-border"
+                />
+                {site.label}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Sections (optional) */}
+        {SECTIONS[reportType] && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-medium">Sections <span className="text-muted-foreground font-normal">(optional — leave all checked for full report)</span></label>
+              <button
+                onClick={() =>
+                  setSelectedSections((prev) =>
+                    prev.length === SECTIONS[reportType].length ? [] : SECTIONS[reportType].map((s) => s.id)
+                  )
+                }
+                className="text-xs text-primary hover:underline"
+              >
+                {selectedSections.length === SECTIONS[reportType].length ? "Deselect All" : "Select All"}
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {SECTIONS[reportType].map((sec) => (
+                <label
+                  key={sec.id}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2 py-1.5 rounded-md border text-xs cursor-pointer transition-colors",
+                    selectedSections.includes(sec.id)
+                      ? "border-primary bg-primary/5 text-foreground"
+                      : "border-border text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedSections.includes(sec.id)}
+                    onChange={() =>
+                      setSelectedSections((prev) =>
+                        prev.includes(sec.id) ? prev.filter((s) => s !== sec.id) : [...prev, sec.id]
+                      )
+                    }
+                    className="h-3 w-3 rounded border-border"
+                  />
+                  {sec.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Format */}
         <div>
@@ -428,6 +556,14 @@ export default function ReportsPage() {
                             >
                               Download
                             </button>
+                            {job.output_format === "html" && (
+                              <button
+                                onClick={() => window.open(`/api/v1/reports/preview/${job.job_id}`, "_blank")}
+                                className="px-2 py-1 text-xs rounded bg-blue-500/10 text-blue-600 hover:bg-blue-500/20"
+                              >
+                                Preview
+                              </button>
+                            )}
                             <button
                               onClick={() => setDistJobId(distJobId === job.job_id ? null : job.job_id)}
                               className="px-2 py-1 text-xs rounded bg-blue-500/10 text-blue-600 hover:bg-blue-500/20"

@@ -301,6 +301,39 @@ class ReportJob(Base):
 
 
 # ─────────────────────────────────────────────────────────────────
+# Scheduled Reports
+# ─────────────────────────────────────────────────────────────────
+
+class ReportSchedule(Base):
+    __tablename__ = "report_schedules"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    report_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    output_format: Mapped[str] = mapped_column(String(10), nullable=False, default="html")
+    cron_expression: Mapped[str] = mapped_column(String(50), nullable=False)
+    sites: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array
+    sections: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array
+    channels: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array
+    recipient_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    recipient_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+    created_by: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
+    )
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
 # User Preferences
 # ─────────────────────────────────────────────────────────────────
 

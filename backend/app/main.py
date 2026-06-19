@@ -60,11 +60,17 @@ async def lifespan(app: FastAPI):
     from app.services.alert_engine import start_alert_scheduler
     start_alert_scheduler()
 
+    # Start report schedule checker (P8)
+    from app.services.report_scheduler import start_report_scheduler
+    start_report_scheduler()
+
     # DB connection pool is lazily initialized by SQLAlchemy
     yield
     # Shutdown
     from app.services.alert_engine import scheduler as alert_scheduler
     alert_scheduler.shutdown(wait=False)
+    from app.services.report_scheduler import scheduler as report_scheduler
+    report_scheduler.shutdown(wait=False)
     await engine.dispose()
     logger.info("NOD Backend shut down")
 

@@ -10,10 +10,18 @@ from pydantic import BaseModel, Field
 
 
 class ReportGenerateRequest(BaseModel):
-    report_type: str = Field(..., pattern=r"^(R-01|R-02|R-03|R-04)$")
+    report_type: str = Field(..., pattern=r"^(R-01|R-02|R-03|R-04|R-05|R-06|R-07|R-08)$")
     output_format: str = Field(default="pdf", pattern=r"^(pdf|html|docx)$")
     time_range_start: int  # UTC epoch ms
     time_range_end: int  # UTC epoch ms
+    sites: Optional[list[str]] = Field(
+        default=["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"],
+        description="List of sites to include; defaults to all 3 sites",
+    )
+    sections: Optional[list[str]] = Field(
+        default=None,
+        description="List of report sections to include; empty/None = all sections",
+    )
 
 
 class ReportJobStatus(BaseModel):

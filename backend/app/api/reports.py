@@ -143,6 +143,33 @@ async def download_report(
     )
 
 
+@router.get("/preview/{job_id}")
+async def preview_report(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Preview a completed HTML report in the browser."""
+    result = await db.execute(select(ReportJob).where(ReportJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Report job not found.")
+
+    if job.status != "completed" or not job.file_path:
+        raise HTTPException(status_code=400, detail="Report not ready or generation failed.")
+
+    if not os.path.exists(job.file_path):
+        raise HTTPException(status_code=404, detail="Report file expired or not found.")
+
+    if job.output_format != "html":
+        raise HTTPException(status_code=400, detail="Preview only available for HTML reports.")
+
+    return FileResponse(
+        path=job.file_path,
+        media_type="text/html",
+    )
+
+
 @router.post("/distribute/{job_id}", response_model=APIResponse[dict])
 async def distribute_report(
     job_id: str,
@@ -288,3 +315,113 @@ async def _distribute_report_background(
         )
 
     logger.info(f"Report {job_id} distribution results: {results}")
+
+
+# ─────────────────────────────────────────────────────────────────
+# Scheduled Reports (P8)
+# ─────────────────────────────────────────────────────────────────
+
+import json
+
+from app.db.models import ReportSchedule
+
+
+@router.get("/schedules", response_model=APIResponse[list[dict]])
+async def list_schedules(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """List all report schedules for the current user (admin sees all)."""
+    is_admin = current_user.role in ("admin", "superadmin")
+    query = select(ReportSchedule).order_by(ReportSchedule.created_at.desc())
+    if not is_admin:
+        query = query.where(ReportSchedule.created_by == current_user.id)
+    result = await db.execute(query.limit(50))
+    schedules = result.scalars().all()
+    return APIResponse.ok(data=[{
+        "id": str(s.id),
+        "report_type": s.report_type,
+        "output_format": s.output_format,
+        "cron_expression": s.cron_expression,
+        "sites": json.loads(s.sites) if s.sites else [],
+        "sections": json.loads(s.sections) if s.sections else [],
+        "channels": json.loads(s.channels) if s.channels else [],
+        "recipient_email": s.recipient_email,
+        "recipient_phone": s.recipient_phone,
+        "enabled": s.enabled,
+        "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+        "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,
+        "created_at": s.created_at.isoformat(),
+    } for s in schedules])
+
+
+@router.post("/schedules", response_model=APIResponse[dict], status_code=status.HTTP_201_CREATED)
+async def create_schedule(
+    report_type: str,
+    cron_expression: str,
+    output_format: str = "html",
+    sites: list[str] | None = None,
+    sections: list[str] | None = None,
+    channels: list[str] | None = None,
+    recipient_email: str | None = None,
+    recipient_phone: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("operator")),
+):
+    """Create a new report schedule."""
+    schedule = ReportSchedule(
+        report_type=report_type,
+        output_format=output_format,
+        cron_expression=cron_expression,
+        sites=json.dumps(sites) if sites else None,
+        sections=json.dumps(sections) if sections else None,
+        channels=json.dumps(channels) if channels else None,
+        recipient_email=recipient_email,
+        recipient_phone=recipient_phone,
+        enabled=True,
+        created_by=current_user.id,
+    )
+    db.add(schedule)
+    await db.commit()
+    await db.refresh(schedule)
+
+    return APIResponse.ok(data={"id": str(schedule.id), "status": "created"})
+
+
+@router.patch("/schedules/{schedule_id}", response_model=APIResponse[dict])
+async def update_schedule(
+    schedule_id: str,
+    enabled: bool | None = None,
+    cron_expression: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("operator")),
+):
+    """Update a report schedule (enable/disable, change cron)."""
+    result = await db.execute(select(ReportSchedule).where(ReportSchedule.id == schedule_id))
+    schedule = result.scalar_one_or_none()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found.")
+
+    if enabled is not None:
+        schedule.enabled = enabled
+    if cron_expression is not None:
+        schedule.cron_expression = cron_expression
+    await db.commit()
+    return APIResponse.ok(data={"id": str(schedule.id), "status": "updated"})
+
+
+@router.delete("/schedules/{schedule_id}", response_model=APIResponse[dict])
+async def delete_schedule(
+    schedule_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("operator")),
+):
+    """Delete a report schedule."""
+    result = await db.execute(select(ReportSchedule).where(ReportSchedule.id == schedule_id))
+    schedule = result.scalar_one_or_none()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found.")
+
+    await db.delete(schedule)
+    await db.commit()
+    return APIResponse.ok(data={"id": str(schedule_id), "status": "deleted"})
