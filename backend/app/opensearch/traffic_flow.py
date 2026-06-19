@@ -94,6 +94,7 @@ async def flow_summary(
         "size": 0,
         "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
         "aggs": {
+            "grand_total_bytes": {"sum": {"field": "flow.bytes"}},
             "top_apps": {
                 "terms": {"field": "flow.application.name", "size": 20, "order": {"total_bytes": "desc"}},
                 "aggs": _bytes_sum(),
@@ -159,7 +160,11 @@ async def flow_summary(
     total_proto_bytes = sum(int(b.get("total_bytes", {}).get("value", 0)) for b in _buckets("protocol_dist")) or 1
     duration_s = max((lte_ms - gte_ms) / 1000.0, 1.0)
 
+    # Actual total bytes from top-level aggregation (not limited to top-20)
+    actual_total_bytes = int(aggs.get("grand_total_bytes", {}).get("value", 0))
+
     return {
+        "total_bytes": actual_total_bytes,
         "top_apps": [
             {"app_name": b["key"], "total_bytes": int(b["total_bytes"]["value"]),
              "speed_mbps": (int(b["total_bytes"]["value"]) * 8) / duration_s / 1_000_000,
