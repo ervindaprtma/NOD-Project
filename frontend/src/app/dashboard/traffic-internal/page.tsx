@@ -12,6 +12,8 @@ import { Card, Title, AreaChart, TabGroup, TabList, Tab, TabPanel, TabPanels } f
 
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
 const SITE_LABELS: Record<string, string> = { "Site_FGT-DC": "DC", "Site_FGT-DRC": "DRC", "Site_FGT_Office": "Office" };
+const TRAFFIC_PATHS = ["all", "intra-lan", "inter-site"] as const;
+const TRAFFIC_PATH_LABELS: Record<string, string> = { "all": "All Paths", "intra-lan": "Intra-LAN", "inter-site": "Inter-Site" };
 
 interface FilterState { application: string; client_ip: string; server_ip: string; protocol: string; dst_port: string; }
 const defaultFilters: FilterState = { application: "", client_ip: "", server_ip: "", protocol: "", dst_port: "" };
@@ -29,6 +31,7 @@ export default function TrafficInternalPage() {
   const [selectedPreset, setSelectedPreset] = useState("15m");
   const [activePresetSeconds, setActivePresetSeconds] = useState(TIME_PRESETS[0].seconds);
   const [siteName, setSiteName] = useState("Site_FGT-DC");
+  const [trafficPath, setTrafficPath] = useState<string>("all");
   const [refreshInterval, setRefreshInterval] = useState(DEFAULT_REFRESH_MS);
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);
@@ -44,7 +47,8 @@ export default function TrafficInternalPage() {
 
   const bucketSeconds = useMemo(() => {
     const rangeMs = currentLteMs - currentGteMs;
-    return Math.max(60, Math.floor(Math.max(60, Math.floor(rangeMs / 1000)) / 60));
+    const rangeSec = Math.max(60, Math.floor(rangeMs / 1000));
+    return Math.max(60, Math.ceil(rangeSec / 30));
   }, [currentGteMs, currentLteMs]);
 
   useEffect(() => {
@@ -56,14 +60,14 @@ export default function TrafficInternalPage() {
   }, [activePresetSeconds, refreshInterval, gteMs, lteMs]);
 
   const filterQS = useMemo(() => {
-    const parts: string[] = [];
+    const parts: string[] = [`traffic_path=${trafficPath}`];
     if (filters.application) parts.push(`app_filter=${encodeURIComponent(filters.application)}`);
     if (filters.client_ip) parts.push(`client_ip=${encodeURIComponent(filters.client_ip)}`);
     if (filters.server_ip) parts.push(`server_ip=${encodeURIComponent(filters.server_ip)}`);
     if (filters.protocol) parts.push(`protocol=${encodeURIComponent(filters.protocol)}`);
     if (filters.dst_port) parts.push(`dst_port=${filters.dst_port}`);
-    return parts.length > 0 ? "&" + parts.join("&") : "";
-  }, [filters]);
+    return "&" + parts.join("&");
+  }, [filters, trafficPath]);
 
   const summaryKey = token ? `/api/v1/traffic-internal/summary?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}${filterQS}` : null;
   const chartKey = token ? `/api/v1/traffic-internal/chart?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&bucket_seconds=${bucketSeconds}${filterQS}` : null;
@@ -122,6 +126,10 @@ export default function TrafficInternalPage() {
             className="px-3 py-1.5 rounded-md border border-border/60 dark:border-border/40 bg-background text-sm shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20">
             {SITES.map((s) => <option key={s} value={s}>{SITE_LABELS[s] || s}</option>)}
           </select>
+          <select value={trafficPath} onChange={(e) => setTrafficPath(e.target.value)}
+            className="px-3 py-1.5 rounded-md border border-border/60 dark:border-border/40 bg-background text-sm shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20">
+            {TRAFFIC_PATHS.map((p) => <option key={p} value={p}>{TRAFFIC_PATH_LABELS[p]}</option>)}
+          </select>
           <div className="flex gap-1 bg-muted rounded-md p-1">
             {TIME_PRESETS.map((p) => (
               <button key={p.label} onClick={() => handlePreset(p.seconds, p.label)}
@@ -156,7 +164,7 @@ export default function TrafficInternalPage() {
         {showFilters && (
           <div className="px-4 pb-4 pt-1 border-t border-muted/40">
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-              <FilterField label="Application" value={draftFilters.application} onChange={(v) => setDraftFilters({ ...draftFilters, application: v })} />
+              <FilterField label="Service Name" value={draftFilters.application} onChange={(v) => setDraftFilters({ ...draftFilters, application: v })} />
               <FilterField label="Client IP" value={draftFilters.client_ip} onChange={(v) => setDraftFilters({ ...draftFilters, client_ip: v })} mono />
               <FilterField label="Server IP" value={draftFilters.server_ip} onChange={(v) => setDraftFilters({ ...draftFilters, server_ip: v })} mono />
               <FilterField label="Protocol" value={draftFilters.protocol} onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v.toUpperCase() })} />
@@ -211,7 +219,7 @@ export default function TrafficInternalPage() {
                 ) : <EmptyState message="No throughput data" />}
               </Card>
               <Card>
-                <Title className="mb-1">Service Throughput — 60s Buckets</Title>
+                <Title className="mb-1">Service Throughput — {bucketSeconds}s Buckets</Title>
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText /> : chart?.chart_data?.length ? (
                   <StackedBarChart data={chart.chart_data.map((row) => { const entry: Record<string, any> = { timestamp: row.timestampMs || row.timestamp }; for (const svc of chart.service_names || []) { entry[svc] = parseFloat(((Number(row[svc]) || 0) * 8 / bucketSeconds / 1_000_000).toFixed(2)); } return entry; })} serviceNames={chart.service_names || []} />
                 ) : <EmptyState message="No service throughput data" />}

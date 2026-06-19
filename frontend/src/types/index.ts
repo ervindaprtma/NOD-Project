@@ -64,6 +64,7 @@ export interface DeviceResourceStatus {
   mem_usage?: number;
   session_count?: number;
   sync_status?: string;
+  mem_capacity_kb?: number;
   session_sparkline?: SparklinePoint[];
 }
 
@@ -93,6 +94,7 @@ export interface ThroughputKPI {
 export interface OverviewData {
   ssl_vpn_users: ActiveUserKPI;
   ipsec_vpn_users: ActiveUserKPI;
+  fortigate_device_count: number;
   devices: DeviceResourceStatus[];
   top_applications: TopApplication[];
   top_dst_as_orgs: TopASOrg[];

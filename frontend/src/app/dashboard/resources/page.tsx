@@ -59,7 +59,7 @@ export default function ResourcesPage() {
   }, [activePresetSeconds, refreshInterval, gteMs, lteMs]);
 
   const swrKey = token
-    ? `/api/v1/resources?gte_ms=${currentGteMs}&lte_ms=${currentLteMs}`
+    ? `/api/v1/resources?gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&site_name=${siteName}`
     : null;
 
   const { data, error, isLoading } = useSWR<{ data: ResourceData; meta: { query_took_ms: number } }>(
@@ -470,15 +470,19 @@ export default function ResourcesPage() {
                             </div>
                             <div className={cn(
                               "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium",
-                              dev.sync_status === "In Sync" || dev.sync_status === "1" || String(dev.sync_status) === "1"
+                              dev.sync_status === "standalone"
+                                ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                                : dev.sync_status === "In Sync" || dev.sync_status === "1" || String(dev.sync_status) === "1"
                                 ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
                                 : "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
                             )}>
                               <span className={cn(
                                 "w-1.5 h-1.5 rounded-full",
-                                (dev.sync_status === "In Sync" || dev.sync_status === "1" || String(dev.sync_status) === "1") ? "bg-emerald-500" : "bg-red-500"
+                                dev.sync_status === "standalone" ? "bg-slate-500"
+                                : (dev.sync_status === "In Sync" || dev.sync_status === "1") ? "bg-emerald-500" : "bg-red-500"
                               )} />
-                              {dev.sync_status === "In Sync" || dev.sync_status === "1" || String(dev.sync_status) === "1" ? "HA In Sync" : "HA Out of Sync"}
+                              {dev.sync_status === "standalone" ? "Standalone"
+                                : dev.sync_status === "In Sync" || dev.sync_status === "1" || String(dev.sync_status) === "1" ? "HA In Sync" : "HA Out of Sync"}
                             </div>
                           </div>
                           {dev.serial_number && (
@@ -489,6 +493,11 @@ export default function ResourcesPage() {
                             <MetricMini label="Memory" value={dev.mem_usage != null ? formatPercent(dev.mem_usage) : "—"} color="amber" />
                             <MetricMini label="Sessions" value={dev.session_count != null ? formatNumber(dev.session_count) : "—"} color="purple" />
                           </div>
+                          {dev.mem_capacity_kb ? (
+                            <p className="text-[10px] text-muted-foreground">
+                              RAM: {(dev.mem_capacity_kb / 1048576).toFixed(1)} GB
+                            </p>
+                          ) : null}
                         </div>
                       ))}
                 </div>

@@ -52,6 +52,31 @@ SITE_IFINDEX_MAP: dict[str, dict[str, str]] = {
     },
 }
 
+# ── Display sort order: WAN first, MPLS second; vendor grouping ──
+# Grid layout: Col1=items[0,2], Col2=items[1,3]
+#   WAN vendor A | WAN vendor B
+#   MPLS vendor A | MPLS vendor B
+SITE_IFACE_SORT_ORDER: dict[str, dict[str, int]] = {
+    "Site_FGT-DC": {
+        "3": 0,   # WAN LinkNet  → Col1 Row1
+        "4": 1,   # WAN iForte   → Col2 Row1
+        "39": 2,  # MPLS LinkNet → Col1 Row2
+        "38": 3,  # MPLS iForte  → Col2 Row2
+    },
+    "Site_FGT-DRC": {
+        "7": 0,   # WAN LinkNet  → Col1 Row1
+        "8": 1,   # WAN iForte   → Col2 Row1
+        "39": 2,  # MPLS LinkNet → Col1 Row2
+        "38": 3,  # MPLS iForte  → Col2 Row2
+    },
+    "Site_FGT_Office": {
+        "16": 0,  # WAN LDP      → Col1 Row1
+        "17": 1,  # WAN iForte   → Col2 Row1
+        "14": 2,  # MPLS LinkNet → Col1 Row2
+        "15": 3,  # MPLS iForte  → Col2 Row2
+    },
+}
+
 INDEX_PATTERN: str = "telegraf-index*"
 
 

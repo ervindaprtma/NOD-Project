@@ -524,9 +524,9 @@ function SlaAreaChart({
       ...vals,
     }));
 
-  // Map color name to Tremor color
+  // Map color name to hex value (Tremor colors prop requires hex)
   const tremorColor: Record<string, string> = {
-    blue: "blue", orange: "orange", red: "red",
+    blue: "#3b82f6", orange: "#f97316", red: "#ef4444",
   };
 
   return (

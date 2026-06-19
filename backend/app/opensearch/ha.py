@@ -1,15 +1,16 @@
 """
 OpenSearch query builders for telegraf-index* — HA & Resource domain.
-Q-06: ALL queries include exact term filter on measurement_name: "ha_member".
+Q-06: ALL queries include exact term filter on measurement_name.
 Q-01: ALL queries include @timestamp range filter with gte/lte.
 """
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from opensearchpy import AsyncOpenSearch
 
-from app.opensearch.client import get_dc_client
+from app.opensearch.client import get_dc_client, get_drc_client
 
 
 def _ha_filters(gte_ms: int, lte_ms: int) -> list[dict]:
@@ -349,3 +350,138 @@ async def ha_cluster_status(site_name: str = "Site_FGT-DC") -> dict:
         "members": members,
         "overallHealth": overall_health,
     }
+
+
+# ─────────────────────────────────────────────────────────────────
+# Single-device resource queries (DRC & Office)
+# ─────────────────────────────────────────────────────────────────
+
+# Site → (client_factory, measurement_name)
+SITE_RESOURCE_MAP: dict[str, tuple] = {
+    "Site_FGT-DRC": (get_drc_client, "Resource_FGT-DRC"),
+    "Site_FGT_Office": (get_dc_client, "Resource_FGT-Office"),
+}
+
+
+def _resource_filters(gte_ms: int, lte_ms: int, measurement_name: str) -> list[dict]:
+    """Q-01 + Q-06 for Resource_FGT-* measurements."""
+    return [
+        {
+            "range": {
+                "@timestamp": {
+                    "gte": gte_ms,
+                    "lte": lte_ms,
+                    "format": "epoch_millis",
+                }
+            }
+        },
+        {"term": {"measurement_name.keyword": measurement_name}},
+    ]
+
+
+async def resource_device_status(
+    site_name: str,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+) -> dict | None:
+    """
+    Get latest resource status for a single-device site (DRC/Office).
+    Returns: {cpu_usage_percent, mem_usage_percent, mem_capacity_kb, serial_number, session_count, source_ip}
+    """
+    if site_name not in SITE_RESOURCE_MAP:
+        return None
+
+    client_factory, measurement = SITE_RESOURCE_MAP[site_name]
+    client = client_factory()
+
+    body = {
+        "size": 1,
+        "query": {
+            "bool": {"filter": _resource_filters(gte_ms, lte_ms, measurement)}
+        },
+        "sort": [{"@timestamp": {"order": "desc"}}],
+        "_source": {
+            "includes": [
+                f"{measurement}.cpu_usage_percent",
+                f"{measurement}.mem_usage_percent",
+                f"{measurement}.mem_capacity_kb",
+                f"{measurement}.serial_number",
+                f"{measurement}.session_count",
+                "tag.source",
+                "@timestamp",
+            ]
+        },
+    }
+
+    resp = await client.search(index="telegraf-index*", body=body)
+    hits = resp["hits"]["hits"]
+    if not hits:
+        return None
+
+    src = hits[0]["_source"]
+    device_data = src.get(measurement, {})
+    tag = src.get("tag", {})
+
+    return {
+        "site": site_name,
+        "cpu_usage_percent": float(device_data.get("cpu_usage_percent", 0) or 0),
+        "mem_usage_percent": float(device_data.get("mem_usage_percent", 0) or 0),
+        "mem_capacity_kb": int(device_data.get("mem_capacity_kb", 0) or 0),
+        "serial_number": device_data.get("serial_number", ""),
+        "session_count": int(device_data.get("session_count", 0) or 0),
+        "source_ip": tag.get("source", ""),
+        "timestamp": src.get("@timestamp", ""),
+    }
+
+
+async def resource_device_timeline(
+    site_name: str,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    interval: str = "5m",
+) -> dict:
+    """
+    Get resource timeline for a single-device site (DRC/Office).
+    Returns: {cpu: [...], memory: [...], sessions: [...]}
+    """
+    if site_name not in SITE_RESOURCE_MAP:
+        return {"cpu": [], "memory": [], "sessions": []}
+
+    client_factory, measurement = SITE_RESOURCE_MAP[site_name]
+    client = client_factory()
+
+    body = {
+        "size": 0,
+        "query": {
+            "bool": {"filter": _resource_filters(gte_ms, lte_ms, measurement)}
+        },
+        "aggs": {
+            "timeline": {
+                "date_histogram": {
+                    "field": "@timestamp",
+                    "fixed_interval": interval,
+                    "min_doc_count": 0,
+                },
+                "aggs": {
+                    "avg_cpu": {"avg": {"field": f"{measurement}.cpu_usage_percent"}},
+                    "avg_mem": {"avg": {"field": f"{measurement}.mem_usage_percent"}},
+                    "avg_sessions": {"avg": {"field": f"{measurement}.session_count"}},
+                },
+            }
+        },
+    }
+
+    resp = await client.search(index="telegraf-index*", body=body)
+    buckets = resp["aggregations"]["timeline"]["buckets"]
+
+    cpu: list[dict] = []
+    memory: list[dict] = []
+    sessions: list[dict] = []
+
+    for tb in buckets:
+        ts = tb["key"]
+        cpu.append({"timestamp": ts, "value": tb["avg_cpu"]["value"] or 0.0})
+        memory.append({"timestamp": ts, "value": tb["avg_mem"]["value"] or 0.0})
+        sessions.append({"timestamp": ts, "value": int(tb["avg_sessions"]["value"] or 0)})
+
+    return {"cpu": cpu, "memory": memory, "sessions": sessions}

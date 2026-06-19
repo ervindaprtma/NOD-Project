@@ -64,7 +64,7 @@ export default function TrafficInboundPage() {
   const bucketSeconds = useMemo(() => {
     const rangeMs = currentLteMs - currentGteMs;
     const rangeSec = Math.max(60, Math.floor(rangeMs / 1000));
-    return Math.max(60, Math.floor(rangeSec / 60));
+    return Math.max(60, Math.ceil(rangeSec / 30));
   }, [currentGteMs, currentLteMs]);
 
   useEffect(() => {
@@ -265,7 +265,7 @@ export default function TrafficInboundPage() {
                   ) : <EmptyState message="No throughput timeline data" />}
               </Card>
               <Card>
-                <Title className="mb-1">Service Throughput — 60s Buckets</Title>
+                <Title className="mb-1">Service Throughput — {bucketSeconds}s Buckets</Title>
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText /> : chart?.chart_data?.length ? (
                   <StackedBarChart data={chart.chart_data.map((row) => { const entry: Record<string, any> = { timestamp: row.timestampMs || row.timestamp }; for (const svc of chart.service_names || []) { entry[svc] = parseFloat(((Number(row[svc]) || 0) * 8 / bucketSeconds / 1_000_000).toFixed(2)); } return entry; })} serviceNames={chart.service_names || []} />
                 ) : <EmptyState message="No service throughput data" />}

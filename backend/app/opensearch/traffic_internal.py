@@ -12,24 +12,13 @@ from typing import Optional
 from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_drc_client, get_dc_client
+from app.port_service_map import PORT_SERVICE_MAP, SVC_NAME_TO_PORT
 
 FLOW_INDEX = "fortigate-appid-flow-*"
-
 SITE_FLOW_MAP: dict[str, tuple[str, str]] = {
     "Site_FGT-DC": ("10.80.150.1", "dc"),
     "Site_FGT-DRC": ("10.90.150.1", "drc"),
     "Site_FGT_Office": ("10.10.10.10", "drc"),
-}
-
-PORT_SERVICE_MAP: dict[int, str] = {
-    20: "FTP-Data", 21: "FTP-Control", 22: "SSH", 23: "Telnet", 25: "SMTP",
-    53: "DNS", 67: "DHCP-Server", 68: "DHCP-Client", 69: "TFTP",
-    80: "HTTP-Browser", 110: "POP3", 123: "NTP", 143: "IMAP", 161: "SNMP",
-    389: "LDAP", 443: "HTTPS-Browser", 445: "SMB", 465: "SMTPS", 514: "Syslog",
-    587: "SMTP-Submit", 636: "LDAPS", 993: "IMAPS", 995: "POP3S",
-    1433: "MSSQL", 1521: "Oracle", 3306: "MySQL", 3389: "RDP-Access",
-    5432: "PostgreSQL", 5900: "VNC", 6379: "Redis", 8080: "HTTP-Alt",
-    8443: "HTTPS-Alt", 9090: "Prometheus", 9200: "Elasticsearch", 27017: "MongoDB",
 }
 
 
@@ -38,6 +27,22 @@ def _port_to_service(port_value) -> str:
         return PORT_SERVICE_MAP.get(int(port_value), f"Port-{port_value}")
     except (ValueError, TypeError):
         return str(port_value)
+
+
+def _resolve_service_filter(service_filter: str) -> list[int] | None:
+    """Resolve a service name or port string to a list of port numbers.
+    - Pure digits → exact port match
+    - Text → match any service name containing the text (case-insensitive)
+    Returns list of port numbers, or None if no match.
+    """
+    if not service_filter:
+        return None
+    s = service_filter.strip()
+    if s.isdigit():
+        return [int(s)]
+    s_lower = s.lower()
+    matched = [port for svc_name, port in SVC_NAME_TO_PORT.items() if s_lower in svc_name]
+    return matched if matched else None
 
 
 def _get_client(site_name: str = "Site_FGT_Office") -> AsyncOpenSearch:
@@ -54,7 +59,12 @@ def _site_filter(site_name: str) -> dict:
     return {"term": {"flow.export.ip.addr": entry[0] if entry else ""}}
 
 
-def _internal_path_filter() -> dict:
+def _internal_path_filter(traffic_path: str = "all") -> dict:
+    if traffic_path == "intra-lan":
+        return {"term": {"flow.traffic.path": "intra-lan"}}
+    if traffic_path == "inter-site":
+        return {"term": {"flow.traffic.path": "inter-site"}}
+    # "all" — both paths
     return {
         "bool": {
             "should": [
@@ -68,12 +78,18 @@ def _internal_path_filter() -> dict:
 
 def _base_filters(
     gte_ms: int, lte_ms: int, site_name: str,
-    app_filter: str = "", client_ip: str = "", server_ip: str = "",
+    service_filter: str = "", client_ip: str = "", server_ip: str = "",
     protocol: str = "", dst_port: int | None = None,
+    traffic_path: str = "all",
 ) -> list[dict]:
-    filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name), _internal_path_filter()]
-    if app_filter:
-        filters.append({"wildcard": {"flow.application.name": f"*{app_filter}*"}})
+    filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name), _internal_path_filter(traffic_path)]
+    if service_filter:
+        resolved_ports = _resolve_service_filter(service_filter)
+        if resolved_ports is not None:
+            if len(resolved_ports) == 1:
+                filters.append({"term": {"flow.server.l4.port.id": resolved_ports[0]}})
+            else:
+                filters.append({"terms": {"flow.server.l4.port.id": resolved_ports}})
     if client_ip:
         filters.append({"term": {"flow.client.ip.addr": client_ip}})
     if server_ip:
@@ -98,14 +114,14 @@ async def flow_summary(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT_Office", app_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None,
+    dst_port: int | None = None, traffic_path: str = "all",
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)}},
         "aggs": {
             "top_services": {
                 "terms": {"field": "flow.server.l4.port.id", "size": 20, "order": {"total_bytes": "desc"}},
@@ -186,7 +202,7 @@ async def flow_chart(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT_Office", top_n: int = 20, bucket_seconds: int = 60,
     app_filter: str = "", client_ip: str = "", server_ip: str = "",
-    protocol: str = "", dst_port: int | None = None,
+    protocol: str = "", dst_port: int | None = None, traffic_path: str = "all",
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
@@ -194,7 +210,7 @@ async def flow_chart(
     interval_str = f"{bucket_seconds}s"
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)}},
         "aggs": {
             "per_minute": {
                 "date_histogram": {"field": "@timestamp", "fixed_interval": interval_str},
@@ -238,7 +254,7 @@ async def sankey_data(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT_Office",
     app_filter: str = "", client_ip: str = "", server_ip: str = "",
-    protocol: str = "", dst_port: int | None = None,
+    protocol: str = "", dst_port: int | None = None, traffic_path: str = "all",
 ) -> dict:
     """Sankey: Ingress → Service → Egress (3 levels, no direction needed for internal)."""
     if client is None:
@@ -246,7 +262,7 @@ async def sankey_data(
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)}},
         "aggs": {
             "sankey_flow": {
                 "composite": {
@@ -339,7 +355,7 @@ async def flow_table(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT_Office", after: Optional[dict] = None, page_size: int = 100,
     app_filter: str = "", client_ip: str = "", server_ip: str = "",
-    protocol: str = "", dst_port: int | None = None,
+    protocol: str = "", dst_port: int | None = None, traffic_path: str = "all",
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
@@ -357,7 +373,7 @@ async def flow_table(
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)}},
         "aggs": {
             "flow_table": {
                 "composite": composite_body,

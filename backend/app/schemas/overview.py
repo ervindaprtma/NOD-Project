@@ -26,8 +26,10 @@ class SparklinePoint(BaseModel):
 class DeviceResourceStatus(BaseModel):
     device: str
     hostname: Optional[str] = None
+    serial_number: Optional[str] = None
     cpu_usage: Optional[float] = None
     mem_usage: Optional[float] = None
+    mem_capacity_kb: Optional[int] = None
     session_count: Optional[int] = None
     sync_status: Optional[str] = None
     session_sparkline: list[SparklinePoint] = []
@@ -106,6 +108,7 @@ class TopInboundService(BaseModel):
 class OverviewResponse(BaseModel):
     ssl_vpn_users: ActiveUserKPI
     ipsec_vpn_users: ActiveUserKPI
+    fortigate_device_count: int = 0
     devices: list[DeviceResourceStatus]
     top_applications: list[TopApplication]
     top_dst_as_orgs: list[TopASOrg] = []

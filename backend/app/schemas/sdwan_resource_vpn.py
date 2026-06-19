@@ -152,7 +152,8 @@ class DeviceCurrentResource(BaseModel):
     cpu_usage: float
     mem_usage: float
     session_count: int
-    sync_status: str  # "In Sync" | "Out of Sync" | "Unknown"
+    sync_status: str  # "In Sync" | "Out of Sync" | "Unknown" | "standalone"
+    mem_capacity_kb: Optional[int] = None
 
 
 class ResourceResponse(BaseModel):

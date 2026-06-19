@@ -135,6 +135,7 @@ async def get_interface_stats(
 
     interfaces: list[InterfaceStatsItem] = []
     iface_labels = iface_qb.SITE_IFINDEX_MAP.get(site_name, {})
+    sort_order = iface_qb.SITE_IFACE_SORT_ORDER.get(site_name, {})
 
     for iface_bucket in raw_aggs.get("by_interface", {}).get("buckets", []):
         if_index = iface_bucket["key"]
@@ -174,6 +175,9 @@ async def get_interface_stats(
             oper_status=oper_status,
             timeline=timeline,
         ))
+
+    # Sort by defined order (WAN first, MPLS second; vendor grouping)
+    interfaces.sort(key=lambda x: sort_order.get(x.if_index, 99))
 
     elapsed = int((time.monotonic() - t0) * 1000)
 

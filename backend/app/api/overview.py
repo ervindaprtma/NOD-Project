@@ -72,7 +72,7 @@ async def get_overview(
     # P01-B: Active IPsec VPN Users
     ipsec_count = await ipsec_qb.active_ipsec_users_count(gte_ms=gte_ms, lte_ms=lte_ms)
 
-    # P01-C/D/E/F: FortiGate Device Resources
+    # P01-C/D/E/F: FortiGate Device Resources (DC HA members)
     devices_raw = await ha_qb.current_device_status(gte_ms=gte_ms, lte_ms=lte_ms)
     sparklines_raw = await ha_qb.session_sparkline(gte_ms=gte_ms, lte_ms=lte_ms)
     sparkline_map: dict[str, list] = {s["device"]: s["points"] for s in sparklines_raw}
@@ -81,6 +81,7 @@ async def get_overview(
         DeviceResourceStatus(
             device=d["device"],
             hostname=d.get("hostname"),
+            serial_number=d.get("serial_number", ""),
             cpu_usage=d["cpu_usage"],
             mem_usage=d["mem_usage"],
             session_count=d["session_count"],
@@ -92,6 +93,10 @@ async def get_overview(
         )
         for d in devices_raw
     ]
+
+    # FortiGate device count: DC HA members + DRC (1) + Office (1)
+    dc_device_count = len(devices_raw)
+    fortigate_device_count = dc_device_count + 2  # DRC + Office
 
     # P01-G: Top 10 Traffic Applications
     top_apps_raw = await appid_qb.top_applications(gte_ms=gte_ms, lte_ms=lte_ms, size=10)
@@ -230,6 +235,7 @@ async def get_overview(
         data=OverviewResponse(
             ssl_vpn_users=ActiveUserKPI(active_users=ssl_count, label="SSL VPN"),
             ipsec_vpn_users=ActiveUserKPI(active_users=ipsec_count, label="IPsec VPN"),
+            fortigate_device_count=fortigate_device_count,
             devices=devices,
             top_applications=top_apps,
             top_dst_as_orgs=top_as_orgs,

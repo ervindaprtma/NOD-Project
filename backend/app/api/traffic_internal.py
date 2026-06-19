@@ -35,6 +35,7 @@ async def traffic_internal_summary(
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
     current_user=Depends(get_current_user),
 ):
     if site_name not in ALL_SITES:
@@ -43,7 +44,7 @@ async def traffic_internal_summary(
     data = await ti_qb.flow_summary(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port,
+        protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     return APIResponse.ok(data=TrafficInternalSummaryResponse(**data), meta={"query_took_ms": elapsed})
@@ -60,6 +61,7 @@ async def traffic_internal_chart(
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
     current_user=Depends(get_current_user),
 ):
     if site_name not in ALL_SITES:
@@ -68,7 +70,7 @@ async def traffic_internal_chart(
     data = await ti_qb.flow_chart(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, bucket_seconds=bucket_seconds,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port,
+        protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     return APIResponse.ok(data=TrafficInternalChartResponse(**data), meta={"query_took_ms": elapsed})
@@ -85,6 +87,7 @@ async def traffic_internal_table(
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
     current_user=Depends(get_current_user),
 ):
     if site_name not in ALL_SITES:
@@ -97,7 +100,7 @@ async def traffic_internal_table(
     data = await ti_qb.flow_table(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, after=after_key,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port,
+        protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     return APIResponse.ok(data=TrafficInternalTableResponse(**data), meta={"query_took_ms": elapsed})
@@ -113,6 +116,7 @@ async def traffic_internal_sankey(
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
     current_user=Depends(get_current_user),
 ):
     if site_name not in ALL_SITES:
@@ -121,7 +125,7 @@ async def traffic_internal_sankey(
     data = await ti_qb.sankey_data(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port,
+        protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     return APIResponse.ok(data=SankeyResponse(**data), meta={"query_took_ms": elapsed})

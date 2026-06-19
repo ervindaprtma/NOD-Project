@@ -12,6 +12,7 @@ from typing import Optional
 from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_dc_client, get_drc_client
+from app.port_service_map import PORT_SERVICE_MAP
 
 # ── Index & site config ──────────────────────────────────────────
 
@@ -38,14 +39,8 @@ def _site_filter(site_name: str) -> dict:
 
 
 def _port_to_service(port_value) -> str:
-    mapping = {
-        80: "HTTP-Browser", 443: "HTTPS-Browser", 8080: "HTTP-Alt", 8443: "HTTPS-Alt",
-        53: "DNS", 22: "SSH", 21: "FTP", 25: "SMTP", 110: "POP3", 143: "IMAP",
-        993: "IMAPS", 995: "POP3S", 3306: "MySQL", 5432: "PostgreSQL", 1433: "MSSQL",
-        3389: "RDP", 5900: "VNC", 161: "SNMP", 162: "SNMP-Trap", 123: "NTP",
-    }
     try:
-        return mapping.get(int(port_value), f"Port-{port_value}")
+        return PORT_SERVICE_MAP.get(int(port_value), f"Port-{port_value}")
     except (ValueError, TypeError):
         return str(port_value)
 

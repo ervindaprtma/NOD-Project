@@ -100,11 +100,11 @@ export default function TrafficPage() {
   const [currentGteMs, setCurrentGteMs] = useState(defaultRange.gte_ms);
   const [currentLteMs, setCurrentLteMs] = useState(defaultRange.lte_ms);
 
-  // Dynamic bucket: keep ~60 bars on chart regardless of time range
+  // Dynamic bucket: keep ~30 bars on chart regardless of time range
   const bucketSeconds = useMemo(() => {
     const rangeMs = currentLteMs - currentGteMs;
     const rangeSec = Math.max(60, Math.floor(rangeMs / 1000));
-    return Math.max(60, Math.floor(rangeSec / 60));
+    return Math.max(60, Math.ceil(rangeSec / 30));
   }, [currentGteMs, currentLteMs]);
 
   useEffect(() => {
