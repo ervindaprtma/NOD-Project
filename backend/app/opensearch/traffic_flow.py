@@ -238,18 +238,20 @@ async def flow_chart(
     resp = await client.search(index=FLOW_INDEX, body=body)
     result = resp["aggregations"]["per_minute"]
 
-    app_set: set[str] = set()
+    app_totals: dict[str, int] = {}
     chart_data = []
     for bucket in result["buckets"]:
         row: dict[str, any] = {"timestamp": bucket["key_as_string"], "timestampMs": bucket["key"]}
         for app_bucket in bucket["top_apps"]["buckets"]:
             app_name = app_bucket["key"]
             app_bytes = int(app_bucket["total_bytes"]["value"])
-            app_set.add(app_name)
+            app_totals[app_name] = app_totals.get(app_name, 0) + app_bytes
             row[app_name] = app_bytes
         chart_data.append(row)
 
-    return {"chart_data": chart_data, "app_names": sorted(app_set)}
+    # Sort by total bytes descending (not alphabetically) so frontend gets top apps first
+    sorted_apps = [name for name, _ in sorted(app_totals.items(), key=lambda x: -x[1])]
+    return {"chart_data": chart_data, "app_names": sorted_apps}
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -218,7 +218,7 @@ export default function TrafficPage() {
 
   const stackedBarData = useMemo(() => {
     if (!chart?.chart_data || !chart?.app_names) return { data: [], appNames: [] };
-    const appNames = chart.app_names.filter(a => a !== "app-0").slice(0, 20);
+    const appNames = chart.app_names.filter(a => a !== "app-0").slice(0, 50);
     const data = chart.chart_data.map((row: Record<string, any>) => {
       const ms = row.timestampMs || (row.timestamp ? new Date(row.timestamp).getTime() : 0);
       const entry: Record<string, any> = {
