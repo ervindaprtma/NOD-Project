@@ -83,3 +83,13 @@ export function formatNumber(n: number): string {
 export function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`;
 }
+
+/**
+ * Shared Radix TabsTrigger className.
+ * Active tab: white card with shadow on gray container.
+ * Inactive tab: gray text with hover highlight.
+ */
+export const TAB_TRIGGER_CLASS =
+  "px-4 py-2 text-sm font-medium rounded-md transition-all " +
+  "data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground " +
+  "data-[state=inactive]:text-muted-foreground data-[state=inactive]:hover:text-foreground data-[state=inactive]:hover:bg-muted/50";

@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatPercent, formatNumber, getDefaultTimeRange } from "@/lib/constants";
+import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatPercent, formatNumber, getDefaultTimeRange, TAB_TRIGGER_CLASS } from "@/lib/constants";
 import type { ResourceData, HAStatusData, InterfaceStatsData, InterfaceStatsItem } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { AreaChart } from "@/components/charts/AreaChart";
@@ -317,8 +317,8 @@ export default function ResourcesPage() {
       {/* ── Tab Group ────────────────────────────────────────────── */}
       <Tabs value={tabIndex === 0 ? "resources" : "bandwidth"} onValueChange={(val) => setTabIndex(val === "resources" ? 0 : 1)}>
         <TabsList className="mb-4 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex">
-          <TabsTrigger value="resources">Resource Usage</TabsTrigger>
-          <TabsTrigger value="bandwidth">Interface Bandwidth</TabsTrigger>
+          <TabsTrigger value="resources" className={TAB_TRIGGER_CLASS}>Resource Usage</TabsTrigger>
+          <TabsTrigger value="bandwidth" className={TAB_TRIGGER_CLASS}>Interface Bandwidth</TabsTrigger>
         </TabsList>
 
           {/* ════════════════════════════════════════════════════════

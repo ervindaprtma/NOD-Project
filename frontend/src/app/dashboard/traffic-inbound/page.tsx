@@ -7,7 +7,7 @@ import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS,
-  formatBytes, getDefaultTimeRange,
+  formatBytes, getDefaultTimeRange, TAB_TRIGGER_CLASS,
 } from "@/lib/constants";
 import type {
   TrafficInboundSummary, TrafficInboundChartData,
@@ -217,8 +217,8 @@ export default function TrafficInboundPage() {
 
       <Tabs defaultValue={activeTab === "overview" ? "overview" : "sankey"} onValueChange={(val) => setActiveTab(val as "overview" | "sankey")}>
         <TabsList className="mb-6 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="sankey">Sankey Diagram</TabsTrigger>
+          <TabsTrigger value="overview" className={TAB_TRIGGER_CLASS}>Overview</TabsTrigger>
+          <TabsTrigger value="sankey" className={TAB_TRIGGER_CLASS}>Sankey Diagram</TabsTrigger>
         </TabsList>
         <TabsContent value="overview">
             {!summaryLoading && !chartLoading && !tableLoading && !hasError && !summary && (
