@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatMs, formatAlwaysMs, formatPercent, formatNumber, getDefaultTimeRange } from "@/lib/constants";
 import type { SDWANData } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
-import { Card, AreaChart as TremorAreaChart } from "@tremor/react";
+import { AreaChart } from "@/components/charts/AreaChart";
 
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
 
@@ -524,24 +524,23 @@ function SlaAreaChart({
       ...vals,
     }));
 
-  // Map color name to hex value (Tremor colors prop requires hex)
-  const tremorColor: Record<string, string> = {
+  // Color hex values for chart series
+  const chartColors: Record<string, string> = {
     blue: "#3b82f6", orange: "#f97316", red: "#ef4444",
   };
 
   return (
-    <TremorAreaChart
+    <AreaChart
       className="h-full"
       data={chartData}
       index="timestamp"
       categories={labels}
-      colors={labels.map(() => tremorColor[color] || color)}
+      colors={labels.map(() => chartColors[color] || color)}
       valueFormatter={format}
       showLegend={labels.length > 1}
       showGridLines={false}
       showXAxis={true}
       showYAxis={true}
-      showTooltip={true}
       autoMinValue
       allowDecimals
       curveType="monotone"

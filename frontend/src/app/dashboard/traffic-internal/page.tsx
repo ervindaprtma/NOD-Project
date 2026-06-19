@@ -8,7 +8,8 @@ import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, getDefaultTimeRange } from "@/lib/constants";
 import type { TrafficInternalSummary, TrafficInternalChartData, TrafficInboundTableData, TrafficInboundTableRecord, SankeyResponse } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
-import { Card, Title, AreaChart, TabGroup, TabList, Tab, TabPanel, TabPanels } from "@tremor/react";
+import { AreaChart } from "@/components/charts/AreaChart";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
 
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
 const SITE_LABELS: Record<string, string> = { "Site_FGT-DC": "DC", "Site_FGT-DRC": "DRC", "Site_FGT_Office": "Office" };
@@ -178,10 +179,9 @@ export default function TrafficInternalPage() {
         )}
       </div>
 
-      <TabGroup defaultIndex={activeTab === "overview" ? 0 : 1} onIndexChange={(idx) => setActiveTab(idx === 0 ? "overview" : "sankey")}>
-        <TabList className="mb-6 p-1 bg-muted/40 dark:bg-muted/30 rounded-lg"><Tab>Overview</Tab><Tab>Sankey Diagram</Tab></TabList>
-        <TabPanels>
-          <TabPanel>
+      <Tabs defaultValue="overview">
+        <TabsList className="mb-6 p-1 bg-muted/40 dark:bg-muted/30 rounded-lg"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="sankey">Sankey Diagram</TabsTrigger></TabsList>
+        <TabsContent value="overview">
             {!summaryLoading && !chartLoading && !tableLoading && !hasError && !summary && (
               <div className="p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-sm">No internal traffic data for {SITE_LABELS[siteName] || siteName}.</div>
             )}
@@ -212,35 +212,34 @@ export default function TrafficInternalPage() {
 
             {/* ROW 4 — Charts */}
             <div className="space-y-4 mb-6">
-              <Card>
-                <Title className="mb-3">Total Throughput Over Time</Title>
+              <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
+                <h2 className="text-lg font-semibold mb-3">Total Throughput Over Time</h2>
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText /> : throughputTimeline.length > 0 ? (
-                  <AreaChart data={throughputTimeline} categories={["mbps"]} index="timestamp" valueFormatter={(v: number) => v >= 100 ? `${v.toFixed(0)} Mbps` : `${v.toFixed(2)} Mbps`} colors={["#3b82f6"]} showLegend={false} showGridLines={true} showXAxis={true} showYAxis={true} className="h-72 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400" />
-                ) : <EmptyState message="No throughput data" />}
-              </Card>
-              <Card>
-                <Title className="mb-1">Service Throughput — {bucketSeconds}s Buckets</Title>
+                    <AreaChart data={throughputTimeline} categories={["mbps"]} index="timestamp" colors={["#3b82f6"]} showLegend={false} showGridLines={true} showXAxis={true} showYAxis={true} className="h-72" />
+                  ) : <EmptyState message="No throughput data" />}
+              </div>
+              <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
+                <h2 className="text-lg font-semibold mb-1">Service Throughput — {bucketSeconds}s Buckets</h2>
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText /> : chart?.chart_data?.length ? (
                   <StackedBarChart data={chart.chart_data.map((row) => { const entry: Record<string, any> = { timestamp: row.timestampMs || row.timestamp }; for (const svc of chart.service_names || []) { entry[svc] = parseFloat(((Number(row[svc]) || 0) * 8 / bucketSeconds / 1_000_000).toFixed(2)); } return entry; })} serviceNames={chart.service_names || []} />
                 ) : <EmptyState message="No service throughput data" />}
-              </Card>
+              </div>
             </div>
 
             {/* ROW 5 — Table */}
-            <Card>
-              <Title className="mb-3">Flow Records</Title>
+            <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
+              <h2 className="text-lg font-semibold mb-3">Flow Records</h2>
               {tableLoading ? <div className="space-y-2">{[1,2,3,4,5].map((i) => <div key={i} className="h-8 bg-muted rounded animate-pulse" />)}</div>
                 : tableError ? <ErrorText /> : table?.records?.length ? <FlowRecordsTable records={table.records.slice(0, 25)} />
                 : <EmptyState message="No flow records found" />}
-            </Card>
-          </TabPanel>
+            </div>
+          </TabsContent>
 
-          <TabPanel>
+          <TabsContent value="sankey">
             <h3 className="text-base font-semibold text-slate-200 mb-2">Internal Traffic Flow</h3>
             <SankeyView data={sankeyData} loading={sankeyLoading} error={!!sankeyError} />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+          </TabsContent>
+        </Tabs>
 
       <TimeRangePicker isOpen={showCustomPicker} onApply={handleCustomApply} onCancel={() => setShowCustomPicker(false)} initialGteMs={gteMs} initialLteMs={lteMs} />
     </div>
@@ -299,10 +298,10 @@ function SankeyView({ data, loading, error }: { data: SankeyResponse | undefined
       svgEl.appendChild(g);
     }
   }, [data]);
-  if (loading) return <Card><div className="h-[400px] bg-muted rounded animate-pulse flex items-center justify-center"><p className="text-sm text-muted-foreground">Loading sankey...</p></div></Card>;
-  if (error) return <Card><ErrorText /></Card>;
-  if (!data?.nodes?.length) return <Card><EmptyState message="No sankey data" /></Card>;
-  return <Card><div className="overflow-x-auto"><svg ref={svgRef} viewBox="0 0 800 400" className="w-full" style={{ minWidth: 500 }} /></div></Card>;
+  if (loading) return <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6"><div className="h-[400px] bg-muted rounded animate-pulse flex items-center justify-center"><p className="text-sm text-muted-foreground">Loading sankey...</p></div></div>;
+  if (error) return <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6"><ErrorText /></div>;
+  if (!data?.nodes?.length) return <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6"><EmptyState message="No sankey data" /></div>;
+  return <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6"><div className="overflow-x-auto"><svg ref={svgRef} viewBox="0 0 800 400" className="w-full" style={{ minWidth: 500 }} /></div></div>;
 }
 
 function SkeletonBars({ count }: { count: number }) { return <div className="space-y-2 animate-pulse">{Array.from({ length: count }).map((_, i) => <div key={i} className="h-4 bg-muted rounded" style={{ width: `${100 - i * 15}%` }} />)}</div>; }
@@ -323,12 +322,12 @@ interface RankedItem { name: string; value: number; mono?: boolean; }
 function RankedCard({ title, loading, error, items, color, wide }: { title: string; loading: boolean; error: boolean; items: RankedItem[]; color: string; wide?: boolean }) {
   const c = RANK_COLORS[color] || RANK_COLORS.blue;
   const maxVal = items.length > 0 ? items[0].value : 1;
-  return <Card><Title className="mb-3">{title}</Title>
+  return <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6"><h2 className="text-lg font-semibold mb-3">{title}</h2>
     {loading ? <SkeletonBars count={5} /> : error ? <ErrorText /> : items.length > 0 ? (
       <div className="space-y-1.5">{items.slice(0, 10).map((item, i) => { const pct = Math.max(2, (item.value / maxVal) * 100);
         return <div key={i} className="flex items-center gap-2 text-xs"><span className="w-5 text-right text-muted-foreground shrink-0">{i + 1}</span>
           <div className="flex-1 min-w-0"><div className="flex items-center justify-between mb-0.5"><span className={`truncate ${item.mono ? "font-mono text-[11px]" : ""}`} title={item.name}>{item.name}</span><span className="ml-2 text-muted-foreground shrink-0">{formatBytes(item.value)}</span></div>
-            <div className={`h-1.5 rounded-full ${c.bg}`}><div className={`h-full rounded-full ${c.bar}`} style={{ width: `${pct}%`, opacity: 1 - i * 0.06 }} /></div></div></div>; })}</div>) : <EmptyState message={`No ${title.toLowerCase()} data`} />}</Card>;
+            <div className={`h-1.5 rounded-full ${c.bg}`}><div className={`h-full rounded-full ${c.bar}`} style={{ width: `${pct}%`, opacity: 1 - i * 0.06 }} /></div></div></div>; })}</div>) : <EmptyState message={`No ${title.toLowerCase()} data`} />}</div>;
 }
 
 function EmptyState({ message }: { message?: string }) {

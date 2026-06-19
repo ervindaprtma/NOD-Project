@@ -7,7 +7,8 @@ import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatPercent, formatNumber, getDefaultTimeRange } from "@/lib/constants";
 import type { ResourceData, HAStatusData, InterfaceStatsData, InterfaceStatsItem } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
-import { Card, Badge, AreaChart as TremorAreaChart, TabGroup, TabList, Tab, TabPanel, TabPanels } from "@tremor/react";
+import { AreaChart } from "@/components/charts/AreaChart";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
 
 type SectionId = "deviceStatus" | "timeline";
 
@@ -314,17 +315,16 @@ export default function ResourcesPage() {
       )}
 
       {/* ── Tab Group ────────────────────────────────────────────── */}
-      <TabGroup index={tabIndex} onIndexChange={(idx) => setTabIndex(idx as TabIndex)}>
-        <TabList variant="solid" className="mb-4 p-1 bg-muted/40 dark:bg-muted/30 rounded-lg">
-          <Tab>Resource Usage</Tab>
-          <Tab>Interface Bandwidth</Tab>
-        </TabList>
+      <Tabs value={tabIndex === 0 ? "resources" : "bandwidth"} onValueChange={(val) => setTabIndex(val === "resources" ? 0 : 1)}>
+        <TabsList className="mb-4 p-1 bg-muted/40 dark:bg-muted/30 rounded-lg">
+          <TabsTrigger value="resources">Resource Usage</TabsTrigger>
+          <TabsTrigger value="bandwidth">Interface Bandwidth</TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
           {/* ════════════════════════════════════════════════════════
               TAB 1 — Resource Usage
               ════════════════════════════════════════════════════════ */}
-          <TabPanel>
+          <TabsContent value="resources">
             <div className="space-y-6">
               {/* HA Status Panel (Site_FGT-DC only) */}
               {siteName === "Site_FGT-DC" && (
@@ -544,12 +544,11 @@ export default function ResourcesPage() {
                 ))}
               </div>
             </div>
-          </TabPanel>
-
+          </TabsContent>
           {/* ════════════════════════════════════════════════════════
               TAB 2 — Interface Bandwidth
               ════════════════════════════════════════════════════════ */}
-          <TabPanel>
+          <TabsContent value="bandwidth">
             <div className="space-y-4">
               {/* Section header */}
               <div className="flex items-center justify-between">
@@ -609,9 +608,8 @@ export default function ResourcesPage() {
                 </div>
               )}
             </div>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+          </TabsContent>
+      </Tabs>
 
       <TimeRangePicker
         isOpen={showCustomPicker}
@@ -640,7 +638,7 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
   const hasTimeline = chartData.length > 1;
 
   return (
-    <Card className="p-5 space-y-4">
+    <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-5 space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-semibold font-mono truncate" title={iface.label}>
@@ -649,13 +647,13 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {iface.speed_mbps != null && (
-            <Badge color="gray" size="sm">
+            <span className="inline-flex items-center rounded-md bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 px-2 py-0.5 text-[11px] font-medium">
               {iface.speed_mbps >= 1000
                 ? `${(iface.speed_mbps / 1000).toFixed(1)} Gbps`
                 : `${iface.speed_mbps.toLocaleString()} Mbps`}
-            </Badge>
+            </span>
           )}
-          <Badge color={isUp ? "emerald" : "red"} size="sm">
+          <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium", isUp ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300")}>
             <span
               className={cn(
                 "inline-block w-1.5 h-1.5 rounded-full mr-1",
@@ -663,7 +661,7 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
               )}
             />
             {isUp ? "UP" : "DOWN"}
-          </Badge>
+          </span>
         </div>
       </div>
 
@@ -692,7 +690,7 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
 
       {hasTimeline ? (
         <div className="h-40 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
-          <TremorAreaChart
+          <AreaChart
             className="h-full"
             data={chartData}
             index="timestamp"
@@ -705,7 +703,6 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
             showGridLines={false}
             showXAxis={true}
             showYAxis={true}
-            showTooltip={true}
             autoMinValue
             allowDecimals
             curveType="monotone"
@@ -719,7 +716,7 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
           <p className="text-xs text-muted-foreground">No timeline data available</p>
         </div>
       )}
-    </Card>
+    </div>
   );
 }
 
@@ -772,7 +769,7 @@ function ResourceAreaCard({
     <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg p-3 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20">
       <p className="text-xs font-medium mb-1">{title}</p>
       <div className="h-32 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
-        <TremorAreaChart
+        <AreaChart
           className="h-full"
           data={chartData}
           index="timestamp"
@@ -783,7 +780,6 @@ function ResourceAreaCard({
           showGridLines={false}
           showXAxis={true}
           showYAxis={true}
-          showTooltip={true}
           autoMinValue
           allowDecimals
           curveType="monotone"

@@ -23,16 +23,8 @@ import TimeRangePicker, {
   type CustomTimeRange,
 } from "@/components/panels/TimeRangePicker";
 
-import {
-  Card,
-  Title,
-  AreaChart,
-  TabGroup,
-  TabList,
-  Tab,
-  TabPanel,
-  TabPanels,
-} from "@tremor/react";
+import { AreaChart } from "@/components/charts/AreaChart";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
 
 // ── Constants ────────────────────────────────────────────────────
 
@@ -413,17 +405,13 @@ export default function TrafficPage() {
       </div>
 
       {/* ── Tab Navigation ── */}
-      <TabGroup
-        defaultIndex={activeTab === "overview" ? 0 : 1}
-        onIndexChange={(idx) => setActiveTab(idx === 0 ? "overview" : "sankey")}
-      >
-        <TabList className="mb-6 p-1 bg-muted/40 dark:bg-muted/30 rounded-lg">
-          <Tab>Overview</Tab>
-          <Tab>Sankey Diagram</Tab>
-        </TabList>
-        <TabPanels>
-          {/* ═══ OVERVIEW TAB ═══ */}
-          <TabPanel>
+      <Tabs defaultValue={activeTab === "overview" ? "overview" : "sankey"} onValueChange={(v) => setActiveTab(v as "overview" | "sankey")}>
+        <TabsList className="mb-6 p-1 bg-muted/40 dark:bg-muted/30 rounded-lg">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="sankey">Sankey Diagram</TabsTrigger>
+        </TabsList>
+        {/* ═══ OVERVIEW TAB ═══ */}
+        <TabsContent value="overview">
             {!summaryLoading && !chartLoading && !tableLoading && !hasError && !summary && !chart && !table && (
               <div className="p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-sm">
                 No traffic flow data returned for {SITE_LABELS[siteName] || siteName}.
@@ -501,8 +489,8 @@ export default function TrafficPage() {
 
             {/* ═══ ROW 4 — Throughput Charts ═══ */}
             <div className="space-y-4 mb-6">
-              <Card>
-                <Title className="mb-3">Total Throughput Over Time</Title>
+              <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
+                <h2 className="text-lg font-semibold mb-3">Total Throughput Over Time</h2>
                 {chartLoading ? (
                   <SkeletonChart />
                 ) : chartError ? (
@@ -523,9 +511,9 @@ export default function TrafficPage() {
                 ) : (
                   <EmptyState message="No throughput timeline data" />
                 )}
-              </Card>
-              <Card>
-                <Title className="mb-3">App Throughput (Mbps)</Title>
+              </div>
+              <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
+                <h2 className="text-lg font-semibold mb-3">App Throughput (Mbps)</h2>
                 {chartLoading ? (
                   <SkeletonChart />
                 ) : chartError ? (
@@ -538,12 +526,12 @@ export default function TrafficPage() {
                 ) : (
                   <EmptyState message="No application throughput data" />
                 )}
-              </Card>
+              </div>
             </div>
 
             {/* ═══ ROW 5 — Flow Records Table ═══ */}
-            <Card>
-              <Title className="mb-3">Flow Records</Title>
+            <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
+              <h2 className="text-lg font-semibold mb-3">Flow Records</h2>
               {tableLoading ? (
                 <div className="space-y-2">
                   {[1, 2, 3, 4, 5].map((i) => (
@@ -557,11 +545,10 @@ export default function TrafficPage() {
               ) : (
                 <EmptyState message="No flow records found" />
               )}
-            </Card>
-          </TabPanel>
-
-          {/* ═══ SANKEY TAB — side-by-side ═══ */}
-          <TabPanel>
+            </div>
+        </TabsContent>
+        {/* ═══ SANKEY TAB — side-by-side ═══ */}
+        <TabsContent value="sankey">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div>
                 <h3 className="text-base font-semibold text-slate-200 mb-2">Upload</h3>
@@ -580,9 +567,8 @@ export default function TrafficPage() {
                 />
               </div>
             </div>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+        </TabsContent>
+      </Tabs>
 
       {/* Custom TimeRangePicker */}
       <TimeRangePicker
@@ -780,28 +766,28 @@ function SankeyView({ data, loading, error }: {
 
   if (loading) {
     return (
-      <Card>
+      <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
         <div className="h-[400px] bg-muted rounded animate-pulse flex items-center justify-center">
           <p className="text-sm text-muted-foreground">Loading sankey data...</p>
         </div>
-      </Card>
+      </div>
     );
   }
 
   if (error) {
-    return <Card><ErrorText /></Card>;
+    return <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6"><ErrorText /></div>;
   }
 
   if (!data || !data.nodes || data.nodes.length === 0) {
-    return <Card><EmptyState message="No sankey data available for this time range" /></Card>;
+    return <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6"><EmptyState message="No sankey data available for this time range" /></div>;
   }
 
   return (
-    <Card>
+    <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
       <div className="overflow-x-auto">
         <svg ref={svgRef} viewBox="0 0 800 400" className="w-full" style={{ minWidth: 500 }} />
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -857,8 +843,8 @@ function RankedCard({ title, loading, error, items, color, wide }: {
   const maxVal = items.length > 0 ? items[0].value : 1;
 
   return (
-    <Card>
-      <Title className="mb-3">{title}</Title>
+    <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
+      <h2 className="text-lg font-semibold mb-3">{title}</h2>
       {loading ? (
         <SkeletonBars count={wide ? 10 : 5} />
       ) : error ? (
@@ -889,7 +875,7 @@ function RankedCard({ title, loading, error, items, color, wide }: {
       ) : (
         <EmptyState message={`No ${title.toLowerCase()} data`} />
       )}
-    </Card>
+    </div>
   );
 }
 
