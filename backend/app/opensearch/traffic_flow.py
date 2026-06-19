@@ -224,7 +224,7 @@ async def flow_chart(
         "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
         "aggs": {
             "per_minute": {
-                "date_histogram": {"field": "@timestamp", "fixed_interval": interval_str},
+                "date_histogram": {"field": "@timestamp", "fixed_interval": interval_str, "min_doc_count": 1},
                 "aggs": {
                     "top_apps": {
                         "terms": {"field": "flow.application.name", "size": top_n, "order": {"total_bytes": "desc"}},
