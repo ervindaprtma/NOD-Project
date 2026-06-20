@@ -77,25 +77,16 @@ export default function OverviewPage() {
   );
   const overview = data?.data;
 
-  // ── Per-site Top Apps (ROW 2) ──
-  const appKeys = SITES.map(s =>
+  // ── Per-site data (used for Top Apps, Top AS, Top Clients) ──
+  const siteKeys = SITES.map(s =>
     token ? `/api/v1/traffic-flow/summary?site_name=${s}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&path_filter=internet` : null
   );
-  const { data: appData0 } = useSWR<{ data: any }>(appKeys[0], swrFetcher, { refreshInterval: 0 });
-  const { data: appData1 } = useSWR<{ data: any }>(appKeys[1], swrFetcher, { refreshInterval: 0 });
-  const { data: appData2 } = useSWR<{ data: any }>(appKeys[2], swrFetcher, { refreshInterval: 0 });
-  const appDatas = [appData0, appData1, appData2];
+  const { data: siteData0 } = useSWR<{ data: any }>(siteKeys[0], swrFetcher, { refreshInterval: 0 });
+  const { data: siteData1 } = useSWR<{ data: any }>(siteKeys[1], swrFetcher, { refreshInterval: 0 });
+  const { data: siteData2 } = useSWR<{ data: any }>(siteKeys[2], swrFetcher, { refreshInterval: 0 });
+  const siteDatas = [siteData0, siteData1, siteData2];
 
-  // ── Per-site Top AS Org (ROW 3) ──
-  const asKeys = SITES.map(s =>
-    token ? `/api/v1/traffic-flow/summary?site_name=${s}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&path_filter=internet` : null
-  );
-  const { data: asData0 } = useSWR<{ data: any }>(asKeys[0], swrFetcher, { refreshInterval: 0 });
-  const { data: asData1 } = useSWR<{ data: any }>(asKeys[1], swrFetcher, { refreshInterval: 0 });
-  const { data: asData2 } = useSWR<{ data: any }>(asKeys[2], swrFetcher, { refreshInterval: 0 });
-  const asDatas = [asData0, asData1, asData2];
-
-  // ── Per-site Device Health (ROW 4) ──
+  // ── Per-site Device Health ──
   const resKeys = SITES.map(s =>
     token ? `/api/v1/resources?site_name=${s}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}` : null
   );
@@ -104,7 +95,7 @@ export default function OverviewPage() {
   const { data: resData2 } = useSWR<{ data: ResourceData }>(resKeys[2], swrFetcher, { refreshInterval: 0 });
   const resDatas = [resData0, resData1, resData2];
 
-  // ── Per-site Inbound VIP (ROW 6) ──
+  // ── Per-site Inbound VIP ──
   const inboundSites = ["Site_FGT-DC", "Site_FGT-DRC"] as const;
   const inbKeys = inboundSites.map(s =>
     token ? `/api/v1/traffic-inbound/summary?site_name=${s}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}` : null
@@ -192,189 +183,83 @@ export default function OverviewPage() {
           onClick={() => router.push("/dashboard/vpn")} color="emerald" />
         <KpiCard title="Devices" value={overview?.fortigate_device_count ?? 0} subtitle="FortiGate Total" loading={isLoading}
           onClick={() => router.push("/dashboard/resources")} color="amber" />
-        <KpiCard title="HA Cluster" value={overview?.ha_status?.overall_health || "—"} subtitle={overview?.ha_status ? `${overview.ha_status.member_count} members` : "DC Only"} loading={isLoading}
+        <KpiCard title="HA Status" value={overview?.ha_status?.overall_health || "—"} subtitle={overview?.ha_status ? `${overview.ha_status.member_count} members` : "DC Only"} loading={isLoading}
           onClick={() => router.push("/dashboard/resources")} color={overview?.ha_status?.overall_health === "healthy" ? "emerald" : "red"} />
         <KpiCard title="Alerts" value={overview?.active_alert_count} subtitle="Unacknowledged" loading={isLoading}
           onClick={() => router.push("/dashboard/alerts")} color={overview?.active_alert_count ? "red" : "slate"} />
       </div>
 
-      {/* ═══ ROW 2 — Top Applications (3 sites) ═══ */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {SITES.map((site, idx) => (
-          <ClickCard key={site} onClick={() => router.push("/dashboard/traffic")}>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold">Top Apps — {SITE_SHORT[site]}</h2>
-              <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
-            </div>
-            {isLoading ? <SkeletonBars count={5} /> : (() => {
-              const items = appDatas[idx]?.data?.top_apps || [];
-              if (items.length === 0) return <EmptyText />;
-              return (
-                <div className="space-y-1.5">
-                  {items.filter((a: any) => a.app_name !== "app-0").slice(0, 7).map((app: any, i: number) => (
-                    <BarRow key={app.app_name || i} rank={i + 1} label={app.app_name} bytes={app.total_bytes} bytesHuman={formatBytes(app.total_bytes)}
-                      max={items[0]?.total_bytes || 1} color="bg-primary" />
-                  ))}
-                </div>
-              );
-            })()}
-          </ClickCard>
-        ))}
-      </div>
-
-      {/* ═══ ROW 3 — Top Destinations AS Org (3 sites) ═══ */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {SITES.map((site, idx) => (
-          <ClickCard key={site} onClick={() => router.push("/dashboard/traffic")}>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold">Top AS Org — {SITE_SHORT[site]}</h2>
-              <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
-            </div>
-            {isLoading ? <SkeletonBars count={5} /> : (() => {
-              const items = asDatas[idx]?.data?.top_dst_as_org || [];
-              if (items.length === 0) return <EmptyText />;
-              return (
-                <div className="space-y-1.5">
-                  {items.slice(0, 5).map((org: any, i: number) => (
-                    <BarRow key={org.org_name || i} rank={i + 1} label={org.org_name} bytes={org.total_bytes} bytesHuman={formatBytes(org.total_bytes)}
-                      max={items[0]?.total_bytes || 1} color="bg-emerald-500" />
-                  ))}
-                </div>
-              );
-            })()}
-          </ClickCard>
-        ))}
-      </div>
-
-      {/* ═══ ROW 4 — Device Health (3 sites) ═══ */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {SITES.map((site, idx) => (
-          <ClickCard key={site} onClick={() => router.push("/dashboard/resources")}>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold">Device Health — {SITE_SHORT[site]}</h2>
-              <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View details →</span>
-            </div>
-            {isLoading ? (
-              <div className="space-y-2">{Array.from({ length: 2 }).map((_, i) => <SkeletonCard key={i} />)}</div>
-            ) : (() => {
-              const current = resDatas[idx]?.data?.current || [];
-              if (current.length === 0) return <EmptyText />;
-              const isDC = site === "Site_FGT-DC";
-              return (
-                <div className="space-y-2">
-                  {current.map((dev, i) => (
-                    <div key={dev.device || i} className="p-2.5 bg-muted/30 rounded-lg space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold">
-                          {isDC ? (i === 0 ? "PRIMARY" : "SECONDARY") : SITE_SHORT[site]}
-                          {dev.hostname && <span className="text-[10px] text-muted-foreground ml-1">({dev.hostname})</span>}
-                        </span>
+      {/* ═══ ROW 2 — Device Health + SD-WAN ═══ */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Device Health — 2/3 width */}
+        <div className="lg:col-span-2 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Device Health</h2>
+            <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer" onClick={() => router.push("/dashboard/resources")}>View details →</span>
+          </div>
+          {isLoading ? (
+            <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <SkeletonCard key={i} />)}</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* DC — FW-1 and FW-2 side by side */}
+              {(() => {
+                const dcData = resDatas[0]?.data?.current || [];
+                if (dcData.length === 0) return null;
+                return (
+                  <ClickCard onClick={() => router.push("/dashboard/resources")}>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-semibold text-primary">DC</h3>
+                      {overview?.ha_status && (
                         <span className={cn("px-1.5 py-0.5 text-[10px] font-medium rounded-full",
-                          dev.sync_status === "In Sync" || dev.sync_status === "1" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
-                          : dev.sync_status === "standalone" ? "bg-slate-100 text-slate-600 dark:bg-slate-800/30 dark:text-slate-400"
+                          overview.ha_status.overall_health === "healthy" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
                           : "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400")}>
-                          {dev.sync_status === "In Sync" || dev.sync_status === "1" ? "In Sync"
-                            : dev.sync_status === "standalone" ? "Standalone"
-                            : dev.sync_status || "Unknown"}
+                          {overview.ha_status.overall_health === "healthy" ? "● healthy" : overview.ha_status.overall_health}
                         </span>
-                      </div>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        <MiniGauge label="CPU" value={dev.cpu_usage ?? 0} max={100} color="#3b82f6" />
-                        <MiniGauge label="Mem" value={dev.mem_usage ?? 0} max={100} color="#f59e0b" />
-                        <div className="text-center">
-                          <p className="text-[9px] text-muted-foreground uppercase">Sessions</p>
-                          <p className="text-xs font-bold">{formatNumber(dev.session_count ?? 0)}</p>
-                        </div>
-                      </div>
-                      {(dev.serial_number || dev.mem_capacity_kb) && (
-                        <div className="text-[10px] text-muted-foreground space-y-0.5">
-                          {dev.serial_number && <p>S/N: {dev.serial_number}</p>}
-                          {dev.mem_capacity_kb ? <p>RAM: {formatMemGB(dev.mem_capacity_kb)}</p> : null}
-                        </div>
                       )}
                     </div>
-                  ))}
-                  {/* HA Cluster Status (DC only) */}
-                  {isDC && overview?.ha_status && (
-                    <div className="p-2.5 bg-muted/20 rounded-lg border border-dashed border-border/50">
-                      <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1">HA Cluster Status</p>
-                      <div className="grid grid-cols-2 gap-1 text-[11px]">
-                        <div>
-                          <span className="text-muted-foreground">Mode: </span>
-                          <span className="font-medium">{overview.ha_status.ha_mode}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Health: </span>
-                          <span className={cn("font-medium",
-                            overview.ha_status.overall_health === "healthy" ? "text-emerald-600" : "text-red-600")}>
-                            {overview.ha_status.overall_health === "healthy" ? "● " : ""}
-                            {overview.ha_status.overall_health}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Members: </span>
-                          <span className="font-medium">{overview.ha_status.member_count}</span>
-                        </div>
-                      </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {dcData.map((dev: any, i: number) => (
+                        <DeviceMiniCard key={dev.device || i} label={i === 0 ? "FW-1 (PRIMARY)" : "FW-2 (SECONDARY)"} dev={dev} />
+                      ))}
                     </div>
-                  )}
-                </div>
-              );
-            })()}
-          </ClickCard>
-        ))}
-      </div>
-
-      {/* ═══ ROW 5 — WAN/MPLS Bandwidth + SD-WAN ═══ */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* WAN/MPLS Bandwidth */}
-        <ClickCard onClick={() => router.push("/dashboard/resources")}>
-          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <h2 className="text-sm font-semibold">WAN/MPLS Bandwidth</h2>
-            <div className="flex items-center gap-2">
-              <select value={wanSite} onChange={(e) => setWanSite(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                className="px-2 py-1 text-xs rounded border bg-background">
-                {SITES.map(s => <option key={s} value={s}>{SITE_SHORT[s] || s}</option>)}
-              </select>
-              <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+                  </ClickCard>
+                );
+              })()}
+              {/* DRC — full width */}
+              {(() => {
+                const drcData = resDatas[1]?.data?.current || [];
+                if (drcData.length === 0) return null;
+                return (
+                  <ClickCard onClick={() => router.push("/dashboard/resources")}>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-semibold text-emerald-600">DRC</h3>
+                    </div>
+                    {drcData.map((dev: any, i: number) => (
+                      <DeviceWideCard key={dev.device || i} dev={dev} />
+                    ))}
+                  </ClickCard>
+                );
+              })()}
+              {/* Office — full width */}
+              {(() => {
+                const offData = resDatas[2]?.data?.current || [];
+                if (offData.length === 0) return null;
+                return (
+                  <ClickCard onClick={() => router.push("/dashboard/resources")}>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-semibold text-amber-600">Office</h3>
+                    </div>
+                    {offData.map((dev: any, i: number) => (
+                      <DeviceWideCard key={dev.device || i} dev={dev} />
+                    ))}
+                  </ClickCard>
+                );
+              })()}
             </div>
-          </div>
-          {isLoading ? <SkeletonBars count={4} /> : (() => {
-            const siteData = overview?.wan_bandwidth?.find((s: SiteWanBandwidth) => s.site === wanSite);
-            if (!siteData?.interfaces?.length) return <EmptyText />;
-            return (
-              <div className="grid grid-cols-2 gap-2">
-                {sortInterfaces(siteData.interfaces).map((iface: WanInterfaceSummary, i: number) => (
-                  <div key={i} className="p-2 bg-muted/30 rounded-lg">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-semibold truncate">{iface.label}</span>
-                      <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium",
-                        iface.oper_status === "UP" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                        : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400")}>
-                        {iface.oper_status || "?"}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1 text-center text-[11px]">
-                      <div className="bg-blue-50 dark:bg-blue-950/20 rounded px-1 py-0.5">
-                        <span className="text-muted-foreground">In </span>
-                        <span className="font-bold text-blue-600 dark:text-blue-400">{iface.in_mbps != null ? iface.in_mbps.toFixed(1) : "—"}</span>
-                        <span className="text-[9px] text-muted-foreground"> Mbps</span>
-                      </div>
-                      <div className="bg-orange-50 dark:bg-orange-950/20 rounded px-1 py-0.5">
-                        <span className="text-muted-foreground">Out </span>
-                        <span className="font-bold text-orange-600 dark:text-orange-400">{iface.out_mbps != null ? iface.out_mbps.toFixed(1) : "—"}</span>
-                        <span className="text-[9px] text-muted-foreground"> Mbps</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
-        </ClickCard>
+          )}
+        </div>
 
-        {/* SD-WAN Link Status */}
+        {/* SD-WAN Link Status — 1/3 width */}
         <ClickCard onClick={() => router.push("/dashboard/sdwan")}>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold">SD-WAN Link Status</h2>
@@ -402,10 +287,129 @@ export default function OverviewPage() {
         </ClickCard>
       </div>
 
-      {/* ═══ ROW 6 — Inbound VIP (DC + DRC) ═══ */}
+      {/* ═══ ROW 3 — WAN/MPLS Bandwidth (full width) ═══ */}
+      <ClickCard onClick={() => router.push("/dashboard/resources")}>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h2 className="text-sm font-semibold">WAN/MPLS Bandwidth</h2>
+          <div className="flex items-center gap-2">
+            <select value={wanSite} onChange={(e) => setWanSite(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              className="px-2 py-1 text-xs rounded border bg-background">
+              {SITES.map(s => <option key={s} value={s}>{SITE_SHORT[s] || s}</option>)}
+            </select>
+            <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+          </div>
+        </div>
+        {isLoading ? <SkeletonBars count={4} /> : (() => {
+          const siteData = overview?.wan_bandwidth?.find((s: SiteWanBandwidth) => s.site === wanSite);
+          if (!siteData?.interfaces?.length) return <EmptyText />;
+          return (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+              {sortInterfaces(siteData.interfaces).map((iface: WanInterfaceSummary, i: number) => (
+                <div key={i} className="p-2 bg-muted/30 rounded-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold truncate">{iface.label}</span>
+                    <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                      iface.oper_status === "UP" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                      : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400")}>
+                      {iface.oper_status || "?"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1 text-center text-[11px]">
+                    <div className="bg-blue-50 dark:bg-blue-950/20 rounded px-1 py-0.5">
+                      <span className="text-muted-foreground">In </span>
+                      <span className="font-bold text-blue-600 dark:text-blue-400">{iface.in_mbps != null ? iface.in_mbps.toFixed(1) : "—"}</span>
+                      <span className="text-[9px] text-muted-foreground"> Mbps</span>
+                    </div>
+                    <div className="bg-orange-50 dark:bg-orange-950/20 rounded px-1 py-0.5">
+                      <span className="text-muted-foreground">Out </span>
+                      <span className="font-bold text-orange-600 dark:text-orange-400">{iface.out_mbps != null ? iface.out_mbps.toFixed(1) : "—"}</span>
+                      <span className="text-[9px] text-muted-foreground"> Mbps</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </ClickCard>
+
+      {/* ═══ ROW 4 — Top Client Internet (3 sites) ═══ */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {SITES.map((site, idx) => (
+          <ClickCard key={`client-${site}`} onClick={() => router.push("/dashboard/traffic")}>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold">Top Client Internet — {SITE_SHORT[site]}</h2>
+              <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+            </div>
+            {isLoading ? <SkeletonBars count={5} /> : (() => {
+              const items = siteDatas[idx]?.data?.top_clients || [];
+              if (items.length === 0) return <EmptyText />;
+              return (
+                <div className="space-y-1.5">
+                  {items.slice(0, 7).map((client: any, i: number) => (
+                    <BarRow key={client.client_ip || client.ip || i} rank={i + 1} label={client.client_ip || client.ip} bytes={client.total_bytes} bytesHuman={formatBytes(client.total_bytes)}
+                      max={items[0]?.total_bytes || 1} color="bg-primary" />
+                  ))}
+                </div>
+              );
+            })()}
+          </ClickCard>
+        ))}
+      </div>
+
+      {/* ═══ ROW 5 — Top Application Internet Usage (3 sites) ═══ */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {SITES.map((site, idx) => (
+          <ClickCard key={`app-${site}`} onClick={() => router.push("/dashboard/traffic")}>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold">Top Application Internet Usage — {SITE_SHORT[site]}</h2>
+              <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+            </div>
+            {isLoading ? <SkeletonBars count={5} /> : (() => {
+              const items = siteDatas[idx]?.data?.top_apps || [];
+              if (items.length === 0) return <EmptyText />;
+              return (
+                <div className="space-y-1.5">
+                  {items.filter((a: any) => a.app_name !== "app-0").slice(0, 7).map((app: any, i: number) => (
+                    <BarRow key={app.app_name || i} rank={i + 1} label={app.app_name} bytes={app.total_bytes} bytesHuman={formatBytes(app.total_bytes)}
+                      max={items[0]?.total_bytes || 1} color="bg-primary" />
+                  ))}
+                </div>
+              );
+            })()}
+          </ClickCard>
+        ))}
+      </div>
+
+      {/* ═══ ROW 6 — Top Destination Internet AS Org (3 sites) ═══ */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {SITES.map((site, idx) => (
+          <ClickCard key={`as-${site}`} onClick={() => router.push("/dashboard/traffic")}>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold">Top Destination Internet AS Org — {SITE_SHORT[site]}</h2>
+              <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+            </div>
+            {isLoading ? <SkeletonBars count={5} /> : (() => {
+              const items = siteDatas[idx]?.data?.top_dst_as_org || [];
+              if (items.length === 0) return <EmptyText />;
+              return (
+                <div className="space-y-1.5">
+                  {items.slice(0, 5).map((org: any, i: number) => (
+                    <BarRow key={org.org_name || i} rank={i + 1} label={org.org_name} bytes={org.total_bytes} bytesHuman={formatBytes(org.total_bytes)}
+                      max={items[0]?.total_bytes || 1} color="bg-emerald-500" />
+                  ))}
+                </div>
+              );
+            })()}
+          </ClickCard>
+        ))}
+      </div>
+
+      {/* ═══ ROW 7 — Inbound VIP (DC + DRC) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {inboundSites.map((site, idx) => (
-          <ClickCard key={site} onClick={() => router.push("/dashboard/traffic-inbound")}>
+          <ClickCard key={`inb-${site}`} onClick={() => router.push("/dashboard/traffic-inbound")}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Inbound VIP — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
@@ -426,7 +430,7 @@ export default function OverviewPage() {
         ))}
       </div>
 
-      {/* ═══ ROW 7 — Top Customer AS — Inbound VIP (DC + DRC) ═══ */}
+      {/* ═══ ROW 8 — Top Customer AS — Inbound VIP (DC + DRC) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {inboundSites.map((site, idx) => (
           <ClickCard key={`cas-${site}`} onClick={() => router.push("/dashboard/traffic-inbound")}>
@@ -480,6 +484,70 @@ function ClickCard({ children, onClick }: { children: React.ReactNode; onClick?:
       className={cn("p-4 bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 group",
         onClick && "cursor-pointer hover:border-primary/40 hover:shadow-md transition-all")}>
       {children}
+    </div>
+  );
+}
+
+function DeviceMiniCard({ label, dev }: { label: string; dev: any }) {
+  return (
+    <div className="p-2 bg-muted/30 rounded-lg space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold">{label}</span>
+        <span className={cn("px-1.5 py-0.5 text-[10px] font-medium rounded-full",
+          dev.sync_status === "In Sync" || dev.sync_status === "1" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+          : dev.sync_status === "standalone" ? "bg-slate-100 text-slate-600 dark:bg-slate-800/30 dark:text-slate-400"
+          : "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400")}>
+          {dev.sync_status === "In Sync" || dev.sync_status === "1" ? "In Sync"
+            : dev.sync_status === "standalone" ? "Standalone"
+            : dev.sync_status || "Unknown"}
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-1">
+        <MiniGauge label="CPU" value={dev.cpu_usage ?? 0} max={100} color="#3b82f6" />
+        <MiniGauge label="Mem" value={dev.mem_usage ?? 0} max={100} color="#f59e0b" />
+        <div className="text-center">
+          <p className="text-[9px] text-muted-foreground uppercase">Sess</p>
+          <p className="text-[10px] font-bold">{formatNumber(dev.session_count ?? 0)}</p>
+        </div>
+      </div>
+      {(dev.serial_number || dev.mem_capacity_kb) && (
+        <div className="text-[9px] text-muted-foreground space-y-0.5">
+          {dev.serial_number && <p>S/N: {dev.serial_number}</p>}
+          {dev.mem_capacity_kb ? <p>RAM: {formatMemGB(dev.mem_capacity_kb)}</p> : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeviceWideCard({ dev }: { dev: any }) {
+  return (
+    <div className="p-2.5 bg-muted/30 rounded-lg space-y-1.5 mb-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold">{dev.hostname || dev.device}</span>
+        <span className={cn("px-1.5 py-0.5 text-[10px] font-medium rounded-full",
+          dev.sync_status === "In Sync" || dev.sync_status === "1" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+          : dev.sync_status === "standalone" ? "bg-slate-100 text-slate-600 dark:bg-slate-800/30 dark:text-slate-400"
+          : "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400")}>
+          {dev.sync_status === "In Sync" || dev.sync_status === "1" ? "In Sync"
+            : dev.sync_status === "standalone" ? "Standalone"
+            : dev.sync_status || "Unknown"}
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5">
+        <MiniGauge label="CPU" value={dev.cpu_usage ?? 0} max={100} color="#3b82f6" />
+        <MiniGauge label="Mem" value={dev.mem_usage ?? 0} max={100} color="#f59e0b" />
+        <div className="text-center">
+          <p className="text-[9px] text-muted-foreground uppercase">Sessions</p>
+          <p className="text-xs font-bold">{formatNumber(dev.session_count ?? 0)}</p>
+        </div>
+      </div>
+      {(dev.serial_number || dev.mem_capacity_kb) && (
+        <div className="text-[10px] text-muted-foreground space-y-0.5">
+          {dev.serial_number && <p>S/N: {dev.serial_number}</p>}
+          {dev.mem_capacity_kb ? <p>RAM: {formatMemGB(dev.mem_capacity_kb)}</p> : null}
+        </div>
+      )}
     </div>
   );
 }
