@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getAccessToken, setAccessToken, apiFetch, ensureValidToken } from "@/lib/api";
+import { getAccessToken, setAccessToken, apiFetch, ensureValidToken, bootAuthFromCookie } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Network } from "lucide-react";
@@ -76,17 +76,9 @@ export default function DashboardLayout({
 
   useEffect(() => {
     async function initAuth() {
-      const token = getAccessToken();
+      // bootAuthFromCookie: tries refresh cookie, signals authBootDone
+      const token = await bootAuthFromCookie();
       if (!token) {
-        setTokenPresent(false);
-        setAuthChecked(true);
-        router.push("/login");
-        return;
-      }
-      // Validate token freshness to prevent 401 console errors
-      const valid = await ensureValidToken();
-      if (!valid) {
-        setAccessToken(null);
         setTokenPresent(false);
         setAuthChecked(true);
         router.push("/login");
@@ -98,12 +90,56 @@ export default function DashboardLayout({
     initAuth();
   }, [router]);
 
+  // WebSocket for real-time notifications (falls back to polling)
+  const wsRef = useRef<WebSocket | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+
   useEffect(() => {
     if (!tokenPresent) return;
     fetchUser();
     fetchNotifications();
+
+    // Try WebSocket connection for push notifications
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    function connectWs() {
+      try {
+        const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const ws = new WebSocket(`${proto}//${window.location.host}/ws/notifications`);
+        wsRef.current = ws;
+        ws.onopen = () => setWsConnected(true);
+        ws.onmessage = (evt) => {
+          try {
+            const data = JSON.parse(evt.data);
+            if (data.type === "notification") {
+              setNotifications((prev) => [data.payload, ...prev]);
+            } else if (data.type === "notification_list") {
+              setNotifications(data.payload || []);
+            }
+          } catch { /* ignore malformed */ }
+        };
+        ws.onclose = () => {
+          setWsConnected(false);
+          // Reconnect after 5s
+          reconnectTimer = setTimeout(connectWs, 5000);
+        };
+        ws.onerror = () => ws.close();
+      } catch {
+        // WebSocket not available, fall back to polling
+      }
+    }
+    connectWs();
+
+    // Also poll every 30s as fallback / for initial load
     const interval = setInterval(fetchNotifications, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (wsRef.current) {
+        wsRef.current.onclose = null; // prevent reconnect on unmount
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
   }, [fetchUser, fetchNotifications, tokenPresent]);
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;

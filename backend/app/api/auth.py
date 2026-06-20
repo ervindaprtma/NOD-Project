@@ -31,6 +31,9 @@ from app.services.activity_logger import log_activity
 settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+# Rate limiter — import from core module
+from app.core.limiter import limiter
+
 # Role hierarchy for RBAC
 _ROLE_HIERARCHY = {
     "viewer": 0,
@@ -48,6 +51,7 @@ COOKIE_REFRESH_TOKEN = "nod_refresh_token"
 
 
 @router.post("/login", response_model=APIResponse[TokenResponse])
+@limiter.limit(f"{settings.RATE_LIMIT_LOGIN_REQUESTS}/{settings.RATE_LIMIT_LOGIN_WINDOW}")
 async def login(
     request: Request,
     body: LoginRequest,
@@ -113,7 +117,7 @@ async def login(
         value=refresh_token,
         httponly=True,
         secure=is_https,
-        samesite="lax",
+        samesite="strict",
         max_age=int(settings.REFRESH_TOKEN_EXPIRE_HOURS * 3600),
         path="/auth",
     )
@@ -157,6 +161,7 @@ async def logout(
 
 
 @router.post("/refresh", response_model=APIResponse[TokenResponse])
+@limiter.limit(f"{settings.RATE_LIMIT_REFRESH_REQUESTS}/{settings.RATE_LIMIT_REFRESH_WINDOW}")
 async def refresh(
     request: Request,
     refresh_token: Optional[str] = Cookie(default=None, alias=COOKIE_REFRESH_TOKEN),
@@ -200,12 +205,41 @@ async def refresh(
             detail="User not found or deactivated.",
         )
 
-    # Issue new access token
+    # Rotate: revoke old token and issue new refresh + access tokens
+    token_record.is_revoked = True
+
+    new_refresh_token, new_jti, new_expires_at = create_refresh_token(subject=user.id)
+    db.add(
+        RefreshTokenModel(
+            user_id=user.id,
+            jti=new_jti,
+            expires_at=new_expires_at,
+        )
+    )
+
     access_token = create_access_token(
         subject=user.id,
         extra_claims={"role": user.role, "username": user.username},
     )
-    return APIResponse.ok(TokenResponse(access_token=access_token))
+
+    await db.commit()
+
+    response_data = APIResponse.ok(TokenResponse(access_token=access_token))
+    resp = Response(
+        content=response_data.model_dump_json(),
+        media_type="application/json",
+    )
+    is_https = request.url.scheme == "https" or request.headers.get("X-Forwarded-Proto") == "https"
+    resp.set_cookie(
+        key=COOKIE_REFRESH_TOKEN,
+        value=new_refresh_token,
+        httponly=True,
+        secure=is_https,
+        samesite="strict",
+        max_age=int(settings.REFRESH_TOKEN_EXPIRE_HOURS * 3600),
+        path="/auth",
+    )
+    return resp
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -242,6 +276,15 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found or deactivated.",
         )
+
+    # Enforce mandatory password change
+    if getattr(user, "must_change_password", False):
+        allowed_paths = {"/auth/logout", "/users/me/password"}
+        if request.url.path not in allowed_paths:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "MUST_CHANGE_PASSWORD", "message": "Password change required"},
+            )
 
     return user
 

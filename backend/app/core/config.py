@@ -7,6 +7,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +29,14 @@ class Settings(BaseSettings):
 
     # ── Security ───────────────────────────────────────────────
     JWT_SECRET: str = ""
+
+    @field_validator("JWT_SECRET")
+    @classmethod
+    def validate_jwt_secret(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError("JWT_SECRET must be at least 32 characters long")
+        return v
+
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_HOURS: int = 24
@@ -97,6 +106,15 @@ class Settings(BaseSettings):
     # ── Timeframe defaults ─────────────────────────────────────
     DEFAULT_REFRESH_INTERVAL_SECONDS: int = 60
     SESSION_IDLE_TIMEOUT_HOURS: int = 4
+
+    # ── Rate limiting (P0 security) ──────────────────────────
+    RATE_LIMIT_DEFAULT_REQUESTS: int = 120
+    RATE_LIMIT_DEFAULT_WINDOW: str = "minute"
+    RATE_LIMIT_LOGIN_REQUESTS: int = 10
+    RATE_LIMIT_LOGIN_WINDOW: str = "minute"
+    RATE_LIMIT_REFRESH_REQUESTS: int = 20
+    RATE_LIMIT_REFRESH_WINDOW: str = "minute"
+    RATE_LIMIT_WEBSOCKET_CONNECTIONS: int = 5
 
     # ── Optional features ──────────────────────────────────────
     METRICS_ENABLED: bool = False

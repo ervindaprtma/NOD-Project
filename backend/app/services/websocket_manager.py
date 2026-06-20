@@ -10,7 +10,10 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class AlertWebSocketManager:
@@ -21,8 +24,17 @@ class AlertWebSocketManager:
 
     def __init__(self) -> None:
         self._connections: dict[str, WebSocket] = {}  # user_id -> websocket
+        self._max_per_user: int = settings.RATE_LIMIT_WEBSOCKET_CONNECTIONS
 
     async def connect(self, ws: WebSocket, user_id: str) -> None:
+        # Enforce per-user connection limit (P0 security)
+        if user_id in self._connections:
+            # Already connected — close duplicate gracefully
+            try:
+                await self._connections[user_id].close(code=4001, reason="Replaced by new connection")
+            except Exception:
+                pass
+            self._connections.pop(user_id, None)
         await ws.accept()
         self._connections[user_id] = ws
         logger.info("WebSocket connected", extra={"user_id": user_id, "total_connections": len(self._connections)})

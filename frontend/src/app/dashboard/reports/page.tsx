@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import useSWR from "swr";
-import { getAccessToken, apiFetch, hasMinRole } from "@/lib/api";
+import { getAccessToken, apiFetch, hasMinRole, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // ── Types ────────────────────────────────────────────────────
@@ -144,8 +144,6 @@ function statusBadge(s: string) {
 // ── Main Page ─────────────────────────────────────────────────
 
 export default function ReportsPage() {
-  const token = typeof window !== "undefined" ? getAccessToken() : null;
-
   // Form state
   const [reportType, setReportType] = useState("R-01");
   const [outputFormat, setOutputFormat] = useState("pdf");
@@ -224,13 +222,11 @@ export default function ReportsPage() {
     setGenerating(true);
     setShowWarning(false);
     try {
-      const res = await fetch("/api/v1/reports/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
+      const res = await apiFetch<{ data: { job_id: string; status: string } }>(
+        "/api/v1/reports/generate",
+        {
+          method: "POST",
+          body: JSON.stringify({
           report_type: reportType,
           output_format: outputFormat,
           time_range_start: gte,
@@ -238,10 +234,10 @@ export default function ReportsPage() {
           sites: selectedSites,
           sections: selectedSections.length > 0 ? selectedSections : undefined,
         }),
-      });
-      const data: GenerateResponse = await res.json();
-      if (data.success) {
-        setActiveJobId(data.data.job_id);
+        },
+      );
+      if (res.success) {
+        setActiveJobId(res.data.job_id);
         refreshList();
       }
     } catch (e) {
@@ -255,8 +251,10 @@ export default function ReportsPage() {
 
   async function handleDownload(job: ReportJob) {
     try {
+      const token = getAccessToken();
       const res = await fetch(`/api/v1/reports/download/${job.job_id}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
@@ -278,12 +276,8 @@ export default function ReportsPage() {
   async function handleDistribute(job: ReportJob) {
     if (distChannels.length === 0) return;
     try {
-      await fetch(`/api/v1/reports/distribute/${job.job_id}`, {
+      await apiFetch(`/api/v1/reports/distribute/${job.job_id}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({
           channels: distChannels,
           recipient_email: distEmail || undefined,
@@ -558,7 +552,21 @@ export default function ReportsPage() {
                             </button>
                             {job.output_format === "html" && (
                               <button
-                                onClick={() => window.open(`/api/v1/reports/preview/${job.job_id}`, "_blank")}
+                                onClick={async () => {
+                                  try {
+                                    const tk = getAccessToken();
+                                    const res = await fetch(`/api/v1/reports/preview/${job.job_id}`, {
+                                      headers: tk ? { Authorization: `Bearer ${tk}` } : {},
+                                      credentials: "include",
+                                    });
+                                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                    const blob = await res.blob();
+                                    const blobUrl = URL.createObjectURL(blob);
+                                    window.open(blobUrl, "_blank");
+                                  } catch (e) {
+                                    console.error("Preview failed", e);
+                                  }
+                                }}
                                 className="px-2 py-1 text-xs rounded bg-blue-500/10 text-blue-600 hover:bg-blue-500/20"
                               >
                                 Preview

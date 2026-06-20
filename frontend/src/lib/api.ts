@@ -24,22 +24,9 @@ let accessToken: string | null = null;
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
-  if (token) {
-    if (typeof window !== "undefined") {
-      localStorage.setItem("nod_access_token", token);
-    }
-  } else {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("nod_access_token");
-    }
-  }
 }
 
 export function getAccessToken(): string | null {
-  if (accessToken) return accessToken;
-  if (typeof window !== "undefined") {
-    accessToken = localStorage.getItem("nod_access_token");
-  }
   return accessToken;
 }
 
@@ -77,6 +64,20 @@ function isTokenExpired(token: string): boolean {
   return (payload.exp * 1000) < Date.now() + 30_000;
 }
 
+/** Promise that resolves once the initial auth boot check completes. */
+let _authBootResolve: (() => void) | null = null;
+export const authBootDone: Promise<void> = new Promise((resolve) => {
+  _authBootResolve = resolve;
+});
+
+/** Mark auth boot as complete. Called once after the first ensureValidToken / refresh attempt. */
+export function signalAuthBoot(): void {
+  if (_authBootResolve) {
+    _authBootResolve();
+    _authBootResolve = null;
+  }
+}
+
 /**
  * Ensure a valid access token is available.
  * If current token is expired, attempts to refresh via /auth/refresh.
@@ -89,6 +90,21 @@ export async function ensureValidToken(): Promise<string | null> {
   // Token expired or about to expire — refresh now
   const newToken = await refreshAccessToken();
   return newToken;
+}
+/**
+ * Attempt an initial token refresh from the httpOnly refresh cookie.
+ * Should be called once at app boot (layout) to restore a session.
+ * Returns the refreshed token or null.
+ */
+export async function bootAuthFromCookie(): Promise<string | null> {
+  const existing = getAccessToken();
+  if (existing && !isTokenExpired(existing)) {
+    signalAuthBoot();
+    return existing;
+  }
+  const token = await refreshAccessToken();
+  signalAuthBoot();
+  return token;
 }
 
 export async function apiFetch<T = unknown>(
