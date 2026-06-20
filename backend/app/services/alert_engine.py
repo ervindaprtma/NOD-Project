@@ -37,6 +37,9 @@ async def _evaluate_single_rule(rule: AlertRule) -> float | None:
 
         from app.opensearch import appid as appid_qb
         from app.opensearch import ha as ha_qb
+        from app.opensearch import sdwan as sdwan_qb
+        from app.opensearch import sslvpn as sslvpn_qb
+        from app.opensearch import ipsec as ipsec_qb
 
         if rule.data_source == "ha_resource":
             devices = await ha_qb.current_device_status(
@@ -54,7 +57,28 @@ async def _evaluate_single_rule(rule: AlertRule) -> float | None:
             )
             return float(total)
 
-        # Other data sources would be similarly dispatched
+        elif rule.data_source == "sdwan_sla":
+            site = rule.site_name or "Site_FGT-DC"
+            summary = await sdwan_qb.sla_summary(
+                gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+            )
+            # Extract the requested metric field from the summary
+            # e.g. metric_field = "avg_latency_link1"
+            return float(summary.get(rule.metric_field, [0.0])[0] if isinstance(summary.get(rule.metric_field), list) else summary.get(rule.metric_field, 0.0) or 0.0)
+
+        elif rule.data_source == "vpn_ssl":
+            site = rule.site_name or "Site_FGT-DC_SSLVPN"
+            count = await sslvpn_qb.active_sslvpn_users_count(
+                gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+            )
+            return float(count)
+
+        elif rule.data_source == "vpn_ipsec":
+            count = await ipsec_qb.active_ipsec_users_count(
+                gte_ms=gte_ms, lte_ms=lte_ms,
+            )
+            return float(count)
+
         logger.warning(f"Unsupported data_source for alert evaluation: {rule.data_source}")
         return None
 

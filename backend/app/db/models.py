@@ -130,6 +130,7 @@ class AlertRule(Base):
         UUID(as_uuid=False), ForeignKey("alert_templates.id", ondelete="SET NULL"), nullable=True
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    site_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_by: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

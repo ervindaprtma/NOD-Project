@@ -22,6 +22,17 @@ scheduler = AsyncIOScheduler()
 CHECK_INTERVAL_SECONDS = 60
 
 
+async def _run_schedule_async(schedule_id: str, now_iso: str) -> None:
+    """Wrapper that opens its own DB session for non-blocking task execution."""
+    now = datetime.fromisoformat(now_iso)
+    async with AsyncSessionLocal() as session:
+        schedule = await session.get(ReportSchedule, schedule_id)
+        if schedule is None:
+            logger.warning(f"Schedule {schedule_id} not found, skipping")
+            return
+        await _run_schedule(session, schedule, now)
+
+
 async def _check_and_run_schedules():
     """Check for due schedules and trigger report generation."""
     try:
@@ -37,9 +48,9 @@ async def _check_and_run_schedules():
 
             for schedule in schedules:
                 try:
-                    await _run_schedule(session, schedule, now)
+                    asyncio.create_task(_run_schedule_async(schedule.id, now.isoformat()))
                 except Exception as e:
-                    logger.error(f"Failed to run schedule {schedule.id}: {e}", exc_info=True)
+                    logger.error(f"Failed to launch report task for {schedule.id}: {e}", exc_info=True)
 
     except Exception as e:
         logger.error(f"Report scheduler check failed: {e}", exc_info=True)

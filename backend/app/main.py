@@ -66,6 +66,17 @@ async def lifespan(app: FastAPI):
     # Start report schedule checker (P8)
     from app.services.report_scheduler import start_report_scheduler
     start_report_scheduler()
+    # Reset any pending/running ReportJob records from a previous crash/restart (Fix 2.2)
+    from app.db.models import ReportJob
+    from sqlalchemy import update
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            update(ReportJob)
+            .where(ReportJob.status.in_(["pending", "running"]))
+            .values(status="failed", error_message="Server restarted")
+        )
+        await session.commit()
+    logger.info("Reset pending/running report jobs from previous session")
 
     # DB connection pool is lazily initialized by SQLAlchemy
     yield

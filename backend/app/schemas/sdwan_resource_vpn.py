@@ -56,40 +56,6 @@ SITE_LINK_TYPES: dict[str, dict[str, str]] = {
 class LinkMetricPoint(BaseModel):
     timestamp: int  # epoch ms
     value: float
-
-
-class SLATimeline(BaseModel):
-    link1: list[LinkMetricPoint]
-    link2: list[LinkMetricPoint]
-
-
-class LinkCurrentStatus(BaseModel):
-    link: str
-    ifname: str
-    status: str  # Up / Down / Degraded
-    sla_target: str
-
-
-class SiteSLAStatus(BaseModel):
-    site: str
-    device: Optional[str] = None
-    links: list[LinkCurrentStatus]
-
-
-class SLASummaryKPI(BaseModel):
-    avg_latency_link1: float
-    avg_latency_link2: float
-    max_latency_link1: float
-    max_latency_link2: float
-    avg_jitter_link1: float
-    avg_jitter_link2: float
-    avg_packet_loss_link1: float
-    avg_packet_loss_link2: float
-
-
-class LinkMetricPoint(BaseModel):
-    timestamp: int  # epoch ms
-    value: float
     label: str  # display label e.g. "WAN LinkNet"
     link_type: str = "WAN"  # "WAN" or "MPLS"
 
