@@ -32,7 +32,7 @@ async def send_telegram_alert(message: str) -> bool:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
             resp = await client.post(url, json=payload)
             resp.raise_for_status()
             logger.info(f"Telegram alert sent: {resp.status_code}")
@@ -52,7 +52,7 @@ async def send_telegram_document(file_path: str, caption: str = "") -> bool:
     url = f"{TELEGRAM_API_BASE}/bot{settings.TELEGRAM_BOT_TOKEN}/sendDocument"
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             with open(file_path, "rb") as f:
                 files = {"document": f}
                 data = {"chat_id": settings.TELEGRAM_CHAT_ID, "caption": caption}

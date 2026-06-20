@@ -41,7 +41,7 @@ async def send_whatsapp_message(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             logger.info(f"WhatsApp message sent to {to_number}")
@@ -66,7 +66,7 @@ async def send_whatsapp_document(
     headers = {"Authorization": f"Bearer {settings.WHATSAPP_API_TOKEN}"}
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             # Step 1: Upload media
             upload_url = f"{WHATSAPP_API_BASE}/{settings.WHATSAPP_PHONE_NUMBER_ID}/media"
             with open(file_path, "rb") as f:

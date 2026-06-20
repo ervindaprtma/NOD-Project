@@ -60,16 +60,12 @@ export function formatBytes(n: number): string {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
-/** Format milliseconds for display. */
-export function formatMs(ms: number): string {
+/** Format milliseconds for display. When alwaysMs is true, always show as ms (no µs/s conversion). */
+export function formatMs(ms: number, alwaysMs?: boolean): string {
+  if (alwaysMs) return `${ms.toFixed(1)} ms`;
   if (ms < 1) return `${(ms * 1000).toFixed(1)} µs`;
   if (ms < 1000) return `${ms.toFixed(1)} ms`;
   return `${(ms / 1000).toFixed(2)} s`;
-}
-
-/** Format milliseconds — always show as ms (no µs/s conversion). */
-export function formatAlwaysMs(ms: number): string {
-  return `${ms.toFixed(1)} ms`;
 }
 
 /** Format large numbers (K/M). */

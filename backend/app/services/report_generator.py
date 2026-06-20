@@ -15,7 +15,10 @@ Report types:
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import base64
+from concurrent.futures import ProcessPoolExecutor
 import logging
 from datetime import datetime, timezone
 from io import BytesIO
@@ -27,10 +30,19 @@ from weasyprint import HTML
 from app.core.config import get_settings
 from app.db.models import ReportJob
 
+chart_executor = ProcessPoolExecutor(max_workers=2)
+
 settings = get_settings()
 logger = logging.getLogger(__name__)
-
 TEMPLATE_DIR = Path("reports/templates")
+
+async def _run_chart(func, *args, **kwargs):  # noqa: ANN002
+    """Run a CPU-bound chart rendering function in the process pool."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        chart_executor, functools.partial(func, *args, **kwargs)
+    )
+
 
 # Sites used for per-site traffic in R-01 and for SD-WAN SLA queries
 DEFAULT_SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"]
@@ -115,7 +127,8 @@ async def _build_report_context(
             if top_apps:
                 labels = [a["application"] for a in top_apps[:10]]
                 values = [a["total_bytes"] for a in top_apps[:10]]
-                png_bytes = render_bar_chart(
+                png_bytes = await _run_chart(
+                    render_bar_chart,
                     labels, values,
                     title="Top 10 Applications by Traffic Volume",
                     xlabel="Bytes",
@@ -127,7 +140,8 @@ async def _build_report_context(
                 gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
             )
             if tp_data:
-                png_bytes = render_timeseries_chart(
+                png_bytes = await _run_chart(
+                    render_timeseries_chart,
                     tp_data,
                     title="Throughput Over Time",
                     ylabel="Bytes",
@@ -149,7 +163,8 @@ async def _build_report_context(
             if top_as_orgs:
                 labels = [o["org_name"] for o in top_as_orgs[:10]]
                 values = [o["total_bytes"] for o in top_as_orgs[:10]]
-                png_bytes = render_bar_chart(
+                png_bytes = await _run_chart(
+                    render_bar_chart,
                     labels, values,
                     title="Top 10 Destination AS Organizations",
                     xlabel="Bytes",
@@ -166,7 +181,8 @@ async def _build_report_context(
             if top_countries:
                 labels = [c["country"] for c in top_countries[:10]]
                 values = [c["total_bytes"] for c in top_countries[:10]]
-                png_bytes = render_bar_chart(
+                png_bytes = await _run_chart(
+                    render_bar_chart,
                     labels, values,
                     title="Top 10 Destination Countries",
                     xlabel="Bytes",
@@ -183,7 +199,8 @@ async def _build_report_context(
             if protocol_dist:
                 labels = [p["protocol"] for p in protocol_dist[:10]]
                 values = [p["total_bytes"] for p in protocol_dist[:10]]
-                png_bytes = render_bar_chart(
+                png_bytes = await _run_chart(
+                    render_bar_chart,
                     labels, values,
                     title="Protocol Distribution by Traffic Volume",
                     xlabel="Bytes",
@@ -215,7 +232,8 @@ async def _build_report_context(
                 gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
             )
             if timeline["cpu"]:
-                png_bytes = render_timeseries_chart(
+                png_bytes = await _run_chart(
+                    render_timeseries_chart,
                     timeline["cpu"],
                     title="CPU Usage Over Time",
                     ylabel="CPU %",
@@ -242,7 +260,8 @@ async def _build_report_context(
 
             # VPN bar chart
             if ssl_count > 0 or ipsec_count > 0:
-                png_bytes = render_vpn_bar_chart(
+                png_bytes = await _run_chart(
+                    render_vpn_bar_chart,
                     ssl_count=ssl_count or 0,
                     ipsec_count=ipsec_count or 0,
                 )
@@ -274,7 +293,8 @@ async def _build_report_context(
                         # Render multi-line timeseries chart for latency and jitter
                         if timeline_data and metric in ("latency", "jitter"):
                             chart_key = f"sla_{metric}_{site}"
-                            png_bytes = render_timeseries_chart(
+                            png_bytes = await _run_chart(
+                                render_timeseries_chart,
                                 timeline_data,
                                 title=f"SD-WAN {metric.title()} — {site}",
                                 ylabel=metric.title(),
@@ -317,7 +337,8 @@ async def _build_report_context(
                     if site_summary.get("top_services"):
                         svc_labels = [s["service_name"] for s in site_summary["top_services"][:10]]
                         svc_values = [s["total_bytes"] for s in site_summary["top_services"][:10]]
-                        png_bytes = render_bar_chart(
+                        png_bytes = await _run_chart(
+                            render_bar_chart,
                             svc_labels, svc_values,
                             title=f"Top Inbound Services — {site}",
                             xlabel="Bytes",
@@ -328,7 +349,8 @@ async def _build_report_context(
                     if site_summary.get("top_src_as_org"):
                         org_labels = [o["org_name"] for o in site_summary["top_src_as_org"][:10]]
                         org_values = [o["total_bytes"] for o in site_summary["top_src_as_org"][:10]]
-                        png_bytes = render_bar_chart(
+                        png_bytes = await _run_chart(
+                            render_bar_chart,
                             org_labels, org_values,
                             title=f"Top Source AS Organizations — {site}",
                             xlabel="Bytes",
@@ -339,7 +361,8 @@ async def _build_report_context(
                     if site_summary.get("top_src_as_country"):
                         country_labels = [c["country"] for c in site_summary["top_src_as_country"][:10]]
                         country_values = [c["total_bytes"] for c in site_summary["top_src_as_country"][:10]]
-                        png_bytes = render_bar_chart(
+                        png_bytes = await _run_chart(
+                            render_bar_chart,
                             country_labels, country_values,
                             title=f"Top Source Countries — {site}",
                             xlabel="Bytes",
@@ -350,7 +373,8 @@ async def _build_report_context(
                     if site_summary.get("protocol_dist"):
                         proto_labels = [p["protocol"] for p in site_summary["protocol_dist"][:10]]
                         proto_values = [p["total_bytes"] for p in site_summary["protocol_dist"][:10]]
-                        png_bytes = render_bar_chart(
+                        png_bytes = await _run_chart(
+                            render_bar_chart,
                             proto_labels, proto_values,
                             title=f"Inbound Protocol Distribution — {site}",
                             xlabel="Bytes",
@@ -361,7 +385,8 @@ async def _build_report_context(
                     if site_summary.get("egress_breakdown"):
                         egr_labels = [e["interface"] for e in site_summary["egress_breakdown"][:10]]
                         egr_values = [e["total_bytes"] for e in site_summary["egress_breakdown"][:10]]
-                        png_bytes = render_bar_chart(
+                        png_bytes = await _run_chart(
+                            render_bar_chart,
                             egr_labels, egr_values,
                             title=f"Inbound Egress Interface Breakdown — {site}",
                             xlabel="Bytes",

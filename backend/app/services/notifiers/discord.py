@@ -25,7 +25,7 @@ async def send_discord_message(message: str) -> bool:
     payload = {"content": message}
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
             resp = await client.post(settings.DISCORD_WEBHOOK_URL, json=payload)
             resp.raise_for_status()
             logger.info("Discord message sent")
@@ -45,7 +45,7 @@ async def send_discord_file(file_path: str, message: str = "") -> bool:
     filename = Path(file_path).name
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             with open(file_path, "rb") as f:
                 files = {
                     "file": (filename, f, "application/octet-stream"),

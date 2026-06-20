@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatMs, formatAlwaysMs, formatPercent, formatNumber, getDefaultTimeRange } from "@/lib/constants";
+import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatMs, formatPercent, formatNumber, getDefaultTimeRange } from "@/lib/constants";
 import type { SDWANData } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { AreaChart } from "@/components/charts/AreaChart";
@@ -297,7 +297,7 @@ export default function SDWANPage() {
                   </div>
                   <div>
                     <span className="text-[9px] text-muted-foreground">Jitter</span>
-                    <p className="text-sm font-bold">{formatAlwaysMs(sdwan.summary.avg_jitter[i])}</p>
+                    <p className="text-sm font-bold">{formatMs(sdwan.summary.avg_jitter[i], true)}</p>
                   </div>
                   <div>
                     <span className="text-[9px] text-muted-foreground">Loss</span>
@@ -323,7 +323,7 @@ export default function SDWANPage() {
       <SlaTimeseriesChart
         title="Jitter (ms)" loading={isLoading} section="jitter"
         onViewMore={() => setExpanded("jitter")}
-        links={sdwan?.jitter_timeline?.links} color="orange" format={formatAlwaysMs}
+        links={sdwan?.jitter_timeline?.links} color="orange" format={(v: number) => formatMs(v, true)}
       />
 
       {/* Packet Loss (all links) */}
@@ -408,7 +408,7 @@ function renderSummary(sdwan: SDWANData | undefined) {
             <div className="grid grid-cols-2 gap-2">
               <div><span className="text-[9px] text-muted-foreground">Lat</span><p className="text-lg font-bold">{formatMs(sdwan.summary.avg_latency[i])}</p></div>
               <div><span className="text-[9px] text-muted-foreground">Max</span><p className="text-lg font-bold">{formatMs(sdwan.summary.max_latency[i])}</p></div>
-              <div><span className="text-[9px] text-muted-foreground">Jitter</span><p className="text-lg font-bold">{formatAlwaysMs(sdwan.summary.avg_jitter[i])}</p></div>
+              <div><span className="text-[9px] text-muted-foreground">Jitter</span><p className="text-lg font-bold">{formatMs(sdwan.summary.avg_jitter[i], true)}</p></div>
               <div><span className="text-[9px] text-muted-foreground">Loss</span><p className="text-lg font-bold">{formatPercent(sdwan.summary.avg_packet_loss[i])}</p></div>
             </div>
           </div>
@@ -427,7 +427,7 @@ function renderExpandedChart(
 
   const metricMap: Record<string, { links: { timestamp: number; value: number; label: string; link_type: string }[]; color: string; format: (v: number) => string }> = {
     latency: { links: sdwan.latency_timeline?.links || [], color: "blue", format: formatMs },
-    jitter: { links: sdwan.jitter_timeline?.links || [], color: "orange", format: formatAlwaysMs },
+    jitter: { links: sdwan.jitter_timeline?.links || [], color: "orange", format: (v: number) => formatMs(v, true) },
     packetLoss: { links: sdwan.packet_loss_timeline?.links || [], color: "red", format: formatPercent },
   };
 

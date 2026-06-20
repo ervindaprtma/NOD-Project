@@ -6,23 +6,40 @@ import Link from "next/link";
 import { getAccessToken, setAccessToken, apiFetch, ensureValidToken, bootAuthFromCookie } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Network } from "lucide-react";
+import {
+  Network,
+  Activity,
+  Globe,
+  ArrowDownToLine,
+  ArrowLeftRight,
+  Timer,
+  LayoutGrid,
+  Lock,
+  ScrollText,
+  AlertTriangle,
+  FileText,
+  Users,
+  ClipboardList,
+  Settings,
+  Bell,
+  Menu,
+} from "lucide-react";
 import type { Notification as NotifType } from "@/types";
 
 const NAV_ITEMS = [
-  { href: "/dashboard/overview", label: "Overview", icon: "◉" },
-  { href: "/dashboard/traffic", label: "Traffic Internet", icon: "🌐" },
-  { href: "/dashboard/traffic-inbound", label: "Traffic Inbound", icon: "↘" },
-  { href: "/dashboard/traffic-internal", label: "Traffic Internal", icon: "⇄" },
-  { href: "/dashboard/sdwan", label: "SD-WAN SLA", icon: "⏱" },
-  { href: "/dashboard/resources", label: "Resources", icon: "⊞" },
-  { href: "/dashboard/vpn", label: "VPN Sessions", icon: "🔒" },
-  { href: "/dashboard/raw-data", label: "Raw Data", icon: "☰" },
-  { href: "/dashboard/alerts", label: "Alerts", icon: "⚠" },
-  { href: "/dashboard/reports", label: "Reports", icon: "📄" },
-  { href: "/dashboard/users", label: "Users", icon: "👥" },
-  { href: "/dashboard/activity-logs", label: "Activity Logs", icon: "📋" },
-  { href: "/dashboard/settings", label: "Settings", icon: "⚙" },
+  { href: "/dashboard/overview", label: "Overview", Icon: Activity },
+  { href: "/dashboard/traffic", label: "Traffic Internet", Icon: Globe },
+  { href: "/dashboard/traffic-inbound", label: "Traffic Inbound", Icon: ArrowDownToLine },
+  { href: "/dashboard/traffic-internal", label: "Traffic Internal", Icon: ArrowLeftRight },
+  { href: "/dashboard/sdwan", label: "SD-WAN SLA", Icon: Timer },
+  { href: "/dashboard/resources", label: "Resources", Icon: LayoutGrid },
+  { href: "/dashboard/vpn", label: "VPN Sessions", Icon: Lock },
+  { href: "/dashboard/raw-data", label: "Raw Data", Icon: ScrollText },
+  { href: "/dashboard/alerts", label: "Alerts", Icon: AlertTriangle },
+  { href: "/dashboard/reports", label: "Reports", Icon: FileText },
+  { href: "/dashboard/users", label: "Users", Icon: Users },
+  { href: "/dashboard/activity-logs", label: "Activity Logs", Icon: ClipboardList },
+  { href: "/dashboard/settings", label: "Settings", Icon: Settings },
 ];
 
 export default function DashboardLayout({
@@ -202,7 +219,7 @@ export default function DashboardLayout({
                   : "text-muted-foreground hover:bg-muted"
               )}
             >
-              <span className="text-base">{item.icon}</span>
+              <item.Icon className="h-4 w-4 shrink-0" />
               {sidebarOpen && <span>{item.label}</span>}
             </Link>
           );
@@ -218,7 +235,7 @@ export default function DashboardLayout({
               className="text-muted-foreground hover:text-foreground"
               aria-label="Toggle sidebar"
             >
-              ☰
+              <Menu className="h-5 w-5" />
             </button>
           </div>
 
@@ -233,7 +250,7 @@ export default function DashboardLayout({
                 className="relative p-1 text-muted-foreground hover:text-foreground"
                 aria-label="Notifications"
               >
-                🔔
+                <Bell className="h-5 w-5" />
                 {unreadCount > 0 && (
                   <span className="absolute -top-1 -right-1 flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-destructive rounded-full">
                     {unreadCount}
@@ -298,13 +315,14 @@ export default function DashboardLayout({
                     onClick={() => { setProfileOpen(false); router.push("/dashboard/settings"); }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
                   >
-                    ⚙ Profile Settings
+                    <Settings className="inline h-4 w-4 mr-2" />
+                    Profile Settings
                   </button>
                   <button
                     onClick={handleLogout}
                     className="w-full text-left px-3 py-2 text-sm text-destructive hover:bg-muted transition-colors"
                   >
-                    ↪ Logout
+                    Logout
                   </button>
                 </div>
               )}
@@ -313,7 +331,9 @@ export default function DashboardLayout({
         </header>
 
         <main className="flex-1 overflow-y-auto p-6 bg-muted/20">
-          {children}
+          <ErrorBoundary>
+            {children}
+          </ErrorBoundary>
         </main>
       </div>
     </>

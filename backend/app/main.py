@@ -85,6 +85,8 @@ async def lifespan(app: FastAPI):
     alert_scheduler.shutdown(wait=False)
     from app.services.report_scheduler import scheduler as report_scheduler
     report_scheduler.shutdown(wait=False)
+    from app.services.report_generator import chart_executor
+    chart_executor.shutdown(wait=False)
     await engine.dispose()
     logger.info("NOD Backend shut down")
 
