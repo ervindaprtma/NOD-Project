@@ -48,10 +48,11 @@ class InterfaceStatsResponse(BaseModel):
 
 def _compute_throughput_timeline(
     time_buckets: list[dict],
+    interval_seconds: int = 60,
 ) -> list[InterfaceTimelinePoint]:
     """
     Convert cumulative counter per-bucket into Mbps throughput.
-    throughputMbps = (max_current - max_prev) × 8 / 60 / 1_000_000
+    throughputMbps = (max_current - max_prev) × 8 / interval_seconds / 1_000_000
     If delta < 0 (counter reset), return None for that bucket.
     """
     points: list[InterfaceTimelinePoint] = []
@@ -69,12 +70,12 @@ def _compute_throughput_timeline(
         if max_in is not None and prev_in is not None:
             delta = max_in - prev_in
             if delta >= 0:
-                in_mbps = round(delta * 8 / 60 / 1_000_000, 4)
+                in_mbps = round(delta * 8 / interval_seconds / 1_000_000, 4)
 
         if max_out is not None and prev_out is not None:
             delta = max_out - prev_out
             if delta >= 0:
-                out_mbps = round(delta * 8 / 60 / 1_000_000, 4)
+                out_mbps = round(delta * 8 / interval_seconds / 1_000_000, 4)
 
         points.append(InterfaceTimelinePoint(
             timestamp=ts,
@@ -114,7 +115,7 @@ async def get_interface_stats(
     - ifOperStatus >= 1 (UP)
     - Excluding internal/virtual interfaces (mgmt, ha, ssl.*, fortilink, etc.)
 
-    Returns per-interface data at 60-second intervals.
+    Returns per-interface data at adaptive intervals (60s/5m/15m based on time range).
     """
     t0 = time.monotonic()
 
@@ -126,12 +127,26 @@ async def get_interface_stats(
             message=f"Unknown site: {site_name}. Valid sites: {', '.join(sorted(valid_sites))}",
         )
 
+    # Compute dynamic interval based on time range
+    delta_sec = (lte_ms - gte_ms) / 1000
+    if delta_sec <= 7200:
+        iface_interval = "60s"
+        interval_seconds = 60
+    elif delta_sec <= 43200:
+        iface_interval = "5m"
+        interval_seconds = 300
+    else:
+        iface_interval = "15m"
+        interval_seconds = 900
+
     # Q-07: single OpenSearch query for all interfaces
-    raw_aggs = await iface_qb.interface_stats_timeline(
+    result = await iface_qb.interface_stats_timeline(
         gte_ms=gte_ms,
         lte_ms=lte_ms,
         site_name=site_name,
+        interval=iface_interval,
     )
+    raw_aggs = result.get("aggregations", {})
 
     interfaces: list[InterfaceStatsItem] = []
     iface_labels = iface_qb.SITE_IFINDEX_MAP.get(site_name, {})
@@ -147,7 +162,7 @@ async def get_interface_stats(
         time_buckets = iface_bucket.get("by_time", {}).get("buckets", [])
 
         # Compute throughput deltas
-        timeline = _compute_throughput_timeline(time_buckets)
+        timeline = _compute_throughput_timeline(time_buckets, interval_seconds=interval_seconds)
 
         # Extract last bucket's speed and oper_status
         speed_mbps = None

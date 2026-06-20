@@ -92,6 +92,18 @@ def _time_range(gte_ms: int, lte_ms: int) -> dict:
     }
 
 
+def _parse_interval_seconds(interval: str) -> int:
+    """Parse OpenSearch interval string to seconds. E.g. '60s' -> 60, '5m' -> 300, '15m' -> 900."""
+    interval = interval.strip()
+    if interval.endswith("s"):
+        return int(interval[:-1])
+    elif interval.endswith("m"):
+        return int(interval[:-1]) * 60
+    elif interval.endswith("h"):
+        return int(interval[:-1]) * 3600
+    return 60  # fallback
+
+
 def _get_client_for_site(site_name: str) -> AsyncOpenSearch:
     """Return the correct OpenSearch client for a site based on SITE_ENDPOINT config."""
     endpoint = SITE_ENDPOINT.get(site_name, "dc")
@@ -109,6 +121,7 @@ async def interface_stats_timeline(
     gte_ms: int = 0,
     lte_ms: int = 0,
     site_name: str = "Site_FGT-DC",
+    interval: str = "60s",
     client: Optional[AsyncOpenSearch] = None,
 ) -> dict:
     """
@@ -116,6 +129,10 @@ async def interface_stats_timeline(
 
     Only queries the 4 hardcoded WAN/MPLS interfaces per site
     defined in SITE_IFINDEX_MAP. No dynamic discovery.
+
+    Q-01: @timestamp range filter with gte/lte.
+    Q-06: exact measurement_name term filter.
+    Q-05: aggregation in OpenSearch, not Python.
     """
     source_ip = SITE_SOURCE_MAP.get(site_name)
     if not source_ip:
@@ -129,6 +146,9 @@ async def interface_stats_timeline(
 
     if client is None:
         client = _get_client_for_site(site_name)
+
+    # Parse interval seconds for Mbps calculation
+    interval_seconds = _parse_interval_seconds(interval)
 
     body = {
         "size": 0,
@@ -152,7 +172,7 @@ async def interface_stats_timeline(
                     "by_time": {
                         "date_histogram": {
                             "field": "@timestamp",
-                            "fixed_interval": "60s",
+                            "fixed_interval": interval,
                             "min_doc_count": 0,
                             "extended_bounds": {
                                 "min": gte_ms,
@@ -180,4 +200,4 @@ async def interface_stats_timeline(
     }
 
     resp = await client.search(index=INDEX_PATTERN, body=body)
-    return resp["aggregations"]
+    return {"aggregations": resp["aggregations"], "interval_seconds": interval_seconds}

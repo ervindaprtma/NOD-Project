@@ -55,6 +55,17 @@ def _format_bytes(n: int) -> str:
         return f"{n / 1024**3:.2f} GB"
 
 
+def _compute_interval(gte_ms: int, lte_ms: int) -> str:
+    """Compute dynamic date_histogram interval based on time range."""
+    delta_sec = (lte_ms - gte_ms) / 1000
+    if delta_sec <= 7200:      # ≤ 2h
+        return "60s"
+    elif delta_sec <= 43200:   # ≤ 12h
+        return "5m"
+    else:                       # > 12h
+        return "15m"
+
+
 @router.get("/overview", response_model=APIResponse[OverviewResponse])
 async def get_overview(
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
@@ -153,11 +164,14 @@ async def get_overview(
 
     # WAN Interface Bandwidth (all 3 sites, hardcoded ifIndex)
     wan_bandwidth = []
+    iface_interval = _compute_interval(gte_ms, lte_ms)
     for site_name in ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"]:
         try:
-            aggs = await iface_qb.interface_stats_timeline(
-                gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name
+            result = await iface_qb.interface_stats_timeline(
+                gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, interval=iface_interval
             )
+            aggs = result.get("aggregations", {})
+            interval_seconds = result.get("interval_seconds", 60)
             labels = iface_qb.SITE_IFINDEX_MAP.get(site_name, {})
             ifaces = []
             for b in aggs.get("by_interface", {}).get("buckets", []):
@@ -187,11 +201,11 @@ async def get_overview(
                     if prev_in is not None and curr_in is not None:
                         delta = curr_in - prev_in
                         if delta >= 0:
-                            in_mbps = round(delta * 8 / 60 / 1_000_000, 2)
+                            in_mbps = round(delta * 8 / interval_seconds / 1_000_000, 2)
                     if prev_out is not None and curr_out is not None:
                         delta = curr_out - prev_out
                         if delta >= 0:
-                            out_mbps = round(delta * 8 / 60 / 1_000_000, 2)
+                            out_mbps = round(delta * 8 / interval_seconds / 1_000_000, 2)
                 ifaces.append(WanInterfaceSummary(
                     label=lbl,
                     in_mbps=in_mbps,
