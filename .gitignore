@@ -57,3 +57,5 @@ backend/alembic/versions/*.pyc
 # Markdown docs (except README)
 *.md
 !README.md
+*.txt
+!backend/requirements.txt
