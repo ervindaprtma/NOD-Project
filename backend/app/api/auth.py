@@ -42,7 +42,7 @@ _ROLE_HIERARCHY = {
     "superadmin": 3,
 }
 
-COOKIE_REFRESH_TOKEN = "nod_refresh_token"
+COOKIE_REFRESH_TOKEN = "__Host-nod_refresh_token"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -105,21 +105,19 @@ async def login(
 
     response_data = APIResponse.ok(TokenResponse(access_token=access_token))
 
-    # Set refresh token as HTTP-only cookie
+    # Set refresh token as HTTP-only cookie with __Host- prefix
     resp = Response(
         content=response_data.model_dump_json(),
         media_type="application/json",
     )
-    # Detect if the incoming request is HTTPS; if not, set secure=False for dev
-    is_https = request.url.scheme == "https" or request.headers.get("X-Forwarded-Proto") == "https"
     resp.set_cookie(
         key=COOKIE_REFRESH_TOKEN,
         value=refresh_token,
         httponly=True,
-        secure=is_https,
+        secure=True,           # __Host- requires Secure
         samesite="strict",
         max_age=int(settings.REFRESH_TOKEN_EXPIRE_HOURS * 3600),
-        path="/auth",
+        path="/",              # __Host- requires Path=/
     )
     return resp
 
@@ -156,7 +154,7 @@ async def logout(
         content=APIResponse.ok({"message": "Logged out"}).model_dump_json(),
         media_type="application/json",
     )
-    resp.delete_cookie(COOKIE_REFRESH_TOKEN, path="/auth")
+    resp.delete_cookie(COOKIE_REFRESH_TOKEN, path="/")
     return resp
 
 
@@ -229,15 +227,14 @@ async def refresh(
         content=response_data.model_dump_json(),
         media_type="application/json",
     )
-    is_https = request.url.scheme == "https" or request.headers.get("X-Forwarded-Proto") == "https"
     resp.set_cookie(
         key=COOKIE_REFRESH_TOKEN,
         value=new_refresh_token,
         httponly=True,
-        secure=is_https,
+        secure=True,           # __Host- requires Secure
         samesite="strict",
         max_age=int(settings.REFRESH_TOKEN_EXPIRE_HOURS * 3600),
-        path="/auth",
+        path="/",              # __Host- requires Path=/
     )
     return resp
 
