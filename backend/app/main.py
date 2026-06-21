@@ -13,6 +13,11 @@ from typing import Callable
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from app.core.security import decode_token
+from app.db.session import AsyncSessionLocal
+from app.db.models import User
+import asyncio
+from sqlalchemy import select
 from jose import JWTError, jwt
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -228,43 +233,50 @@ async def health_check():
 
 from app.services.websocket_manager import alert_ws_manager
 
+_ALERT_ALLOWED_ROLES = {"admin", "superadmin"}
 
-async def ws_get_current_user(token: str = Query(...)) -> str:
-    """Extract user_id from JWT for WebSocket upgrade. Rejects if invalid."""
+async def _authenticate_ws_user(websocket: WebSocket) -> str | None:
+    """Wait for auth message, validate JWT, return user_id or None."""
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
-        user_id: str | None = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token: missing sub")
-        return user_id
-    except JWTError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+        data = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
+        if data.get("type") != "auth" or not data.get("token"):
+            await websocket.close(code=1008, reason="Missing auth message")
+            return None
+        payload = decode_token(data["token"])
+        if not payload or payload.get("type") != "access":
+            await websocket.close(code=1008, reason="Invalid token")
+            return None
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(User).where(User.id == payload["sub"]))
+            user = result.scalar_one_or_none()
+        if not user or not user.is_active:
+            await websocket.close(code=1008, reason="User unauthorized")
+            return None
+        if user.role not in _ALERT_ALLOWED_ROLES:
+            await websocket.close(code=1008, reason="Insufficient role")
+            return None
+        return user.id
+    except asyncio.TimeoutError:
+        await websocket.close(code=1008, reason="Auth timeout")
+        return None
 
 
 @app.websocket("/ws/alerts")
-async def ws_alerts(
-    ws: WebSocket,
-    token: str = Query(...),
-):
-    """
-    FR-10: WebSocket endpoint for real-time alert push.
-    Requires JWT token as query parameter for authentication.
-    Broadcasts FIRING and RESOLVED alert state transitions.
-    """
-    user_id = await ws_get_current_user(token)
-    await alert_ws_manager.connect(ws, user_id)
+async def ws_alerts(websocket: WebSocket):
+    """FR-10: WebSocket for real-time alerts. Message-based auth, admin+ only."""
+    user_id = await _authenticate_ws_user(websocket)
+    if not user_id:
+        return
+    await alert_ws_manager.connect(websocket, user_id)
     try:
-        # Keep connection alive; handle incoming messages (heartbeat / ack)
         while True:
             try:
-                data = await ws.receive_text()
-                # Client can send ping/pong or mark-as-read events
+                data = await websocket.receive_text()
                 msg = json.loads(data)
-                action = msg.get("action")
-                if action == "ping":
-                    await ws.send_text(json.dumps({"type": "pong"}))
+                if msg.get("action") == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
             except json.JSONDecodeError:
-                await ws.send_text(json.dumps({"type": "error", "message": "Invalid JSON"}))
+                pass
     except WebSocketDisconnect:
         await alert_ws_manager.disconnect(user_id)
     except Exception:

@@ -21,6 +21,7 @@ class ApiError extends Error {
 }
 
 let accessToken: string | null = null;
+let refreshPromise: Promise<string | null> | null = null;
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
@@ -29,21 +30,30 @@ export function setAccessToken(token: string | null) {
 export function getAccessToken(): string | null {
   return accessToken;
 }
+export function clearAccessToken() {
+  accessToken = null;
+}
 
 async function refreshAccessToken(): Promise<string | null> {
-  try {
-    const resp = await fetch("/auth/refresh", {
-      method: "POST",
-      credentials: "include",
-    });
-    if (!resp.ok) return null;
-    const json = await resp.json();
-    const token = json.data?.access_token;
-    if (token) setAccessToken(token);
-    return token;
-  } catch {
-    return null;
-  }
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    try {
+      const resp = await fetch("/auth/refresh", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!resp.ok) return null;
+      const json = await resp.json();
+      const token = json.data?.access_token;
+      if (token) setAccessToken(token);
+      return token;
+    } catch {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
 }
 
 /** Decode JWT payload without validating signature (for expiry check only). */
@@ -144,6 +154,22 @@ export async function apiFetch<T = unknown>(
     if (newToken) {
       headers["Authorization"] = `Bearer ${newToken}`;
       resp = await fetch(url, { ...fetchOpts, headers, credentials: "include" });
+    }
+  }
+
+  // Intercept MUST_CHANGE_PASSWORD 403
+  if (resp.status === 403) {
+    try {
+      const body = await resp.clone().json();
+      if (body?.error?.code === "MUST_CHANGE_PASSWORD") {
+        if (typeof window !== "undefined") {
+          window.location.href = "/dashboard/settings?tab=password&required=true";
+        }
+        throw new ApiError(403, "MUST_CHANGE_PASSWORD", "Password change required");
+      }
+    } catch (e) {
+      if (e instanceof ApiError) throw e;
+      // JSON parse failed, fall through to normal error handling
     }
   }
 

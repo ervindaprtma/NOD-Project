@@ -12,6 +12,7 @@ from functools import lru_cache
 from typing import Optional
 
 from opensearchpy import AsyncOpenSearch
+import logging
 
 from app.core.config import get_settings
 
@@ -36,6 +37,8 @@ def _build_client(hosts: str) -> AsyncOpenSearch:
     }
     if settings.OPENSEARCH_USERNAME and settings.OPENSEARCH_PASSWORD:
         kwargs["http_auth"] = (settings.OPENSEARCH_USERNAME, settings.OPENSEARCH_PASSWORD)
+    logger = logging.getLogger("nod.opensearch")
+    logger.warning("OpenSearch TLS cert verification disabled — not suitable for production")
     return AsyncOpenSearch(**kwargs)
 
 

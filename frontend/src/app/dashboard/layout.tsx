@@ -6,6 +6,7 @@ import Link from "next/link";
 import { getAccessToken, setAccessToken, apiFetch, ensureValidToken, bootAuthFromCookie } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   Network,
   Activity,
@@ -56,6 +57,7 @@ export default function DashboardLayout({
   const [authChecked, setAuthChecked] = useState(false);
   const [tokenPresent, setTokenPresent] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
 
   const isSuperAdmin = user?.role === "superadmin";
@@ -69,6 +71,19 @@ export default function DashboardLayout({
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  // Mobile breakpoint detection
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const handler = (e: MediaQueryListEvent) => {
+      setIsMobile(e.matches);
+      if (e.matches) setSidebarOpen(false);
+    };
+    setIsMobile(mq.matches);
+    if (mq.matches) setSidebarOpen(false);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
   }, []);
 
   const fetchUser = useCallback(async () => {
@@ -189,9 +204,16 @@ export default function DashboardLayout({
         </div>
       ) : (
         <>
+      {isMobile && sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
       <aside
         className={cn(
           "flex flex-col bg-card border-r transition-all duration-200",
+          isMobile ? "fixed inset-y-0 left-0 z-50" : "relative",
           sidebarOpen ? "w-60" : "w-16"
         )}
       >
@@ -212,6 +234,7 @@ export default function DashboardLayout({
             <Link
               key={item.href}
               href={item.href}
+              onClick={() => { if (isMobile) setSidebarOpen(false); }}
               className={cn(
                 "flex items-center gap-3 px-4 py-2.5 text-sm transition-colors",
                 pathname === item.href
