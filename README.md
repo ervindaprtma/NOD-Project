@@ -63,9 +63,9 @@ docker compose exec backend python scripts/seed_superadmin.py
 | `JWT_SECRET` | JWT signing key (≥32 chars) | `openssl rand -base64 32` |
 | `POSTGRES_PASSWORD` | Database password | `your_password_here` |
 | `DATABASE_URL` | PostgreSQL connection | `postgresql+asyncpg://nod_user:pass@db:5432/nod_db` |
-| `OPENSEARCH_TELEGRAF_URL` | DC OpenSearch (telegraf) | `https://10.80.150.108:9200` |
-| `OPENSEARCH_APPID_URL` | DRC OpenSearch (appid) | `https://10.90.150.108:9200` |
-| `OPENSEARCH_IPSEC_URL` | DRC OpenSearch (ipsec) | `https://10.90.150.108:9200` |
+| `OPENSEARCH_DC_URL` | DC OpenSearch (Site_FGT-DC) | `https://10.80.150.108:9200` |
+| `OPENSEARCH_DRC_URL` | DRC OpenSearch (Site_FGT-DRC + Site_FGT_Office) | `https://10.90.150.108:9200` |
+| `OPENSEARCH_IPSEC_URL` | IPsec OpenSearch | `https://10.90.150.108:9200` |
 
 **Optional (Notifications):**
 
