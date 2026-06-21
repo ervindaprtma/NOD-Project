@@ -4,13 +4,23 @@
 
 ---
 
+## Architecture
+
+```
+Browser → Nginx (HTTPS:443) → Frontend (Next.js:3000)
+                             → Backend (FastAPI:8000) → PostgreSQL
+                                                     → OpenSearch (DC/DRC)
+```
+
+---
+
 ## Deploy
 
 ### Prerequisites
 
 - Docker Engine ≥ 24.x
 - Docker Compose v2
-- Network access to OpenSearch clusters
+- Network access to OpenSearch clusters (DC: 10.80.150.108, DRC: 10.90.150.108)
 - Port 80/443 available on host
 
 ### First-Time Setup
@@ -24,17 +34,24 @@ cd NOD-Project
 cp .env.example .env
 # Edit .env — set JWT_SECRET, POSTGRES_PASSWORD, OpenSearch endpoints
 
-# 3. Build and start all services
+# 3. Generate SSL certificate (self-signed for dev)
+mkdir -p nginx/certs
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout nginx/certs/nod-selfsigned.key \
+  -out nginx/certs/nod-selfsigned.crt \
+  -subj "/CN=localhost"
+
+# 4. Build and start all services
 docker compose up -d --build
 
-# 4. Wait for healthy status
+# 5. Wait for healthy status
 docker compose ps
 
-# 5. Run database migration (first time only)
+# 6. Run database migration (first time only)
 docker compose exec backend alembic upgrade head
 
-# 6. Create superadmin account (first time only)
-docker compose exec -it backend python -m scripts.seed_superadmin
+# 7. Create superadmin account (first time only, interactive)
+docker compose exec backend python scripts/seed_superadmin.py
 ```
 
 ### Environment Variables (.env)
@@ -43,11 +60,12 @@ docker compose exec -it backend python -m scripts.seed_superadmin
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `JWT_SECRET` | JWT signing key | `openssl rand -base64 32` |
+| `JWT_SECRET` | JWT signing key (≥32 chars) | `openssl rand -base64 32` |
 | `POSTGRES_PASSWORD` | Database password | `your_password_here` |
 | `DATABASE_URL` | PostgreSQL connection | `postgresql+asyncpg://nod_user:pass@db:5432/nod_db` |
-| `OPENSEARCH_DC_URL` | DC OpenSearch endpoint | `http://10.80.150.108:9200` |
-| `OPENSEARCH_DRC_URL` | DRC OpenSearch endpoint | `http://10.90.150.108:9200` |
+| `OPENSEARCH_TELEGRAF_URL` | DC OpenSearch (telegraf) | `https://10.80.150.108:9200` |
+| `OPENSEARCH_APPID_URL` | DRC OpenSearch (appid) | `https://10.90.150.108:9200` |
+| `OPENSEARCH_IPSEC_URL` | DRC OpenSearch (ipsec) | `https://10.90.150.108:9200` |
 
 **Optional (Notifications):**
 
@@ -61,10 +79,99 @@ docker compose exec -it backend python -m scripts.seed_superadmin
 
 | URL | Description |
 |-----|-------------|
-| `https://localhost/` | Dashboard (auto-redirect to login) |
-| `https://localhost/login` | Login page |
-| `https://localhost/api/docs` | Swagger UI |
-| `https://localhost/health` | Health check |
+| `https://nod.esign.id/` | Dashboard (auto-redirect to login) |
+| `https://nod.esign.id/login` | Login page |
+| `https://nod.esign.id/api/docs` | Swagger UI |
+| `https://nod.esign.id/health` | Health check |
+
+---
+
+## Production Deployment (Nginx + Domain)
+
+### Nginx Reverse Proxy
+
+The nginx container terminates SSL and proxies to frontend/backend:
+
+```nginx
+upstream frontend_upstream { server frontend:3000; }
+upstream backend_upstream { server backend:8000; }
+
+server {
+    listen 80;
+    server_name nod.esign.id;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name nod.esign.id;
+
+    ssl_certificate /etc/nginx/certs/nod-selfsigned.crt;
+    ssl_certificate_key /etc/nginx/certs/nod-selfsigned.key;
+
+    # Proxy to frontend
+    location / {
+        proxy_pass http://frontend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Proxy to backend API
+    location /api/ {
+        proxy_pass http://backend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Proxy to backend auth endpoints
+    location /auth/ {
+        proxy_pass http://backend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### SSL Certificate (Production)
+
+```bash
+# Option 1: Self-signed (dev/testing)
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout nginx/certs/nod-selfsigned.key \
+  -out nginx/certs/nod-selfsigned.crt \
+  -subj "/CN=nod.esign.id"
+
+# Option 2: Let's Encrypt (production)
+certbot certonly --webroot -w /usr/share/nginx/html -d nod.esign.id
+# Update nginx.conf with certificate paths, then restart nginx
+docker compose restart nginx
+```
+
+### Domain Configuration
+
+1. Create DNS A record: `nod.esign.id` → Nginx server IP
+2. Ensure Nginx server has ports 80/443 open
+3. Update `.env` with production values:
+   ```
+   NEXT_PUBLIC_API_BASE_URL=https://nod.esign.id
+   ALLOWED_ORIGINS=https://nod.esign.id
+   ```
+
+---
+
+## Security Features
+
+| Feature | Implementation |
+|---------|----------------|
+| Rate Limiting | slowapi — 10 req/min on login, 30 req/min on refresh |
+| WebSocket Auth | Message-based JWT (not query param) |
+| Refresh Rotation | New JWT pair on every /auth/refresh call |
+| CSRF Protection | `__Host-` cookie prefix + SameSite=Strict |
+| JWT Secret | ≥32 chars enforced at startup |
+| Role Guard | WebSocket alerts restricted to admin+ |
 
 ---
 
@@ -109,6 +216,13 @@ docker compose exec backend alembic current
 docker compose exec backend alembic revision --autogenerate -m "description"
 ```
 
+### Seed Superadmin
+
+```bash
+# Create initial superadmin account (interactive — prompts for username/password)
+docker compose exec backend python scripts/seed_superadmin.py
+```
+
 ### Backup & Restore
 
 ```bash
@@ -117,17 +231,6 @@ docker compose exec db pg_dump -U nod_user nod_db > backup_$(date +%Y%m%d).sql
 
 # Restore database
 cat backup_20260620.sql | docker compose exec -T db psql -U nod_user nod_db
-```
-
-### SSL Certificate
-
-Default: self-signed (browser warning — click "Advanced" → "Proceed").
-
-For production with Let's Encrypt:
-```bash
-certbot certonly --webroot -w /usr/share/nginx/html -d nod.example.com
-# Update nginx.conf with certificate paths, then restart nginx
-docker compose restart nginx
 ```
 
 ---
@@ -166,19 +269,7 @@ docker compose exec backend tail -f logs/access.log
 
 # Search for errors
 docker compose exec backend grep '"level":"ERROR"' logs/error.log
-
-# Search by trace ID
-docker compose exec backend grep '"trace_id":"abc123"' logs/access.log
 ```
-
-### Log Format
-
-Logs are JSON-formatted with these fields:
-- `timestamp` — when the event occurred
-- `level` — INFO, WARNING, ERROR
-- `trace_id` — request correlation ID (from `X-Trace-ID` header)
-- `method`, `path`, `status`, `elapsed_ms` — request details
-- `message` — log message
 
 ### Docker Health Status
 
@@ -187,29 +278,10 @@ Logs are JSON-formatted with these fields:
 docker compose ps
 
 # Backend health endpoint
-curl -k https://localhost/health
+curl -k https://nod.esign.id/health
 
 # Expected response:
 # {"api":"ok","db":"ok","opensearch_dc":"ok","opensearch_drc":"ok"}
-```
-
-### Performance Checks
-
-```bash
-# Backend response times (from access log)
-docker compose exec backend tail -100 logs/access.log | python3 -c "
-import sys, json
-for line in sys.stdin:
-    try:
-        d = json.loads(line)
-        if 'elapsed_ms' in d:
-            print(f\"{d['path']}  {d['elapsed_ms']}ms  {d['status']}\")
-    except: pass
-"
-
-# OpenSearch query times (from API responses)
-# Check the 'query_took_ms' field in API responses
-curl -s -k -H "Authorization: Bearer TOKEN" https://localhost/api/v1/overview | python3 -m json.tool | grep query_took_ms
 ```
 
 ---
