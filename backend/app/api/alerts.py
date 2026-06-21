@@ -70,14 +70,6 @@ async def create_alert_rule(
 
     return APIResponse.ok(data=AlertRuleRead.model_validate(rule))
 
-    # Fire-and-forget activity log
-    import asyncio
-    asyncio.ensure_future(log_activity(
-        user_id=current_user.id,
-        action="alert_rule_created",
-        details={"rule_name": rule.name, "rule_id": rule.id, "severity": rule.severity},
-    ))
-
 
 @router.get("/rules/{rule_id}", response_model=APIResponse[AlertRuleRead])
 async def get_alert_rule(

@@ -41,17 +41,6 @@ def _format_x_axis(ax, data: list[dict], x_key: str):
             fig.autofmt_xdate(rotation=30, ha='right')
 
 
-def _format_bytes_auto(n: float) -> str:
-    if n < 1024:
-        return f"{n:.0f} B"
-    elif n < 1024**2:
-        return f"{n / 1024:.1f} KB"
-    elif n < 1024**3:
-        return f"{n / 1024**2:.1f} MB"
-    else:
-        return f"{n / 1024**3:.2f} GB"
-
-
 def render_timeseries_chart(
     data: list[dict],
     title: str,

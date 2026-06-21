@@ -31,6 +31,7 @@ def _build_client(hosts: str) -> AsyncOpenSearch:
         "max_retries": 2,
         "use_ssl": use_ssl,
         "verify_certs": False,  # skip TLS verify for internal/self-signed certs
+        # ⚠️ WARNING: TLS cert verification disabled — not suitable for production
         "ssl_show_warn": False,
     }
     if settings.OPENSEARCH_USERNAME and settings.OPENSEARCH_PASSWORD:

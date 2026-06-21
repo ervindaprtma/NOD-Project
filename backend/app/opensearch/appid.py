@@ -1,4 +1,9 @@
 """
+"""
+DEPRECATED: DC-only legacy query builder.
+Use app.opensearch.traffic_flow for all new code.
+Scheduled for removal in v1.2.0.
+
 OpenSearch query builders for fortigate-appid-flow-* index.
 ALL queries comply with Q-01 through Q-08 mandates.
 """
