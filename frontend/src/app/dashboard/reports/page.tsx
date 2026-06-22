@@ -165,6 +165,7 @@ export default function ReportsPage() {
   const [distEmail, setDistEmail] = useState("");
   const [distPhone, setDistPhone] = useState("");
   const [distJobId, setDistJobId] = useState<string | null>(null);
+  const token = typeof window !== "undefined" ? getAccessToken() : null;
 
   // Report list (poll every 5s)
   const { data: listData, mutate: refreshList } = useSWR<ReportListResponse>(
@@ -222,7 +223,7 @@ export default function ReportsPage() {
     setGenerating(true);
     setShowWarning(false);
     try {
-      const res = await apiFetch<{ data: { job_id: string; status: string } }>(
+      const res = await apiFetch<GenerateResponse>(
         "/api/v1/reports/generate",
         {
           method: "POST",
