@@ -1,0 +1,36 @@
+# Python — always install fresh inside container
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.venv/
+
+# Version control
+.git
+.gitignore
+
+# Local env files
+.env
+.env.local
+*.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Logs (mounted at runtime, not copied)
+logs/

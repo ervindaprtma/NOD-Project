@@ -1,0 +1,26 @@
+# Dependencies — always install fresh inside container
+node_modules/
+.next/
+
+# Version control
+.git
+.gitignore
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker (prevent copying the other Dockerfile)
+Dockerfile
+.dockerignore
