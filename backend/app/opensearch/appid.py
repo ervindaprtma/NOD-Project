@@ -1,5 +1,4 @@
 """
-"""
 DEPRECATED: DC-only legacy query builder.
 Use app.opensearch.traffic_flow for all new code.
 Scheduled for removal in v1.2.0.
