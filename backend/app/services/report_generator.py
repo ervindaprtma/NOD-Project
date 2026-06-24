@@ -20,6 +20,7 @@ import io
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Optional
 
@@ -282,6 +283,7 @@ def render_timeseries_chart(
     series_key: Optional[str] = None,
     width: int = 800,
     height: int = 400,
+    tz: Optional[timezone] = None,
 ) -> str:
     """Render a timeseries line chart using Plotly. Returns base64 PNG."""
     fig = go.Figure()
@@ -301,7 +303,7 @@ def render_timeseries_chart(
             key = point.get(series_key, "default")
             ts = point.get(x_key, 0)
             if isinstance(ts, (int, float)) and ts > 1e12:
-                ts = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+                ts = datetime.fromtimestamp(ts / 1000, tz=tz or timezone.utc)
             series.setdefault(key, []).append((ts, point.get(y_key, 0)))
         for i, (label, points) in enumerate(series.items()):
             xs = [p[0] for p in points]
@@ -313,7 +315,7 @@ def render_timeseries_chart(
             ))
     elif data:
         xs = [
-            datetime.fromtimestamp(p[x_key] / 1000, tz=timezone.utc)
+            datetime.fromtimestamp(p[x_key] / 1000, tz=tz or timezone.utc)
             if isinstance(p.get(x_key), (int, float)) and p[x_key] > 1e12
             else p[x_key]
             for p in data
@@ -475,6 +477,7 @@ async def build_report_context(
                     render_timeseries_chart, tp_mbps,
                     title="Throughput Over Time", ylabel="Throughput (Mbps)",
                     y_key="mbps",
+                    tz=ZoneInfo("Asia/Jakarta"),
                 )
 
             # Total Throughput — prefer per-site total from flow_summary if available
