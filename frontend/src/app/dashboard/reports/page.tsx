@@ -360,49 +360,6 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Sections (optional) */}
-        {SECTIONS[reportType] && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-sm font-medium">Sections <span className="text-muted-foreground font-normal">(optional — leave all checked for full report)</span></label>
-              <button
-                onClick={() =>
-                  setSelectedSections((prev) =>
-                    prev.length === SECTIONS[reportType].length ? [] : SECTIONS[reportType].map((s) => s.id)
-                  )
-                }
-                className="text-xs text-primary hover:underline"
-              >
-                {selectedSections.length === SECTIONS[reportType].length ? "Deselect All" : "Select All"}
-              </button>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {SECTIONS[reportType].map((sec) => (
-                <label
-                  key={sec.id}
-                  className={cn(
-                    "flex items-center gap-1.5 px-2 py-1.5 rounded-md border text-xs cursor-pointer transition-colors",
-                    selectedSections.includes(sec.id)
-                      ? "border-primary bg-primary/5 text-foreground"
-                      : "border-border text-muted-foreground hover:bg-muted"
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedSections.includes(sec.id)}
-                    onChange={() =>
-                      setSelectedSections((prev) =>
-                        prev.includes(sec.id) ? prev.filter((s) => s !== sec.id) : [...prev, sec.id]
-                      )
-                    }
-                    className="h-3 w-3 rounded border-border"
-                  />
-                  {sec.label}
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Format */}
         <div>
