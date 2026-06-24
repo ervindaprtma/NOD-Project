@@ -299,6 +299,14 @@ class ReportJob(Base):
     expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    sites: Mapped[Optional[list[str]]] = mapped_column(
+        JSONB, nullable=True,
+        comment="List of site names to include in report"
+    )
+    sections: Mapped[Optional[list[str]]] = mapped_column(
+        JSONB, nullable=True,
+        comment="List of report sections to include; None = all"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────

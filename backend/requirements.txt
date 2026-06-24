@@ -28,8 +28,9 @@ weasyprint>=62.0,<70.0.0
 python-docx>=1.1.0,<2.0.0
 jinja2>=3.1.0,<4.0.0
 
-# Server-side Charts (reports)
-matplotlib>=3.8.0,<4.0.0
+# Report Charts (Plotly → PNG via kaleido)
+plotly>=5.18.0,<6.0.0
+kaleido>=0.2.1,<1.0.0
 
 # Email (async SMTP)
 aiosmtplib>=3.0.0,<4.0.0
@@ -40,9 +41,6 @@ pydantic[email]>=2.0.0,<3.0.0
 
 # Structured Logging
 python-json-logger>=2.0.7,<5.0.0
-
-# UUID
-# (stdlib uuid used)
 
 # Testing (dev)
 pytest>=8.0.0,<9.0.0
