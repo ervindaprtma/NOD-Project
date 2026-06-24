@@ -524,20 +524,25 @@ async def build_report_context(
                 values = [v for _, v in proto_items]
                 charts["protocol_distribution"] = await _run_chart(render_bar_chart, labels, values, title="Protocol Distribution by Traffic Volume", xlabel="Bytes")
 
-            # Per-site traffic summary
+            # Per-site traffic summary — include total bytes, total Mbps (for the timeframe), and session counts
             per_site = []
+            # duration in seconds for Mbps calculation
+            duration_s = max((lte_ms - gte_ms) / 1000.0, 1.0)
             for site in site_list:
                 try:
                     sd = await tf_qb.flow_summary(
                         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site
                     )
+                    total_bytes = int(sd.get("total_bytes", 0) or 0)
+                    total_sessions = int(sd.get("total_sessions", 0) or 0)
+                    mbps = round((total_bytes * 8) / duration_s / 1_000_000, 2)
                     per_site.append({
                         "site": _site_label(site),
                         "site_id": site,
-                        "total_bytes": sd.get("total_bytes", 0),
-                        "top_app": sd.get("top_apps", [{}])[0].get("app_name", "—")
-                        if sd.get("top_apps") else "—",
-                        "sessions": sd.get("total_sessions", 0),
+                        "total_bytes": total_bytes,
+                        "total_mbps": mbps,
+                        "top_app": sd.get("top_apps", [{}])[0].get("app_name", "—") if sd.get("top_apps") else "—",
+                        "sessions": total_sessions,
                     })
                 except Exception as exc:
                     logger.error("Per-site fetch failed for %s: %s", site, exc)
