@@ -259,17 +259,19 @@ def generate_docx_report(context: dict[str, Any], output_path: Path) -> Path:
 
         if to.get("per_site_summary"):
             _add_heading_styled(doc, "Per-Site Traffic Summary", level=3)
-            headers = ["Site", "Total Bytes", "Top Application"]
+            headers = ["Site", "Total Traffic", "Throughput (Mbps)", "Sessions"]
             rows = []
             for ps in to["per_site_summary"]:
                 tb = ps.get("total_bytes", 0)
                 tb_str = f"{tb / 1_000_000_000:.2f} GB" if tb >= 1_000_000_000 else str(tb)
+                mbps = ps.get("total_mbps", 0)
                 rows.append([
                     ps.get("site", "—"),
                     tb_str,
-                    ps.get("top_app", "—"),
+                    f"{mbps:.2f} Mbps",
+                    str(ps.get("sessions", "—")),
                 ])
-            _add_data_table(doc, headers, rows, col_widths=[1.5, 1.5, 2.5])
+            _add_data_table(doc, headers, rows, col_widths=[1.2, 1.2, 1.2, 1.0])
 
     # ── R-02 / R-08: Resource Usage ───────────────────────────────
     ru = rd.get("resource_usage", {})
