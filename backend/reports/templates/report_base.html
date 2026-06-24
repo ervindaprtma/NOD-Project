@@ -775,14 +775,19 @@ body {
     <h3 style="padding:10px 14px 4px;font-size:10pt;font-weight:600;">Per-Site Traffic Summary</h3>
     <table>
         <thead>
-            <tr><th>Site</th><th class="num-col">Total Bytes</th><th>Top Application</th><th class="num-col">Sessions</th></tr>
+            <tr>
+                <th>Site</th>
+                <th class="num-col">Total Traffic</th>
+                <th class="num-col">Throughput (Mbps)</th>
+                <th class="num-col">Sessions</th>
+            </tr>
         </thead>
         <tbody>
         {% for ps in data.per_site_summary %}
             <tr>
                 <td><strong>{{ ps.site }}</strong></td>
                 <td class="num-col">{{ bytes_human(ps.total_bytes) }}</td>
-                <td>{{ ps.top_app | default('—') }}</td>
+                <td class="num-col">{{ "{:.2f}"|format(ps.total_mbps | default(0)) }} Mbps</td>
                 <td class="num-col">{{ ps.sessions | default('—') }}</td>
             </tr>
         {% endfor %}
