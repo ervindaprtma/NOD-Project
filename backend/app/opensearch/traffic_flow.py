@@ -135,6 +135,8 @@ async def flow_summary(
                 "terms": {"field": "flow.out.netif.name", "size": 10, "order": {"total_bytes": "desc"}},
                 "aggs": _bytes_sum(),
             },
+            # Unique session count for the timeframe (cardinality of connection_id)
+            "session_count": {"cardinality": {"field": "flow.connection_id"}},
         },
     }
 
@@ -165,6 +167,7 @@ async def flow_summary(
 
     return {
         "total_bytes": actual_total_bytes,
+        "total_sessions": int(aggs.get("session_count", {}).get("value", 0)),
         "top_apps": [
             {"app_name": b["key"], "total_bytes": int(b["total_bytes"]["value"]),
              "speed_mbps": (int(b["total_bytes"]["value"]) * 8) / duration_s / 1_000_000,
