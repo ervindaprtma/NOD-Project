@@ -787,7 +787,7 @@ body {
             <tr>
                 <td><strong>{{ ps.site }}</strong></td>
                 <td class="num-col">{{ bytes_human(ps.total_bytes) }}</td>
-                <td class="num-col">{{ "{:.2f}"|format(ps.total_mbps | default(0)) }} Mbps</td>
+                <td class="num-col">{{ "%0.2f"|format(ps.total_mbps | default(0)) }} Mbps</td>
                 <td class="num-col">{{ ps.sessions | default('—') }}</td>
             </tr>
         {% endfor %}
