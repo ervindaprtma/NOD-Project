@@ -37,7 +37,7 @@ interface StatusResponse {
 // ── Constants ─────────────────────────────────────────────────
 
 const REPORT_TYPES = [
-  { id: "R-01", title: "Traffic Overview", desc: "Top apps, throughput, AS, countries, protocol, per-site" },
+  { id: "R-01", title: "Traffic Internet", desc: "Top apps, throughput, AS, countries, protocol, per-site" },
   { id: "R-02", title: "Resource Usage", desc: "Per-device CPU, memory, sessions, HA status" },
   { id: "R-03", title: "VPN Users", desc: "SSL VPN & IPsec VPN active user counts" },
   { id: "R-04", title: "SD-WAN SLA", desc: "Latency, jitter, packet loss, link status per site" },
