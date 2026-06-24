@@ -135,8 +135,16 @@ def _site_label(site_id: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════
 
 def format_time_ms(epoch_ms: int) -> str:
-    """Convert epoch milliseconds to 'DD MMM YYYY HH:mm'."""
-    dt = datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc)
+    """Convert epoch milliseconds to 'DD MMM YYYY HH:mm' in Asia/Jakarta (WIB).
+
+    The code stores/query times as epoch milliseconds in UTC. For user-facing
+    report headers we render Jakarta local time (UTC+7) without a timezone
+    suffix to avoid confusion for users in WIB.
+    """
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("Asia/Jakarta")
+    dt = datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc).astimezone(tz)
     return dt.strftime("%d %b %Y %H:%M")
 
 
