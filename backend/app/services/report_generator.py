@@ -462,61 +462,67 @@ async def build_report_context(
                     total_bytes = 0
             traffic["total_throughput_bytes"] = total_bytes or 0
 
-            # Top AS Orgs
-            as_raw = await appid_qb.top_dst_as_orgs(
-                gte_ms=gte_ms, lte_ms=lte_ms, size=10
-            )
-            if as_raw:
-                max_val = max(a["total_bytes"] for a in as_raw)
+            # Top AS Orgs / Countries / Protocol Distribution
+            # For multi-site reports we must aggregate per-site results so
+            # Top Organizations / Countries / Protocol numbers reflect the
+            # union of selected sites rather than a single-site value.
+            from collections import defaultdict
+
+            as_agg: dict[str, int] = defaultdict(int)
+            country_agg: dict[str, int] = defaultdict(int)
+            proto_agg: dict[str, int] = defaultdict(int)
+
+            for s in site_list:
+                try:
+                    sd_site = await tf_qb.flow_summary(gte_ms=gte_ms, lte_ms=lte_ms, site_name=s, path_filter="internet")
+                except Exception:
+                    sd_site = None
+                if not sd_site:
+                    continue
+
+                # flow_summary returns 'top_dst_as_org' and 'top_dst_as_country' and 'protocol_dist'
+                for a in sd_site.get("top_dst_as_org", []):
+                    name = a.get("org_name") or a.get("as_org")
+                    as_agg[name] += int(a.get("total_bytes", 0) or 0)
+
+                for c in sd_site.get("top_dst_as_country", []):
+                    country = c.get("country")
+                    country_agg[country] += int(c.get("total_bytes", 0) or 0)
+
+                for p in sd_site.get("protocol_dist", []):
+                    proto = p.get("protocol")
+                    proto_agg[proto] += int(p.get("total_bytes", 0) or 0)
+
+            # Top AS Orgs chart/data
+            if as_agg:
+                as_items = sorted(as_agg.items(), key=lambda x: -x[1])[:10]
+                max_val = as_items[0][1] if as_items else 0
                 traffic["top_as_orgs"] = [
-                    {
-                        "label": a["as_org"],
-                        "value": a["total_bytes"],
-                        "pct": round(a["total_bytes"] / max_val * 100, 1) if max_val else 0,
-                        "color": CHART_COLORS[i % len(CHART_COLORS)],
-                    }
-                    for i, a in enumerate(as_raw)
+                    {"label": name, "value": val, "pct": round(val / max_val * 100, 1) if max_val else 0, "color": CHART_COLORS[i % len(CHART_COLORS)]}
+                    for i, (name, val) in enumerate(as_items)
                 ]
-                labels = [a["as_org"] for a in as_raw]
-                values = [a["total_bytes"] for a in as_raw]
-                charts["top_as_orgs"] = await _run_chart(
-                    render_bar_chart, labels, values,
-                    title="Top 10 Destination AS Organizations", xlabel="Bytes",
-                )
+                labels = [n for n, _ in as_items]
+                values = [v for _, v in as_items]
+                charts["top_as_orgs"] = await _run_chart(render_bar_chart, labels, values, title="Top 10 Destination AS Organizations", xlabel="Bytes")
 
-            # Top Countries
-            country_raw = await appid_qb.top_dst_as_countries(
-                gte_ms=gte_ms, lte_ms=lte_ms, size=10
-            )
-            if country_raw:
-                max_val = max(c["total_bytes"] for c in country_raw)
+            # Top Countries chart/data
+            if country_agg:
+                country_items = sorted(country_agg.items(), key=lambda x: -x[1])[:10]
+                max_val = country_items[0][1] if country_items else 0
                 traffic["top_countries"] = [
-                    {
-                        "label": c["country"],
-                        "value": c["total_bytes"],
-                        "pct": round(c["total_bytes"] / max_val * 100, 1) if max_val else 0,
-                        "color": CHART_COLORS[i % len(CHART_COLORS)],
-                    }
-                    for i, c in enumerate(country_raw)
+                    {"label": name, "value": val, "pct": round(val / max_val * 100, 1) if max_val else 0, "color": CHART_COLORS[i % len(CHART_COLORS)]}
+                    for i, (name, val) in enumerate(country_items)
                 ]
-                labels = [c["country"] for c in country_raw]
-                values = [c["total_bytes"] for c in country_raw]
-                charts["top_countries"] = await _run_chart(
-                    render_bar_chart, labels, values,
-                    title="Top 10 Destination Countries", xlabel="Bytes",
-                )
+                labels = [n for n, _ in country_items]
+                values = [v for _, v in country_items]
+                charts["top_countries"] = await _run_chart(render_bar_chart, labels, values, title="Top 10 Destination Countries", xlabel="Bytes")
 
-            # Protocol Distribution
-            proto_raw = await appid_qb.protocol_distribution(
-                gte_ms=gte_ms, lte_ms=lte_ms
-            )
-            if proto_raw:
-                labels = [p["protocol"] for p in proto_raw[:10]]
-                values = [p["total_bytes"] for p in proto_raw[:10]]
-                charts["protocol_distribution"] = await _run_chart(
-                    render_bar_chart, labels, values,
-                    title="Protocol Distribution by Traffic Volume", xlabel="Bytes",
-                )
+            # Protocol Distribution chart/data
+            if proto_agg:
+                proto_items = sorted(proto_agg.items(), key=lambda x: -x[1])[:10]
+                labels = [n for n, _ in proto_items]
+                values = [v for _, v in proto_items]
+                charts["protocol_distribution"] = await _run_chart(render_bar_chart, labels, values, title="Protocol Distribution by Traffic Volume", xlabel="Bytes")
 
             # Per-site traffic summary
             per_site = []
