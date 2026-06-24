@@ -238,6 +238,7 @@ _ALERT_ALLOWED_ROLES = {"admin", "superadmin"}
 async def _authenticate_ws_user(websocket: WebSocket) -> str | None:
     """Wait for auth message, validate JWT, return user_id or None."""
     try:
+        await websocket.accept()
         data = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
         if data.get("type") != "auth" or not data.get("token"):
             await websocket.close(code=1008, reason="Missing auth message")

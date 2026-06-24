@@ -195,26 +195,39 @@ async def distribute_report(
             message="Report exceeds 20 MB. Cannot distribute automatically.",
         )
 
-    # Schedule background distribution
-    asyncio.create_task(
-        _distribute_report_background(
-            str(job.id),
-            job.file_path,
-            job.output_format,
-            body.channels,
-            body.recipient_email,
-            body.recipient_phone,
-        )
+    # Run distribution directly — returns per-channel results
+    results: dict[str, bool] = await _distribute_report_background(
+        str(job.id),
+        job.file_path,
+        job.output_format,
+        body.channels,
+        body.recipient_email,
+        body.recipient_phone,
     )
+
+    # Determine overall outcome
+    succeeded = [ch for ch, ok in results.items() if ok]
+    failed = [ch for ch, ok in results.items() if not ok]
 
     # Log distribution
     asyncio.ensure_future(log_activity(
         user_id=current_user.id,
         action="report_distributed",
-        details={"job_id": str(job.id), "channels": body.channels},
+        details={"job_id": str(job.id), "channels": body.channels, "results": results},
     ))
 
-    return APIResponse.ok(data={"job_id": str(job.id), "channels": body.channels})
+    if failed and not succeeded:
+        return APIResponse.fail(
+            code="DISTRIBUTE_FAILED",
+            message=f"All channels failed: {', '.join(failed)}. Check API configuration.",
+        )
+    elif failed:
+        return APIResponse.ok(data={
+            "results": results,
+            "warning": f"Partial success. Failed: {', '.join(failed)}",
+        })
+    else:
+        return APIResponse.ok(data={"results": results, "message": "All channels delivered successfully."})
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -274,7 +287,7 @@ async def _distribute_report_background(
     channels: list[str],
     recipient_email: str | None = None,
     recipient_phone: str | None = None,
-):
+) -> dict[str, bool]:
     """
     Background task: distribute report to all requested channels.
     """
@@ -317,6 +330,8 @@ async def _distribute_report_background(
         )
 
     logger.info(f"Report {job_id} distribution results: {results}")
+
+    return results
 
 
 # ─────────────────────────────────────────────────────────────────

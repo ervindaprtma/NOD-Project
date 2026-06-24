@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import useSWR from "swr";
 import { getAccessToken, apiFetch, hasMinRole, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { PanelErrorBoundary } from "@/components/PanelErrorBoundary";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -165,6 +166,14 @@ export default function ReportsPage() {
   const [distEmail, setDistEmail] = useState("");
   const [distPhone, setDistPhone] = useState("");
   const [distJobId, setDistJobId] = useState<string | null>(null);
+  const [distStatus, setDistStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // Auto-dismiss toast after 5s
+  useEffect(() => {
+    if (!distStatus) return;
+    const t = setTimeout(() => setDistStatus(null), 5000);
+    return () => clearTimeout(t);
+  }, [distStatus]);
   const token = typeof window !== "undefined" ? getAccessToken() : null;
 
   // Report list (poll every 5s)
@@ -277,7 +286,7 @@ export default function ReportsPage() {
   async function handleDistribute(job: ReportJob) {
     if (distChannels.length === 0) return;
     try {
-      await apiFetch(`/api/v1/reports/distribute/${job.job_id}`, {
+      const resp: any = await apiFetch(`/api/v1/reports/distribute/${job.job_id}`, {
         method: "POST",
         body: JSON.stringify({
           channels: distChannels,
@@ -285,10 +294,28 @@ export default function ReportsPage() {
           recipient_phone: distPhone || undefined,
         }),
       });
+      const data = resp?.data || resp;
+      const results = data?.results || {};
+      const warning = data?.warning;
+      const okChannels = Object.entries(results).filter(([, v]) => v).map(([k]) => k);
+      const failChannels = Object.entries(results).filter(([, v]) => !v).map(([k]) => k);
+
+      let msg = "";
+      if (okChannels.length > 0) msg += `Sent via: ${okChannels.join(", ")}`;
+      if (failChannels.length > 0) msg += `${msg ? ". " : ""}Failed: ${failChannels.join(", ")}. Check API config.`;
+      if (warning) msg += ` ${warning}`;
+      if (!msg) msg = "Distribution complete.";
+
+      setDistStatus({ ok: failChannels.length === 0, msg });
       setDistJobId(null);
       setDistChannels([]);
-    } catch (e) {
-      console.error("Distribute failed", e);
+      setDistEmail("");
+      setDistPhone("");
+    } catch (e: any) {
+      const msg = e?.message || "Unknown error";
+      setDistStatus({ ok: false, msg: `Distribution failed: ${msg}` });
+      setDistJobId(null);
+      setDistChannels([]);
     }
   }
 
@@ -531,7 +558,11 @@ export default function ReportsPage() {
                               </button>
                             )}
                             <button
-                              onClick={() => setDistJobId(distJobId === job.job_id ? null : job.job_id)}
+                              onClick={() => {
+                                const next = distJobId === job.job_id ? null : job.job_id;
+                                console.log("[Distribute] click:", { jobId: job.job_id, current: distJobId, next });
+                                setDistJobId(next);
+                              }}
                               className="px-2 py-1 text-xs rounded bg-blue-500/10 text-blue-600 hover:bg-blue-500/20"
                             >
                               Distribute
@@ -556,77 +587,110 @@ export default function ReportsPage() {
         )}
       </div>
 
-      {/* ── Distribute Panel ────────────────────────────── */}
+      {/* ── Distribute Modal ──────────────────────────────── */}
       {distJobId && (
-        <div className="bg-card border rounded-lg p-6 space-y-4">
-          <h2 className="text-lg font-semibold">
-            Distribute Report <code className="text-xs bg-muted px-1 rounded">{distJobId.slice(0, 8)}</code>
-          </h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <PanelErrorBoundary>
+          <div className="bg-card border rounded-lg p-6 w-full max-w-md mx-4 space-y-4 shadow-xl">
+            <h2 className="text-lg font-semibold">
+              Distribute Report <code className="text-xs bg-muted px-1 rounded">{distJobId.slice(0, 8)}</code>
+            </h2>
 
-          <div>
-            <label className="text-sm font-medium mb-2 block">Channels</label>
-            <div className="flex flex-wrap gap-2">
-              {CHANNELS.map((ch) => (
-                <button
-                  key={ch.id}
-                  onClick={() =>
-                    setDistChannels((prev) =>
-                      prev.includes(ch.id) ? prev.filter((c) => c !== ch.id) : [...prev, ch.id]
-                    )
-                  }
-                  className={cn(
-                    "px-3 py-1.5 rounded-md border text-sm transition-colors",
-                    distChannels.includes(ch.id)
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:bg-muted"
-                  )}
-                >
-                  {ch.icon} {ch.label}
-                </button>
-              ))}
+            <div>
+              <label className="text-sm font-medium mb-2 block">Channels</label>
+              <div className="flex flex-wrap gap-2">
+                {CHANNELS.map((ch) => (
+                  <button
+                    key={ch.id}
+                    onClick={() =>
+                      setDistChannels((prev) =>
+                        prev.includes(ch.id) ? prev.filter((c) => c !== ch.id) : [...prev, ch.id]
+                      )
+                    }
+                    className={cn(
+                      "px-3 py-1.5 rounded-md border text-sm transition-colors",
+                      distChannels.includes(ch.id)
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border hover:bg-muted"
+                    )}
+                  >
+                    {ch.icon} {ch.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {distChannels.includes("email") && (
+              <div>
+                <label className="text-sm font-medium mb-1 block">Recipient Email</label>
+                <input
+                  type="email"
+                  value={distEmail}
+                  onChange={(e) => setDistEmail(e.target.value)}
+                  placeholder="user@example.com"
+                  className="px-3 py-2 rounded-md border bg-background text-sm w-full"
+                />
+              </div>
+            )}
+
+            {distChannels.includes("whatsapp") && (
+              <div>
+                <label className="text-sm font-medium mb-1 block">Recipient Phone</label>
+                <input
+                  type="tel"
+                  value={distPhone}
+                  onChange={(e) => setDistPhone(e.target.value)}
+                  placeholder="+628****7890"
+                  className="px-3 py-2 rounded-md border bg-background text-sm w-full"
+                />
+              </div>
+            )}
+
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setDistJobId(null);
+                  setDistChannels([]);
+                }}
+                className="px-4 py-2 rounded-md border text-sm hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const job = jobs.find((j) => j.job_id === distJobId);
+                  if (job) handleDistribute(job);
+                }}
+                disabled={distChannels.length === 0}
+                className={cn(
+                  "px-6 py-2 rounded-md text-sm font-medium transition-colors",
+                  distChannels.length === 0
+                    ? "bg-muted text-muted-foreground cursor-not-allowed"
+                    : "bg-primary text-primary-foreground hover:bg-primary/90"
+                )}
+              >
+                Send Report
+              </button>
             </div>
           </div>
+          </PanelErrorBoundary>
+        </div>
+      )}
 
-          {distChannels.includes("email") && (
-            <div>
-              <label className="text-sm font-medium mb-1 block">Recipient Email</label>
-              <input
-                type="email"
-                value={distEmail}
-                onChange={(e) => setDistEmail(e.target.value)}
-                placeholder="user@example.com"
-                className="px-3 py-2 rounded-md border bg-background text-sm w-full max-w-sm"
-              />
-            </div>
+      {/* ── Distribute Status Toast ───────────────────────── */}
+      {distStatus && (
+        <div
+          className={cn(
+            "fixed bottom-4 right-4 z-50 max-w-sm px-4 py-3 rounded-lg shadow-lg text-sm flex items-center gap-3",
+            distStatus.ok
+              ? "bg-green-50 border border-green-200 text-green-800 dark:bg-green-950 dark:border-green-800 dark:text-green-200"
+              : "bg-red-50 border border-red-200 text-red-800 dark:bg-red-950 dark:border-red-800 dark:text-red-200"
           )}
-
-          {distChannels.includes("whatsapp") && (
-            <div>
-              <label className="text-sm font-medium mb-1 block">Recipient Phone</label>
-              <input
-                type="tel"
-                value={distPhone}
-                onChange={(e) => setDistPhone(e.target.value)}
-                placeholder="+6281234567890"
-                className="px-3 py-2 rounded-md border bg-background text-sm w-full max-w-sm"
-              />
-            </div>
-          )}
-
-          <button
-            onClick={() => {
-              const job = jobs.find((j) => j.job_id === distJobId);
-              if (job) handleDistribute(job);
-            }}
-            disabled={distChannels.length === 0}
-            className={cn(
-              "px-6 py-2.5 rounded-md text-sm font-medium transition-colors",
-              distChannels.length === 0
-                ? "bg-muted text-muted-foreground cursor-not-allowed"
-                : "bg-primary text-primary-foreground hover:bg-primary/90"
-            )}
-          >
-            Send Report
+        >
+          <span>{distStatus.ok ? "✅" : "❌"}</span>
+          <span className="flex-1">{distStatus.msg}</span>
+          <button onClick={() => setDistStatus(null)} className="font-bold hover:opacity-70">
+            ×
           </button>
         </div>
       )}

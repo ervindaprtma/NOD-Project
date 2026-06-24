@@ -35,7 +35,7 @@ class AlertWebSocketManager:
             except Exception:
                 pass
             self._connections.pop(user_id, None)
-        await ws.accept()
+        # Note: ws.accept() is called in _authenticate_ws_user before reaching here
         self._connections[user_id] = ws
         logger.info("WebSocket connected", extra={"user_id": user_id, "total_connections": len(self._connections)})
 

@@ -136,9 +136,16 @@ export default function DashboardLayout({
     function connectWs() {
       try {
         const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const ws = new WebSocket(`${proto}//${window.location.host}/ws/notifications`);
+        const ws = new WebSocket(`${proto}//${window.location.host}/ws/alerts`);
         wsRef.current = ws;
-        ws.onopen = () => setWsConnected(true);
+        ws.onopen = () => {
+          // Send auth handshake (backend expects JWT in first message)
+          const tk = getAccessToken();
+          if (tk) {
+            ws.send(JSON.stringify({ type: "auth", token: tk }));
+          }
+          setWsConnected(true);
+        };
         ws.onmessage = (evt) => {
           try {
             const data = JSON.parse(evt.data);
