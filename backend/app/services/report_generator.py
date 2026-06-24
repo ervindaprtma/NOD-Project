@@ -57,6 +57,16 @@ SITE_LABELS = {
     "Site_FGT_Office": "Office",
 }
 
+# Reverse mapping: IP address → site name (matches traffic_flow.SITE_SOURCE_IPS)
+IP_TO_SITE: dict[str, str] = {
+    "10.80.150.1": "Site_FGT-DC",
+    "10.90.150.1": "Site_FGT-DRC",
+    "10.10.10.10": "Site_FGT_Office",
+}
+
+# Reverse mapping: site name → IP address (for display in reports)
+SITE_TO_IP: dict[str, str] = {v: k for k, v in IP_TO_SITE.items()}
+
 # ── Section mapping: frontend sub-section IDs → backend section keys ─────────
 FRONTEND_TO_BACKEND_SECTION = {
     "R-01": {
@@ -128,6 +138,22 @@ def _ordered_sites(sites: list[str] | None) -> list[str]:
 def _site_label(site_id: str) -> str:
     """Return human-readable label for a site ID."""
     return SITE_LABELS.get(site_id, site_id)
+
+
+def _resolve_site_name(site: str) -> str:
+    """Resolve IP address or site name to the canonical site name used by traffic_flow.
+
+    Accepts either an IP address (e.g. '10.80.150.1') or a site name
+    (e.g. 'Site_FGT-DC'). Returns the canonical site name.
+    """
+    return IP_TO_SITE.get(site, site)
+
+
+def _resolve_sites(sites: list[str] | None) -> list[str]:
+    """Resolve a list of IPs/site names to canonical site names."""
+    if not sites:
+        return list(DEFAULT_SITES)
+    return [_resolve_site_name(s) for s in sites]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -372,7 +398,8 @@ async def build_report_context(
         "time_range": f"{format_time_ms(gte_ms)} — {format_time_ms(lte_ms)}",
     }
     charts: dict[str, str] = {}
-    site_list: list[str] = sites or DEFAULT_SITES
+    # Resolve IP addresses → canonical site names for flow_summary queries
+    site_list: list[str] = _resolve_sites(sites)
 
     # ── R-01: Traffic Overview ──────────────────────────────────────
     if report_type in ("R-01", "R-08") and (not sections or "traffic_overview" in sections):
@@ -538,7 +565,7 @@ async def build_report_context(
                     mbps = round((total_bytes * 8) / duration_s / 1_000_000, 2)
                     per_site.append({
                         "site": _site_label(site),
-                        "site_id": site,
+                        "site_id": SITE_TO_IP.get(site, site),
                         "total_bytes": total_bytes,
                         "total_mbps": mbps,
                         "top_app": sd.get("top_apps", [{}])[0].get("app_name", "—") if sd.get("top_apps") else "—",
