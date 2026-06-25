@@ -219,7 +219,7 @@ export default function OverviewPage() {
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       {dcData.map((dev: any, i: number) => (
-                        <DeviceMiniCard key={dev.device || i} label={i === 0 ? "FW-1 (PRIMARY)" : "FW-2 (SECONDARY)"} dev={dev} />
+                        <DeviceMiniCard key={dev.device || i} label={dev.hostname || (i === 0 ? "FG_DC_GTN-01 (PRIMARY)" : "FG_DC_GTN-02 (SECONDARY)")} dev={dev} />
                       ))}
                     </div>
                   </ClickCard>
