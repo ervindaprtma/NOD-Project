@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import { swrFetcher, getAccessToken, apiFetch } from "@/lib/api";
+import { swrFetcher, getAccessToken, apiFetch, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const ROLES = ["viewer", "operator", "admin", "superadmin"] as const;
@@ -21,6 +21,27 @@ interface UserRecord {
   updated_at: string;
 }
 
+interface SessionInfo {
+  jti: string;
+  source_ip: string;
+  created_at: string | null;
+  expires_at: string | null;
+  is_valid: boolean;
+  is_revoked: boolean;
+}
+
+interface SessionUser {
+  user_id: string;
+  username: string;
+  full_name: string;
+  role: Role;
+  is_active: boolean;
+  last_login: string | null;
+  sessions: SessionInfo[];
+  active_session_count: number;
+  ws_connected: boolean;
+}
+
 export default function UsersPage() {
   const token = typeof window !== "undefined" ? getAccessToken() : null;
   const swrKey = token ? "/api/v1/users?limit=100" : null;
@@ -33,8 +54,16 @@ export default function UsersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
   const [actionError, setActionError] = useState("");
+  const [showSessions, setShowSessions] = useState(false);
 
   const users = data?.data?.users || [];
+
+  // Sessions data (admin+ only)
+  const sessionsSwrKey = token && hasMinRole("admin") ? "/api/v1/users/admin/sessions" : null;
+  const { data: sessionsData, isLoading: sessionsLoading } = useSWR<{ data: SessionUser[] }>(
+    sessionsSwrKey,
+    swrFetcher
+  );
 
   async function handleToggleActive(user: UserRecord) {
     if (user.role === "superadmin") {
@@ -63,6 +92,25 @@ export default function UsersPage() {
       mutate();
     } catch (err: any) {
       setActionError(err?.message || "Failed to delete user.");
+    }
+  }
+
+  async function handleRevokeSession(userId: string, jti?: string) {
+    try {
+      if (jti) {
+        await apiFetch(`/api/v1/users/${userId}/sessions/revoke`, {
+          method: "POST",
+          body: JSON.stringify({ jti }),
+        });
+      } else {
+        await apiFetch(`/api/v1/users/${userId}/sessions/revoke`, {
+          method: "POST",
+          body: JSON.stringify({ revoke_all: true }),
+        });
+      }
+      mutate();
+    } catch (err: any) {
+      setActionError(err?.message || "Failed to revoke session.");
     }
   }
 
@@ -185,6 +233,161 @@ export default function UsersPage() {
           </table>
         </div>
       </div>
+
+      {/* ── Active Sessions Section (admin+ only) ────────────────── */}
+      {hasMinRole("admin") && (
+        <div className="bg-card border rounded-lg overflow-hidden">
+          <button
+            onClick={() => setShowSessions(!showSessions)}
+            className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-medium hover:bg-muted/50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <span>Active Sessions</span>
+              {sessionsData?.data && (
+                <span className="px-2 py-0.5 text-xs bg-primary/10 text-primary rounded-full">
+                  {sessionsData.data.reduce((sum, u) => sum + u.active_session_count, 0)} active
+                </span>
+              )}
+            </div>
+            <span className="text-muted-foreground">{showSessions ? "▲" : "▼"}</span>
+          </button>
+          {showSessions && (
+            <div className="border-t">
+              {sessionsLoading ? (
+                <div className="p-4 text-sm text-muted-foreground">Loading sessions...</div>
+              ) : !sessionsData?.data || sessionsData.data.length === 0 ? (
+                <div className="p-4 text-sm text-muted-foreground">No session data available.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50 text-muted-foreground">
+                        <th className="text-left py-2 px-4">Status</th>
+                        <th className="text-left py-2 px-4">User</th>
+                        <th className="text-left py-2 px-4">Role</th>
+                        <th className="text-left py-2 px-4">IP Address</th>
+                        <th className="text-left py-2 px-4">Logged In</th>
+                        <th className="text-left py-2 px-4">Expires</th>
+                        <th className="text-left py-2 px-4">WebSocket</th>
+                        <th className="text-right py-2 px-4">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sessionsData.data.map((su) =>
+                        su.sessions.length > 0 ? (
+                          su.sessions.map((sess, idx) => (
+                            <tr
+                              key={`${su.user_id}-${sess.jti}`}
+                              className="border-b last:border-0 hover:bg-muted/30 transition-colors"
+                            >
+                              {idx === 0 && (
+                                <>
+                                  <td className="py-2 px-4" rowSpan={su.sessions.length}>
+                                    <span
+                                      className={cn(
+                                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium",
+                                        sess.is_valid && su.ws_connected
+                                          ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+                                          : sess.is_valid
+                                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                          : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                                      )}
+                                    >
+                                      <span
+                                        className={cn(
+                                          "w-1.5 h-1.5 rounded-full",
+                                          sess.is_valid && su.ws_connected
+                                            ? "bg-blue-500"
+                                            : sess.is_valid
+                                            ? "bg-emerald-500"
+                                            : "bg-slate-400"
+                                        )}
+                                      />
+                                      {sess.is_valid && su.ws_connected
+                                        ? "Online"
+                                        : sess.is_valid
+                                        ? "Active"
+                                        : "Revoked"}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-4" rowSpan={su.sessions.length}>
+                                    <div>
+                                      <span className="font-medium">{su.username}</span>
+                                      {su.full_name && (
+                                        <span className="ml-1 text-muted-foreground text-xs">({su.full_name})</span>
+                                      )}
+                                    </div>
+                                    <div className="text-xs text-muted-foreground">
+                                      {su.active_session_count} active session{su.active_session_count !== 1 ? "s" : ""}
+                                    </div>
+                                  </td>
+                                  <td className="py-2 px-4" rowSpan={su.sessions.length}>
+                                    <RoleBadge role={su.role} />
+                                  </td>
+                                </>
+                              )}
+                              <td className="py-2 px-4 text-xs font-mono">{sess.source_ip}</td>
+                              <td className="py-2 px-4 text-xs text-muted-foreground">
+                                {sess.created_at ? new Date(sess.created_at).toLocaleString() : "—"}
+                              </td>
+                              <td className="py-2 px-4 text-xs text-muted-foreground">
+                                {sess.expires_at ? new Date(sess.expires_at).toLocaleString() : "—"}
+                              </td>
+                              <td className="py-2 px-4">
+                                {idx === 0 && su.ws_connected ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                                    Connected
+                                  </span>
+                                ) : idx === 0 ? (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                ) : null}
+                              </td>
+                              <td className="py-2 px-4 text-right">
+                                {sess.is_valid && (
+                                  <button
+                                    onClick={() => handleRevokeSession(su.user_id, sess.jti)}
+                                    className="px-2 py-1 text-xs border border-red-300 text-red-600 rounded-md hover:bg-red-50 dark:hover:bg-red-950/20"
+                                  >
+                                    Revoke
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr key={su.user_id} className="border-b last:border-0">
+                            <td className="py-2 px-4">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                                No Sessions
+                              </span>
+                            </td>
+                            <td className="py-2 px-4">
+                              <span className="font-medium">{su.username}</span>
+                              {su.full_name && (
+                                <span className="ml-1 text-muted-foreground text-xs">({su.full_name})</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-4"><RoleBadge role={su.role} /></td>
+                            <td className="py-2 px-4 text-xs text-muted-foreground">—</td>
+                            <td className="py-2 px-4 text-xs text-muted-foreground">
+                              {su.last_login ? new Date(su.last_login).toLocaleString() : "Never"}
+                            </td>
+                            <td className="py-2 px-4 text-xs text-muted-foreground">—</td>
+                            <td className="py-2 px-4 text-xs text-muted-foreground">—</td>
+                            <td className="py-2 px-4"></td>
+                          </tr>
+                        )
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Create User Modal */}
       {showCreate && (

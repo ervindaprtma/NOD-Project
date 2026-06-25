@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getAccessToken, setAccessToken, apiFetch, ensureValidToken, bootAuthFromCookie } from "@/lib/api";
+import { getAccessToken, setAccessToken, apiFetch, ensureValidToken, bootAuthFromCookie, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -36,10 +36,10 @@ const NAV_ITEMS = [
   { href: "/dashboard/resources", label: "Resources", Icon: LayoutGrid },
   { href: "/dashboard/vpn", label: "VPN Sessions", Icon: Lock },
   { href: "/dashboard/raw-data", label: "Raw Data", Icon: ScrollText },
-  { href: "/dashboard/alerts", label: "Alerts", Icon: AlertTriangle },
-  { href: "/dashboard/reports", label: "Reports", Icon: FileText },
-  { href: "/dashboard/users", label: "Users", Icon: Users },
-  { href: "/dashboard/activity-logs", label: "Activity Logs", Icon: ClipboardList },
+  { href: "/dashboard/alerts", label: "Alerts", Icon: AlertTriangle, minRole: "admin" },
+  { href: "/dashboard/reports", label: "Reports", Icon: FileText, minRole: "operator" },
+  { href: "/dashboard/users", label: "Users", Icon: Users, minRole: "superadmin" },
+  { href: "/dashboard/activity-logs", label: "Activity Logs", Icon: ClipboardList, minRole: "superadmin" },
   { href: "/dashboard/settings", label: "Settings", Icon: Settings },
 ];
 
@@ -234,9 +234,12 @@ export default function DashboardLayout({
           </button>
         </div>
         <nav className="flex-1 overflow-y-auto py-2">
-          {NAV_ITEMS.map((item) => {
-            // Hide Activity Logs from non-superadmin
-            if (item.href === "/dashboard/activity-logs" && !isSuperAdmin) return null;
+          {NAV_ITEMS.filter((item) => {
+            // If no minRole, always show (e.g. Overview, Settings)
+            if (!item.minRole) return true;
+            // Otherwise check role hierarchy
+            return hasMinRole(item.minRole as "viewer" | "operator" | "admin" | "superadmin");
+          }).map((item) => {
             return (
             <Link
               key={item.href}

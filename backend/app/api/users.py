@@ -73,6 +73,178 @@ async def change_own_password(
 
 
 # ═══════════════════════════════════════════════════════════════
+# Admin-only: Active Sessions Management
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/admin/sessions", response_model=APIResponse[list])
+async def get_active_sessions(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("admin")),
+):
+    """Get all users with their active refresh tokens and WebSocket status (admin+ only)."""
+    from datetime import datetime, timezone
+    from app.db.models import RefreshToken
+    from app.main import alert_ws_manager
+
+    # Get all users
+    users_result = await db.execute(select(User).order_by(User.username))
+    users = users_result.scalars().all()
+
+    now = datetime.now(timezone.utc)
+    sessions_data = []
+
+    for user in users:
+        # Get all refresh tokens for this user
+        tokens_result = await db.execute(
+            select(RefreshToken)
+            .where(RefreshToken.user_id == user.id)
+            .order_by(RefreshToken.created_at.desc())
+        )
+        tokens = tokens_result.scalars().all()
+
+        # Build session list
+        sessions = []
+        active_count = 0
+        for token in tokens:
+            is_valid = not token.is_revoked and token.expires_at > now
+            if is_valid:
+                active_count += 1
+            sessions.append({
+                "jti": token.jti,
+                "source_ip": token.source_ip or "—",
+                "created_at": token.created_at.isoformat() if token.created_at else None,
+                "expires_at": token.expires_at.isoformat() if token.expires_at else None,
+                "is_valid": is_valid,
+                "is_revoked": token.is_revoked,
+            })
+
+        # Check WebSocket connection
+        ws_connected = alert_ws_manager.is_connected(user.id)
+
+        sessions_data.append({
+            "user_id": user.id,
+            "username": user.username,
+            "full_name": user.full_name,
+            "role": user.role,
+            "is_active": user.is_active,
+            "last_login": user.last_login.isoformat() if user.last_login else None,
+            "sessions": sessions,
+            "active_session_count": active_count,
+            "ws_connected": ws_connected,
+        })
+
+    return APIResponse.ok(data=sessions_data)
+
+
+@router.post("/{user_id}/sessions/revoke", response_model=APIResponse[dict])
+async def revoke_user_sessions(
+    user_id: str,
+    body: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("admin")),
+):
+    """Revoke refresh tokens for a user. Body: { jti: "..." } or { revoke_all: true }."""
+    from datetime import datetime, timezone
+    from app.db.models import RefreshToken
+    from app.main import alert_ws_manager
+
+    # Find target user
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    # Cannot revoke own last session (prevent self-lockout)
+    if user_id == current_user.id:
+        # Count own active sessions
+        active_result = await db.execute(
+            select(func.count(RefreshToken.id)).where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.is_revoked == False,
+                RefreshToken.expires_at > datetime.now(timezone.utc),
+            )
+        )
+        active_count = active_result.scalar() or 0
+        if active_count <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot revoke your own last active session."
+            )
+
+    body = body or {}
+    jti = body.get("jti")
+    revoke_all = body.get("revoke_all", False)
+
+    if not jti and not revoke_all:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide { jti: '...' } or { revoke_all: true }."
+        )
+
+    now = datetime.now(timezone.utc)
+
+    if revoke_all:
+        # Revoke all active tokens for this user
+        await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.is_revoked == False,
+                RefreshToken.expires_at > now,
+            )
+        )
+        # Manual update since SQLAlchemy async doesn't support bulk update directly
+        active_result = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.is_revoked == False,
+                RefreshToken.expires_at > now,
+            )
+        )
+        tokens_to_revoke = active_result.scalars().all()
+        revoked_count = 0
+        for token in tokens_to_revoke:
+            token.is_revoked = True
+            revoked_count += 1
+
+        # Close WebSocket if connected
+        if alert_ws_manager.is_connected(user_id):
+            await alert_ws_manager.disconnect(user_id)
+
+        await db.flush()
+
+        await log_activity(
+            user_id=current_user.id,
+            action="sessions_revoked",
+            details={"target_user_id": user_id, "target_username": user.username, "revoked_count": revoked_count},
+        )
+
+        return APIResponse.ok(data={"message": f"Revoked {revoked_count} session(s) for {user.username}."})
+    else:
+        # Revoke specific session by JTI
+        token_result = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.jti == jti,
+            )
+        )
+        token = token_result.scalar_one_or_none()
+        if not token:
+            raise HTTPException(status_code=404, detail="Session not found.")
+
+        token.is_revoked = True
+        await db.flush()
+
+        await log_activity(
+            user_id=current_user.id,
+            action="session_revoked",
+            details={"target_user_id": user_id, "target_username": user.username, "jti": jti},
+        )
+
+        return APIResponse.ok(data={"message": f"Session revoked for {user.username}."})
+
+
+# ═══════════════════════════════════════════════════════════════
 # Admin-only CRUD routes
 # ═══════════════════════════════════════════════════════════════
 

@@ -90,6 +90,9 @@ class RefreshToken(Base):
         DateTime(timezone=True), nullable=False
     )
     is_revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source_ip: Mapped[Optional[str]] = mapped_column(
+        String(45), nullable=True, comment="IP address of client that created this token"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )

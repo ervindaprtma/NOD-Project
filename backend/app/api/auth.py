@@ -99,6 +99,7 @@ async def login(
             user_id=user.id,
             jti=jti,
             expires_at=expires_at,
+            source_ip=request.client.host if request.client else None,
         )
     )
     await db.flush()
@@ -212,6 +213,7 @@ async def refresh(
             user_id=user.id,
             jti=new_jti,
             expires_at=new_expires_at,
+            source_ip=request.client.host if request.client else None,
         )
     )
 
