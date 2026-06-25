@@ -587,53 +587,130 @@ async def build_report_context(
         traffic["protocol_distribution"] = charts.pop("protocol_distribution", None)
         context["report_data"]["traffic_overview"] = traffic
 
-    # ── R-02: Resource Usage ────────────────────────────────────────
+    # ── R-02: Resource Usage (ALL sites: DC HA + DRC + Office) ──────
     if report_type in ("R-02", "R-08") and (not sections or "resource_usage" in sections):
         resources: dict[str, Any] = {}
+        all_devices: list[dict] = []
+        all_cpu: list[dict] = []
+        all_mem: list[dict] = []
+        all_sessions: list[dict] = []
         try:
             from app.opensearch import ha as ha_qb
 
-            devices = await ha_qb.current_device_status(gte_ms=gte_ms, lte_ms=lte_ms)
-            if devices:
-                resources["devices"] = [
-                    {
+            # ── DC: HA members (ha_member measurement) ──────────────
+            dc_devices = await ha_qb.current_device_status(gte_ms=gte_ms, lte_ms=lte_ms)
+            if dc_devices:
+                for d in dc_devices:
+                    all_devices.append({
                         "device": d.get("device", "—"),
                         "hostname": d.get("hostname", "—"),
+                        "site": "DC",
                         "cpu_usage": d.get("cpu_usage", 0),
                         "mem_usage": d.get("mem_usage", 0),
                         "sessions": d.get("session_count", 0),
                         "sync_status": d.get("sync_status", "Unknown"),
-                    }
-                    for d in devices
-                ]
-                resources["device_count"] = len(devices)
+                        "ha_role": d.get("ha_role", ""),
+                    })
+
+            dc_timeline = await ha_qb.resource_timeline(
+                gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
+            )
+            all_cpu.extend(dc_timeline.get("cpu", []))
+            all_mem.extend(dc_timeline.get("mem", []))
+            all_sessions.extend(dc_timeline.get("sessions", []))
+
+            # ── DRC: single device (Resource_FGT-DRC) ──────────────
+            try:
+                drc_status = await ha_qb.resource_device_status(
+                    "Site_FGT-DRC", gte_ms=gte_ms, lte_ms=lte_ms
+                )
+                if drc_status:
+                    all_devices.append({
+                        "device": "Site_FGT-DRC",
+                        "hostname": "fgt-drc-01",
+                        "site": "DRC",
+                        "cpu_usage": drc_status.get("cpu_usage_percent", 0),
+                        "mem_usage": drc_status.get("mem_usage_percent", 0),
+                        "sessions": drc_status.get("session_count", 0),
+                        "sync_status": "Standalone",
+                        "ha_role": "",
+                    })
+                drc_tl = await ha_qb.resource_device_timeline(
+                    "Site_FGT-DRC", gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
+                )
+                # Tag DRC timeline entries with device name for chart series
+                for pt in drc_tl.get("cpu", []):
+                    pt["device"] = "fgt-drc-01"
+                for pt in drc_tl.get("mem", []):
+                    pt["device"] = "fgt-drc-01"
+                for pt in drc_tl.get("sessions", []):
+                    pt["device"] = "fgt-drc-01"
+                all_cpu.extend(drc_tl.get("cpu", []))
+                all_mem.extend(drc_tl.get("mem", []))
+                all_sessions.extend(drc_tl.get("sessions", []))
+            except Exception as exc:
+                logger.debug("R-02 DRC resource query failed: %s", exc)
+
+            # ── Office: single device (Resource_FGT-Office) ─────────
+            try:
+                office_status = await ha_qb.resource_device_status(
+                    "Site_FGT_Office", gte_ms=gte_ms, lte_ms=lte_ms
+                )
+                if office_status:
+                    all_devices.append({
+                        "device": "Site_FGT_Office",
+                        "hostname": "fgt-office-01",
+                        "site": "Office",
+                        "cpu_usage": office_status.get("cpu_usage_percent", 0),
+                        "mem_usage": office_status.get("mem_usage_percent", 0),
+                        "sessions": office_status.get("session_count", 0),
+                        "sync_status": "Standalone",
+                        "ha_role": "",
+                    })
+                office_tl = await ha_qb.resource_device_timeline(
+                    "Site_FGT_Office", gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
+                )
+                for pt in office_tl.get("cpu", []):
+                    pt["device"] = "fgt-office-01"
+                for pt in office_tl.get("mem", []):
+                    pt["device"] = "fgt-office-01"
+                for pt in office_tl.get("sessions", []):
+                    pt["device"] = "fgt-office-01"
+                all_cpu.extend(office_tl.get("cpu", []))
+                all_mem.extend(office_tl.get("mem", []))
+                all_sessions.extend(office_tl.get("sessions", []))
+            except Exception as exc:
+                logger.debug("R-02 Office resource query failed: %s", exc)
+
+            # ── Aggregate all devices ───────────────────────────────
+            if all_devices:
+                resources["devices"] = all_devices
+                resources["device_count"] = len(all_devices)
                 healthy = sum(
-                    1 for d in devices
+                    1 for d in all_devices
                     if d.get("cpu_usage", 100) < 80 and d.get("mem_usage", 100) < 80
                 )
                 resources["healthy_count"] = healthy
-                resources["degraded_count"] = len(devices) - healthy
+                resources["degraded_count"] = len(all_devices) - healthy
 
-            # CPU timeline
-            timeline = await ha_qb.resource_timeline(
-                gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
-            )
-            if timeline.get("cpu"):
+            # ── CPU & Memory timelines (all devices combined) ───────
+            if all_cpu:
                 charts["cpu_timeline"] = await _run_chart(
-                    render_timeseries_chart, timeline["cpu"],
+                    render_timeseries_chart, all_cpu,
                     title="CPU Usage Over Time", ylabel="CPU %",
                     series_key="device",
                 )
-            if timeline.get("mem"):
+            if all_mem:
                 charts["mem_timeline"] = await _run_chart(
-                    render_timeseries_chart, timeline["mem"],
+                    render_timeseries_chart, all_mem,
                     title="Memory Usage Over Time", ylabel="Memory %",
                     series_key="device",
                 )
 
-            # HA cluster status
-            if devices:
-                ha_status = [
+            # ── HA cluster status (DC only — DRC/Office are standalone)
+            dc_ha = [d for d in all_devices if d.get("ha_role")]
+            if dc_ha:
+                resources["ha_cluster_status"] = [
                     {
                         "cluster": d.get("device", "—"),
                         "device": d.get("hostname", d.get("device", "—")),
@@ -642,11 +719,8 @@ async def build_report_context(
                         else "warning",
                         "details": d.get("sync_status", "Unknown"),
                     }
-                    for d in devices
-                    if d.get("ha_role")
+                    for d in dc_ha
                 ]
-                if ha_status:
-                    resources["ha_cluster_status"] = ha_status
 
         except Exception as exc:
             logger.error("R-02 data fetch failed: %s", exc, exc_info=True)

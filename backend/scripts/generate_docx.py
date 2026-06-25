@@ -1103,17 +1103,18 @@ def _build_r02_resource_usage(doc: Document, context: dict) -> None:
 
     # Device table
     if devices:
-        columns = ["Device", "Hostname", "CPU %", "Memory %", "Sessions", "Sync Status"]
+        columns = ["Site", "Device", "Hostname", "CPU %", "Memory %", "Sessions", "Sync Status"]
         rows = []
         for d in devices:
             cpu = str(d.get("cpu_usage", ""))
             mem = str(d.get("mem_usage", ""))
             rows.append([
+                d.get("site", "—"),
                 d.get("device", ""),
                 d.get("hostname", ""),
                 cpu,
                 mem,
-                str(d.get("session_count", "")),
+                str(d.get("session_count", d.get("sessions", ""))),
                 d.get("sync_status", ""),
             ])
 

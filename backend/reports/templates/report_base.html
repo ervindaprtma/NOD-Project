@@ -854,14 +854,15 @@ body {
 <div class="table-card">
     <table>
         <thead>
-            <tr><th>Device</th><th>Hostname</th><th class="num-col">CPU %</th><th class="num-col">Memory %</th><th class="num-col">Sessions</th><th>Sync Status</th></tr>
+            <tr><th>Site</th><th>Device</th><th>Hostname</th><th class="num-col">CPU %</th><th class="num-col">Memory %</th><th class="num-col">Sessions</th><th>Sync Status</th></tr>
         </thead>
         <tbody>
         {% for d in data.devices %}
             {% set cpu_s = 'success' if d.cpu_usage | float < 60 else ('warning' if d.cpu_usage | float < 80 else 'danger') %}
             {% set mem_s = 'success' if d.mem_usage | float < 60 else ('warning' if d.mem_usage | float < 80 else 'danger') %}
             <tr>
-                <td><strong>{{ d.device }}</strong></td>
+                <td><strong>{{ d.site | default('—') }}</strong></td>
+                <td>{{ d.device }}</td>
                 <td>{{ d.hostname }}</td>
                 <td class="num-col"><span class="badge badge-{{ cpu_s }}">{{ d.cpu_usage }}{% if d.cpu_usage is number %}%{% endif %}</span></td>
                 <td class="num-col"><span class="badge badge-{{ mem_s }}">{{ d.mem_usage }}{% if d.mem_usage is number %}%{% endif %}</span></td>

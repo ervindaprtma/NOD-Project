@@ -277,12 +277,30 @@ def generate_docx_report(context: dict[str, Any], output_path: Path) -> Path:
     ru = rd.get("resource_usage", {})
     if ru:
         _add_heading_styled(doc, "Resource Usage", level=2)
-        if ru.get("cpu_usage_pct") is not None:
-            _add_kpi(doc, "CPU", f"{ru['cpu_usage_pct']}%")
-        if ru.get("memory_usage_pct") is not None:
-            _add_kpi(doc, "Memory", f"{ru['memory_usage_pct']}%")
-        if ru.get("disk_usage_pct") is not None:
-            _add_kpi(doc, "Disk", f"{ru['disk_usage_pct']}%")
+        # KPI cards
+        if ru.get("device_count") is not None:
+            _add_kpi(doc, "Total Devices", str(ru["device_count"]))
+        if ru.get("healthy_count") is not None:
+            _add_kpi(doc, "Healthy", str(ru["healthy_count"]))
+        if ru.get("degraded_count") is not None:
+            _add_kpi(doc, "Degraded", str(ru["degraded_count"]))
+
+        # Device table
+        devices = ru.get("devices", [])
+        if devices:
+            headers = ["Site", "Device", "Hostname", "CPU %", "Memory %", "Sessions", "Sync"]
+            rows = []
+            for d in devices:
+                rows.append([
+                    d.get("site", "—"),
+                    d.get("device", "—"),
+                    d.get("hostname", "—"),
+                    f"{d.get('cpu_usage', 0)}%",
+                    f"{d.get('mem_usage', 0)}%",
+                    str(d.get("sessions", "—")),
+                    d.get("sync_status", "—"),
+                ])
+            _add_data_table(doc, headers, rows, col_widths=[0.6, 1.0, 1.0, 0.6, 0.6, 0.6, 0.8])
 
     # ── R-03 / R-08: VPN Users ────────────────────────────────────
     vu = rd.get("vpn_users", {})
