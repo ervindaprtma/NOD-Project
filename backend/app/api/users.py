@@ -82,45 +82,62 @@ async def get_active_sessions(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
-    """Get all users with their active refresh tokens and WebSocket status (admin+ only)."""
+    """Get only users who are currently active (WS connected or have valid refresh tokens)."""
     from datetime import datetime, timezone
     from app.db.models import RefreshToken
     from app.main import alert_ws_manager
 
-    # Get all users
-    users_result = await db.execute(select(User).order_by(User.username))
+    now = datetime.now(timezone.utc)
+
+    # Query: find users who have at least one valid (non-revoked, non-expired) token
+    stmt = (
+        select(User.id)
+        .distinct()
+        .join(RefreshToken, RefreshToken.user_id == User.id)
+        .where(RefreshToken.is_revoked == False)
+        .where(RefreshToken.expires_at > now)
+    )
+    active_user_ids = (await db.execute(stmt)).scalars().all()
+
+    # Also include any user currently connected via WebSocket
+    ws_connected_ids = set(alert_ws_manager._connections.keys())
+
+    # Union of both sets
+    target_user_ids = set(active_user_ids) | set(ws_connected_ids)
+    if not target_user_ids:
+        return APIResponse.ok(data=[])
+
+    # Fetch full user records for target IDs
+    users_result = await db.execute(
+        select(User).where(User.id.in_(target_user_ids)).order_by(User.username)
+    )
     users = users_result.scalars().all()
 
-    now = datetime.now(timezone.utc)
     sessions_data = []
 
     for user in users:
-        # Get all refresh tokens for this user
+        # Only valid refresh tokens (non-revoked, non-expired)
         tokens_result = await db.execute(
             select(RefreshToken)
             .where(RefreshToken.user_id == user.id)
+            .where(RefreshToken.is_revoked == False)
+            .where(RefreshToken.expires_at > now)
             .order_by(RefreshToken.created_at.desc())
         )
         tokens = tokens_result.scalars().all()
 
-        # Build session list
+        ws_connected = alert_ws_manager.is_connected(user.id)
+
         sessions = []
-        active_count = 0
         for token in tokens:
-            is_valid = not token.is_revoked and token.expires_at > now
-            if is_valid:
-                active_count += 1
             sessions.append({
                 "jti": token.jti,
                 "source_ip": token.source_ip or "—",
                 "created_at": token.created_at.isoformat() if token.created_at else None,
                 "expires_at": token.expires_at.isoformat() if token.expires_at else None,
-                "is_valid": is_valid,
-                "is_revoked": token.is_revoked,
+                "is_valid": True,
+                "is_revoked": False,
             })
-
-        # Check WebSocket connection
-        ws_connected = alert_ws_manager.is_connected(user.id)
 
         sessions_data.append({
             "user_id": user.id,
@@ -130,7 +147,7 @@ async def get_active_sessions(
             "is_active": user.is_active,
             "last_login": user.last_login.isoformat() if user.last_login else None,
             "sessions": sessions,
-            "active_session_count": active_count,
+            "active_session_count": len(sessions),
             "ws_connected": ws_connected,
         })
 
