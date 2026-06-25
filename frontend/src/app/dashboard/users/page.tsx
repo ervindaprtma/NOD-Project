@@ -54,6 +54,7 @@ export default function UsersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
   const [actionError, setActionError] = useState("");
+  const [actionSuccess, setActionSuccess] = useState("");
   const [showSessions, setShowSessions] = useState(false);
 
   const users = data?.data?.users || [];
@@ -96,6 +97,11 @@ export default function UsersPage() {
   }
 
   async function handleRevokeSession(userId: string, jti?: string) {
+    const confirmed = window.confirm(
+      jti ? "Revoke this session?" : "Revoke ALL active sessions for this user?"
+    );
+    if (!confirmed) return;
+
     try {
       if (jti) {
         await apiFetch(`/api/v1/users/${userId}/sessions/revoke`, {
@@ -108,6 +114,8 @@ export default function UsersPage() {
           body: JSON.stringify({ revoke_all: true }),
         });
       }
+      setActionSuccess("Session revoked successfully.");
+      setTimeout(() => setActionSuccess(""), 3000);
       mutate();
     } catch (err: any) {
       setActionError(err?.message || "Failed to revoke session.");
@@ -136,6 +144,13 @@ export default function UsersPage() {
         <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-xs flex items-center justify-between">
           <span>{actionError}</span>
           <button onClick={() => setActionError("")} className="text-muted-foreground hover:text-foreground">✕</button>
+        </div>
+      )}
+
+      {actionSuccess && (
+        <div className="p-3 rounded-lg bg-green-500/10 text-green-600 text-xs flex items-center justify-between">
+          <span>{actionSuccess}</span>
+          <button onClick={() => setActionSuccess("")} className="text-muted-foreground hover:text-foreground">✕</button>
         </div>
       )}
 
