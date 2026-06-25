@@ -164,7 +164,7 @@ export default function UsersPage() {
                 <th className="text-left py-3 px-4">Full Name</th>
                 <th className="text-left py-3 px-4">Email</th>
                 <th className="text-left py-3 px-4">Role</th>
-                <th className="text-left py-3 px-4">Status</th>
+                <th className="text-left py-3 px-4">Account</th>
                 <th className="text-left py-3 px-4">Last Login</th>
                 <th className="text-right py-3 px-4">Actions</th>
               </tr>
@@ -209,7 +209,7 @@ export default function UsersPage() {
                         )}
                       >
                         <span className={cn("w-1.5 h-1.5 rounded-full", u.is_active ? "bg-emerald-500" : "bg-red-500")} />
-                        {u.is_active ? "Active" : "Inactive"}
+                        {u.is_active ? "Enabled" : "Disabled"}
                       </button>
                     </td>
                     <td className="py-3 px-4 text-xs text-muted-foreground">
@@ -228,7 +228,15 @@ export default function UsersPage() {
                             onClick={() => handleToggleActive(u)}
                             className="px-2.5 py-1 text-xs border rounded-md hover:bg-muted"
                           >
-                            Deactivate
+                            Disable
+                          </button>
+                        )}
+                        {!u.is_active && u.role !== "superadmin" && (
+                          <button
+                            onClick={() => handleToggleActive(u)}
+                            className="px-2.5 py-1 text-xs border border-emerald-300 text-emerald-600 rounded-md hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
+                          >
+                            Enable
                           </button>
                         )}
                         {u.role !== "superadmin" && (
@@ -277,7 +285,7 @@ export default function UsersPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/50 text-muted-foreground">
-                        <th className="text-left py-2 px-4">Status</th>
+                        <th className="text-left py-2 px-4">Connection</th>
                         <th className="text-left py-2 px-4">User</th>
                         <th className="text-left py-2 px-4">Role</th>
                         <th className="text-left py-2 px-4">IP Address</th>
@@ -301,28 +309,20 @@ export default function UsersPage() {
                                     <span
                                       className={cn(
                                         "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium",
-                                        sess.is_valid && su.ws_connected
+                                        su.ws_connected
                                           ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
-                                          : sess.is_valid
-                                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
-                                          : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                                          : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
                                       )}
                                     >
                                       <span
                                         className={cn(
                                           "w-1.5 h-1.5 rounded-full",
-                                          sess.is_valid && su.ws_connected
+                                          su.ws_connected
                                             ? "bg-blue-500"
-                                            : sess.is_valid
-                                            ? "bg-emerald-500"
-                                            : "bg-slate-400"
+                                            : "bg-emerald-500"
                                         )}
                                       />
-                                      {sess.is_valid && su.ws_connected
-                                        ? "Online"
-                                        : sess.is_valid
-                                        ? "Active"
-                                        : "Revoked"}
+                                      {su.ws_connected ? "Online" : "Active"}
                                     </span>
                                   </td>
                                   <td className="py-2 px-4" rowSpan={su.sessions.length}>
