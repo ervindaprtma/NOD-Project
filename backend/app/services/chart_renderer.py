@@ -5,7 +5,8 @@ Generates PNG charts for embedding in PDF/HTML/DOCX reports.
 from __future__ import annotations
 
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 import matplotlib
@@ -14,6 +15,9 @@ matplotlib.use("Agg")  # Non-interactive backend
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib.dates as mdates
+
+# WIB timezone offset for chart x-axis labels
+WIB_TZ = ZoneInfo("Asia/Jakarta")
 
 
 def _format_bytes_auto(n: float) -> str:
@@ -75,7 +79,7 @@ def render_timeseries_chart(
             ys = [p[1] for p in points]
             ax.plot(xs, ys, label=label, linewidth=1.2)
         ax.legend(loc="upper left", fontsize=8)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M', tz=WIB_TZ))
         fig.autofmt_xdate(rotation=30, ha='right')
     else:
         xs = []
@@ -87,7 +91,7 @@ def render_timeseries_chart(
             xs.append(ts)
             ys.append(p.get(y_key, 0))
         ax.plot(xs, ys, linewidth=1.2, color="#2563eb")
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M', tz=WIB_TZ))
         fig.autofmt_xdate(rotation=30, ha='right')
 
     ax.set_title(title, fontsize=12, fontweight="bold")
