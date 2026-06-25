@@ -877,7 +877,7 @@ body {
 
 {% set cpu_chart = data.cpu_timeline or (data.resource_timelines.cpu if data.resource_timelines else none) %}
 {% set mem_chart = data.mem_timeline or (data.resource_timelines.mem if data.resource_timelines else none) %}
-{% set session_chart = data.resource_timelines.sessions if data.resource_timelines else none %}
+{% set session_chart = data.session_timeline or (data.resource_timelines.sessions if data.resource_timelines else none) %}
 {% if cpu_chart or mem_chart or session_chart %}
 <div class="chart-grid">
     {% if cpu_chart %}

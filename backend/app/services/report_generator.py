@@ -628,7 +628,7 @@ async def build_report_context(
                     gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
                 )
                 all_cpu.extend(dc_timeline.get("cpu", []))
-                all_mem.extend(dc_timeline.get("mem", []))
+                all_mem.extend(dc_timeline.get("memory", []))
                 all_sessions.extend(dc_timeline.get("sessions", []))
 
             # ── DRC: single device (Resource_FGT-DRC) ──────────────
@@ -653,13 +653,13 @@ async def build_report_context(
                     )
                     # Tag DRC timeline entries with device name for chart series
                     for pt in drc_tl.get("cpu", []):
-                        pt["device"] = "fgt-drc-01"
-                    for pt in drc_tl.get("mem", []):
-                        pt["device"] = "fgt-drc-01"
+                        pt["device"] = "FG_DRC_LA"
+                    for pt in drc_tl.get("memory", []):
+                        pt["device"] = "FG_DRC_LA"
                     for pt in drc_tl.get("sessions", []):
-                        pt["device"] = "fgt-drc-01"
+                        pt["device"] = "FG_DRC_LA"
                     all_cpu.extend(drc_tl.get("cpu", []))
-                    all_mem.extend(drc_tl.get("mem", []))
+                    all_mem.extend(drc_tl.get("memory", []))
                     all_sessions.extend(drc_tl.get("sessions", []))
                 except Exception as exc:
                     logger.debug("R-02 DRC resource query failed: %s", exc)
@@ -685,13 +685,13 @@ async def build_report_context(
                         "Site_FGT_Office", gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
                     )
                     for pt in office_tl.get("cpu", []):
-                        pt["device"] = "fgt-office-01"
-                    for pt in office_tl.get("mem", []):
-                        pt["device"] = "fgt-office-01"
+                        pt["device"] = "F121G-Office"
+                    for pt in office_tl.get("memory", []):
+                        pt["device"] = "F121G-Office"
                     for pt in office_tl.get("sessions", []):
-                        pt["device"] = "fgt-office-01"
+                        pt["device"] = "F121G-Office"
                     all_cpu.extend(office_tl.get("cpu", []))
-                    all_mem.extend(office_tl.get("mem", []))
+                    all_mem.extend(office_tl.get("memory", []))
                     all_sessions.extend(office_tl.get("sessions", []))
                 except Exception as exc:
                     logger.debug("R-02 Office resource query failed: %s", exc)
@@ -746,11 +746,15 @@ async def build_report_context(
             logger.error("R-02 data fetch failed: %s", exc, exc_info=True)
 
         resources["cpu_timeline"] = charts.pop("cpu_timeline", None)
-        if charts.get("mem_timeline"):
+        resources["mem_timeline"] = charts.pop("mem_timeline", None)
+        resources["session_timeline"] = charts.pop("session_timeline", None)
+        
+        # Combine into resource_timelines if any exist
+        if any([resources.get("cpu_timeline"), resources.get("mem_timeline"), resources.get("session_timeline")]):
             resources["resource_timelines"] = {
                 "cpu": resources.get("cpu_timeline"),
-                "mem": charts.pop("mem_timeline", None),
-                "sessions": charts.pop("session_timeline", None),
+                "mem": resources.get("mem_timeline"),
+                "sessions": resources.get("session_timeline"),
             }
         context["report_data"]["resource_usage"] = resources
 
@@ -1113,9 +1117,14 @@ def _inject_charts(context: dict[str, Any]) -> None:
     if "cpu_timeline" in chart_map:
         ru["cpu_timeline"] = chart_map.pop("cpu_timeline", None)
     if "mem_timeline" in chart_map:
-        if "resource_timelines" not in ru:
-            ru["resource_timelines"] = {}
-        ru["resource_timelines"]["mem"] = chart_map.pop("mem_timeline", None)
+        ru["mem_timeline"] = chart_map.pop("mem_timeline", None)
+    if "session_timeline" in chart_map:
+        ru["session_timeline"] = chart_map.pop("session_timeline", None)
+        ru["resource_timelines"] = {
+            "cpu": ru.get("cpu_timeline"),
+            "mem": ru.get("mem_timeline"),
+            "sessions": ru.get("session_timeline"),
+        }
     if ru:
         rd["resource_usage"] = ru
 
