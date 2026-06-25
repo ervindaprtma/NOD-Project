@@ -707,7 +707,7 @@ async def build_report_context(
                 resources["healthy_count"] = healthy
                 resources["degraded_count"] = len(all_devices) - healthy
 
-            # ── CPU & Memory timelines (all devices combined) ───────
+            # ── CPU & Memory & Sessions timelines (all devices combined) ─────
             if all_cpu:
                 charts["cpu_timeline"] = await _run_chart(
                     render_timeseries_chart, all_cpu,
@@ -718,6 +718,12 @@ async def build_report_context(
                 charts["mem_timeline"] = await _run_chart(
                     render_timeseries_chart, all_mem,
                     title="Memory Usage Over Time", ylabel="Memory %",
+                    series_key="device",
+                )
+            if all_sessions:
+                charts["session_timeline"] = await _run_chart(
+                    render_timeseries_chart, all_sessions,
+                    title="Active Sessions Over Time", ylabel="Sessions",
                     series_key="device",
                 )
 
@@ -744,6 +750,7 @@ async def build_report_context(
             resources["resource_timelines"] = {
                 "cpu": resources.get("cpu_timeline"),
                 "mem": charts.pop("mem_timeline", None),
+                "sessions": charts.pop("session_timeline", None),
             }
         context["report_data"]["resource_usage"] = resources
 

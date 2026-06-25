@@ -1166,6 +1166,16 @@ def _build_r02_resource_usage(doc: Document, context: dict) -> None:
     if cpu_chart:
         _build_embedded_charts(doc, {"cpu_timeline": cpu_chart})
 
+    # Memory timeline chart
+    mem_chart = charts.get("mem_timeline")
+    if mem_chart:
+        _build_embedded_charts(doc, {"mem_timeline": mem_chart})
+
+    # Sessions timeline chart
+    session_chart = charts.get("session_timeline")
+    if session_chart:
+        _build_embedded_charts(doc, {"session_timeline": session_chart})
+
 
 def _build_r03_vpn_users(doc: Document, context: dict) -> None:
     """R-03: Active VPN Users Report — VPN counts, chart."""

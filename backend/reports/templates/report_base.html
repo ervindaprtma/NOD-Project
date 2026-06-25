@@ -877,7 +877,8 @@ body {
 
 {% set cpu_chart = data.cpu_timeline or (data.resource_timelines.cpu if data.resource_timelines else none) %}
 {% set mem_chart = data.mem_timeline or (data.resource_timelines.mem if data.resource_timelines else none) %}
-{% if cpu_chart or mem_chart %}
+{% set session_chart = data.resource_timelines.sessions if data.resource_timelines else none %}
+{% if cpu_chart or mem_chart or session_chart %}
 <div class="chart-grid">
     {% if cpu_chart %}
     <div class="chart-card">
@@ -889,6 +890,12 @@ body {
     <div class="chart-card">
         <h3>Memory Usage Over Time</h3>
         {{ chart_img(mem_chart, 'Memory timeline chart') }}
+    </div>
+    {% endif %}
+    {% if session_chart %}
+    <div class="chart-card">
+        <h3>Active Sessions Over Time</h3>
+        {{ chart_img(session_chart, 'Sessions timeline chart') }}
     </div>
     {% endif %}
 </div>
