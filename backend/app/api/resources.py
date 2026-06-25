@@ -25,6 +25,13 @@ HA_SITES = {"Site_FGT-DC"}
 # Sites that have single-device resource data
 RESOURCE_SITES = {"Site_FGT-DRC", "Site_FGT_Office"}
 
+# Site hostname mapping (DC HA / DRC + Office standalone)
+RESOURCE_HOSTNAME_MAP: dict[str, str] = {
+    "Site_FGT-DC": "FGT-DC",  # Generic label; real hostnames come from HA data
+    "Site_FGT-DRC": "FG_DRC_LA",
+    "Site_FGT_Office": "F121G-Office",
+}
+
 
 def _compute_interval(gte_ms: int, lte_ms: int) -> str:
     delta_sec = (lte_ms - gte_ms) / 1000
@@ -96,7 +103,7 @@ async def get_resources(
             current_list.append(
                 DeviceCurrentResource(
                     device=status_raw["site"],
-                    hostname=status_raw.get("source_ip"),
+                    hostname=RESOURCE_HOSTNAME_MAP.get(site_name, status_raw.get("source_ip")),
                     serial_number=status_raw.get("serial_number"),
                     cpu_usage=status_raw["cpu_usage_percent"],
                     mem_usage=status_raw["mem_usage_percent"],
