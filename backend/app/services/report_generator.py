@@ -858,6 +858,7 @@ async def build_report_context(
                         render_timeseries_chart, user_count_timeline,
                         title="VPN User Count Over Time", ylabel="Users",
                         series_key="protocol", width=800, height=400,
+                        tz=ZoneInfo("Asia/Jakarta"),
                     )
             except Exception as exc:
                 logger.debug("VPN user count timeline not available: %s", exc)
