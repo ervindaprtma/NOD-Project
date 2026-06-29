@@ -811,36 +811,36 @@ async def build_report_context(
 
             # ── User Count Timeline (combined SSL + IPsec) ────────
             # Query counts per time bucket for user count timeline chart
-            user_count_timeline = []
             try:
-                # Get SSL VPN user count timeline
-                ssl_counts = await sslvpn_qb.all_sslvpn_users_count_timeline(
+                # Get SSL VPN user count timeline (returns dict[timestamp, count])
+                ssl_counts_raw = await sslvpn_qb.all_sslvpn_users_count_timeline(
                     gte_ms=gte_ms, lte_ms=lte_ms,
                     site_names=settings.sslvpn_sites_list,
                     interval="1h",
                 )
-                # Get IPsec VPN user count timeline
-                ipsec_counts = await ipsec_qb.active_ipsec_users_count_timeline(
+                # Get IPsec VPN user count timeline (returns dict[timestamp, count])
+                ipsec_counts_raw = await ipsec_qb.active_ipsec_users_count_timeline(
                     gte_ms=gte_ms, lte_ms=lte_ms, interval="1h",
                 )
-                # Merge timelines (assuming same timestamps)
-                all_ts = set(ssl_counts.keys()) | set(ipsec_counts.keys())
-                for ts in sorted(all_ts):
-                    user_count_timeline.append({
+                # Merge timelines into list of dicts for stacked chart
+                all_ts = set(ssl_counts_raw.keys()) | set(ipsec_counts_raw.keys())
+                user_count_timeline = [
+                    {
                         "timestamp": ts,
-                        "ssl_vpn": ssl_counts.get(ts, 0),
-                        "ipsec_vpn": ipsec_counts.get(ts, 0),
-                    })
+                        "ssl_vpn": ssl_counts_raw.get(ts, 0),
+                        "ipsec_vpn": ipsec_counts_raw.get(ts, 0),
+                    }
+                    for ts in sorted(all_ts)
+                ]
+                if user_count_timeline:
+                    charts["user_count_timeline"] = await _run_chart(
+                        render_stacked_timeseries_chart, user_count_timeline,
+                        title="VPN User Count Over Time",
+                        series_keys=["ssl_vpn", "ipsec_vpn"],
+                        colors=["#2563eb", "#ef4444"],
+                    )
             except Exception as exc:
                 logger.debug("VPN user count timeline not available: %s", exc)
-
-            if user_count_timeline:
-                charts["user_count_timeline"] = await _run_chart(
-                    render_stacked_timeseries_chart, user_count_timeline,
-                    title="VPN User Count Over Time",
-                    series_keys=["ssl_vpn", "ipsec_vpn"],
-                    colors=["#2563eb", "#ef4444"],
-                )
 
             # ── Active Users Table ─────────────────────────────────
             ssl_users = await sslvpn_qb.active_sslvpn_users(

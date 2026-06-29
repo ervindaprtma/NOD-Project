@@ -141,7 +141,7 @@ async def all_sslvpn_users_count_timeline(
 
     resp = await client.search(index="telegraf-index*", body=body)
     return {
-        int(bucket["key"]): int(bucket["doc_count"])
+        int(bucket["key"]): int(bucket["active_users"]["value"])
         for bucket in resp["aggregations"]["over_time"]["buckets"]
     }
 

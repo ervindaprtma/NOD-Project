@@ -76,7 +76,7 @@ async def active_ipsec_users_count_timeline(
 
     resp = await client.search(index="ipsec-*", body=body)
     return {
-        int(bucket["key"]): int(bucket["doc_count"])
+        int(bucket["key"]): int(bucket["active_users"]["value"])
         for bucket in resp["aggregations"]["over_time"]["buckets"]
     }
 
