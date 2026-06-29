@@ -117,7 +117,7 @@ async def login(
         httponly=True,
         secure=True,           # __Host- requires Secure
         samesite="strict",
-        max_age=int(settings.REFRESH_TOKEN_EXPIRE_HOURS * 3600),
+        max_age=int(settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60),
         path="/",              # __Host- requires Path=/
     )
     return resp
@@ -235,7 +235,7 @@ async def refresh(
         httponly=True,
         secure=True,           # __Host- requires Secure
         samesite="strict",
-        max_age=int(settings.REFRESH_TOKEN_EXPIRE_HOURS * 3600),
+        max_age=int(settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60),
         path="/",              # __Host- requires Path=/
     )
     return resp

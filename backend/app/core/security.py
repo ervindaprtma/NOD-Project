@@ -54,9 +54,13 @@ def create_refresh_token(
     jti: Optional[str] = None,
     expires_delta: Optional[timedelta] = None,
 ) -> tuple[str, str, datetime]:
-    """Create a JWT refresh token. Returns (token, jti, expires_at)."""
+    """Create a JWT refresh token. Returns (token, jti, expires_at).
+
+    Default expiry is REFRESH_TOKEN_EXPIRE_MINUTES (15 min) — session is invalidated
+    after this idle window unless the client actively refreshes via /auth/refresh.
+    """
     if expires_delta is None:
-        expires_delta = timedelta(hours=settings.REFRESH_TOKEN_EXPIRE_HOURS)
+        expires_delta = timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
 
     if jti is None:
         jti = uuid4().hex
