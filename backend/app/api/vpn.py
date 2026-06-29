@@ -44,7 +44,7 @@ async def get_sslvpn_sessions(
         )
 
     t0 = time.monotonic()
-    users = await sslvpn_qb.active_sslvpn_users_detail(
+    users = await sslvpn_qb.active_sslvpn_users(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name
     )
     elapsed = int((time.monotonic() - t0) * 1000)
