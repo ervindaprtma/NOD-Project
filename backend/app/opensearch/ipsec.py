@@ -6,9 +6,7 @@ Q-03: _source includes only required fields.
 from __future__ import annotations
 
 from typing import Optional
-
 from opensearchpy import AsyncOpenSearch
-
 from app.opensearch.client import get_ipsec_client
 
 
@@ -50,6 +48,37 @@ async def active_ipsec_users_count(
 
     resp = await client.search(index="ipsec-*", body=body)
     return resp["aggregations"]["active_users"]["value"]
+
+
+async def active_ipsec_users_count_timeline(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    interval: str = "1h",
+) -> dict[int, int]:
+    """
+    Q-05: date_histogram with cardinality sub-agg for user count over time.
+    Returns dict mapping timestamp (ms) -> user count.
+    """
+    if client is None:
+        client = get_ipsec_client()
+
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms)}},
+        "aggs": {
+            "over_time": {
+                "date_histogram": {"field": "@timestamp", "calendar_interval": interval},
+                "aggs": {"active_users": {"cardinality": {"field": "tag.username.keyword"}}},
+            }
+        },
+    }
+
+    resp = await client.search(index="ipsec-*", body=body)
+    return {
+        int(bucket["key"]): int(bucket["doc_count"])
+        for bucket in resp["aggregations"]["over_time"]["buckets"]
+    }
 
 
 async def active_ipsec_users_detail(

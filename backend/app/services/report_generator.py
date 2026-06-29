@@ -87,6 +87,9 @@ FRONTEND_TO_BACKEND_SECTION = {
     "R-03": {
         "ssl_vpn": "vpn_users",
         "ipsec_vpn": "vpn_users",
+        "user_count": "vpn_users",
+        "active_users": "vpn_users",
+        "bandwidth_detail": "vpn_users",
     },
     "R-04": {
         "latency": "sdwan_sla",
@@ -326,6 +329,47 @@ def render_timeseries_chart(
             line=dict(width=1.5, color="#2563eb"),
             fill="tozeroy", fillcolor="rgba(37,99,235,0.08)",
         ))
+
+    return _fig_to_b64(fig, width=width, height=height)
+
+
+def render_stacked_timeseries_chart(
+    data: list[dict],
+    title: str = "",
+    series_keys: list[str] | None = None,
+    colors: list[str] | None = None,
+    width: int = 800,
+    height: int = 400,
+    tz: Optional[timezone] = None,
+) -> str:
+    """Render a stacked timeseries line chart using Plotly. Returns base64 PNG."""
+    fig = go.Figure()
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=13), x=0.5),
+        yaxis=dict(title="Users", title_font=dict(size=10)),
+        xaxis=dict(title_font=dict(size=10)),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=10, r=20, t=40, b=40),
+        height=height,
+        font=dict(family="Arial, sans-serif"),
+        hovermode="x unified",
+    )
+
+    if series_keys and data:
+        for i, key in enumerate(series_keys):
+            xs = [
+                datetime.fromtimestamp(p["timestamp"] / 1000, tz=tz or timezone.utc)
+                if isinstance(p.get("timestamp"), (int, float)) and p["timestamp"] > 1e12
+                else p["timestamp"]
+                for p in data
+            ]
+            ys = [p.get(key, 0) for p in data]
+            color = (colors or ["#2563eb", "#ef4444"])[i % len(colors or ["#2563eb", "#ef4444"])]
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="lines", name=key.replace("_", " ").title(),
+                line=dict(width=1.5, color=color),
+                stackgroup="one", fill="tonexty",
+            ))
 
     return _fig_to_b64(fig, width=width, height=height)
 
@@ -765,6 +809,92 @@ async def build_report_context(
             from app.opensearch import sslvpn as sslvpn_qb
             from app.opensearch import ipsec as ipsec_qb
 
+            # ── User Count Timeline (combined SSL + IPsec) ────────
+            # Query counts per time bucket for user count timeline chart
+            user_count_timeline = []
+            try:
+                # Get SSL VPN user count timeline
+                ssl_counts = await sslvpn_qb.all_sslvpn_users_count_timeline(
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                    site_names=settings.sslvpn_sites_list,
+                    interval="1h",
+                )
+                # Get IPsec VPN user count timeline
+                ipsec_counts = await ipsec_qb.active_ipsec_users_count_timeline(
+                    gte_ms=gte_ms, lte_ms=lte_ms, interval="1h",
+                )
+                # Merge timelines (assuming same timestamps)
+                all_ts = set(ssl_counts.keys()) | set(ipsec_counts.keys())
+                for ts in sorted(all_ts):
+                    user_count_timeline.append({
+                        "timestamp": ts,
+                        "ssl_vpn": ssl_counts.get(ts, 0),
+                        "ipsec_vpn": ipsec_counts.get(ts, 0),
+                    })
+            except Exception as exc:
+                logger.debug("VPN user count timeline not available: %s", exc)
+
+            if user_count_timeline:
+                charts["user_count_timeline"] = await _run_chart(
+                    render_stacked_timeseries_chart, user_count_timeline,
+                    title="VPN User Count Over Time",
+                    series_keys=["ssl_vpn", "ipsec_vpn"],
+                    colors=["#2563eb", "#ef4444"],
+                )
+
+            # ── Active Users Table ─────────────────────────────────
+            ssl_users = await sslvpn_qb.active_sslvpn_users(
+                gte_ms=gte_ms, lte_ms=lte_ms,
+                site_names=settings.sslvpn_sites_list,
+            )
+            ipsec_users = await ipsec_qb.active_ipsec_users_detail(
+                gte_ms=gte_ms, lte_ms=lte_ms,
+            )
+
+            active_users = []
+            for u in ssl_users[:50]:
+                active_users.append({
+                    "username": u.get("username", "—"),
+                    "protocol": "SSL VPN",
+                    "device": u.get("device", "—"),
+                    "login_time": u.get("login_time", u.get("login_at", "—")),
+                    "bytes_in": u.get("bytes_received", u.get("bytes_rx", 0)),
+                    "bytes_out": u.get("bytes_sent", u.get("bytes_tx", 0)),
+                })
+            for u in ipsec_users[:50]:
+                active_users.append({
+                    "username": u.get("username", "—"),
+                    "protocol": "IPsec VPN",
+                    "device": u.get("device", "—"),
+                    "login_time": u.get("tunnel_lifetime_sec", 0),
+                    "bytes_in": u.get("bytes_in", 0),
+                    "bytes_out": u.get("bytes_out", 0),
+                })
+
+            vpn["active_users"] = active_users
+
+            # ── Bandwidth Detail (for first user if available) ─────
+            if active_users:
+                first_user = active_users[0]["username"]
+                try:
+                    # Get bandwidth timeline for the selected user
+                    user_bandwidth = await sslvpn_qb.user_bandwidth_timeline(
+                        gte_ms=gte_ms, lte_ms=lte_ms,
+                        username=first_user,
+                        site_names=settings.sslvpn_sites_list,
+                        interval="5m",
+                    )
+                    if user_bandwidth:
+                        charts["bandwidth_detail"] = await _run_chart(
+                            render_timeseries_chart, user_bandwidth,
+                            title=f"Bandwidth: {first_user}",
+                            ylabel="Bytes",
+                            series_key="device",
+                        )
+                except Exception as exc:
+                    logger.debug("User bandwidth detail not available: %s", exc)
+
+            # ── Summary Counts ───────────────────────────────────
             ssl_count = await sslvpn_qb.all_sslvpn_users_count(
                 gte_ms=gte_ms, lte_ms=lte_ms,
                 site_names=settings.sslvpn_sites_list,
@@ -776,7 +906,7 @@ async def build_report_context(
             vpn["ipsec_vpn_count"] = ipsec_count or 0
             vpn["total_vpn_count"] = (ssl_count or 0) + (ipsec_count or 0)
 
-            # VPN bar chart
+            # VPN bar chart (legacy)
             if ssl_count or ipsec_count:
                 charts["vpn_timeline"] = await _run_chart(
                     _render_vpn_bar_chart_internal,
@@ -784,30 +914,12 @@ async def build_report_context(
                     ipsec_count=ipsec_count or 0,
                 )
 
-            # SSL VPN details
-            try:
-                ssl_users = await sslvpn_qb.active_sslvpn_users(
-                    gte_ms=gte_ms, lte_ms=lte_ms,
-                    site_names=settings.sslvpn_sites_list,
-                )
-                if ssl_users:
-                    vpn["ssl_vpn_details"] = [
-                        {
-                            "user": u.get("username", "—"),
-                            "device": u.get("device", "—"),
-                            "login_time": u.get("login_time", u.get("login_at", "—")),
-                            "bytes_rx": u.get("bytes_received", u.get("bytes_rx", 0)),
-                            "bytes_tx": u.get("bytes_sent", u.get("bytes_tx", 0)),
-                        }
-                        for u in ssl_users[:50]
-                    ]
-            except Exception as exc:
-                logger.debug("SSL VPN details not available: %s", exc)
-
         except Exception as exc:
             logger.error("R-03 data fetch failed: %s", exc, exc_info=True)
 
         vpn["vpn_timeline"] = charts.pop("vpn_timeline", None)
+        vpn["user_count_timeline"] = charts.pop("user_count_timeline", None)
+        vpn["bandwidth_detail"] = charts.pop("bandwidth_detail", None)
         context["report_data"]["vpn_users"] = vpn
 
     # ── R-04: SD-WAN SLA ────────────────────────────────────────────
@@ -1131,6 +1243,10 @@ def _inject_charts(context: dict[str, Any]) -> None:
     vu = rd.get("vpn_users", {})
     if "vpn_timeline" in chart_map:
         vu["vpn_timeline"] = chart_map.pop("vpn_timeline", None)
+    if "user_count_timeline" in chart_map:
+        vu["user_count_timeline"] = chart_map.pop("user_count_timeline", None)
+    if "bandwidth_detail" in chart_map:
+        vu["bandwidth_detail"] = chart_map.pop("bandwidth_detail", None)
     if vu:
         rd["vpn_users"] = vu
 

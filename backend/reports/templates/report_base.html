@@ -913,16 +913,17 @@ body {
       .ssl_vpn_count — int
       .ipsec_vpn_count — int
       .total_vpn_count — int
-      .vpn_timeline — base64 PNG string
-      .ssl_vpn_details — list of {user, device, login_time, bytes_rx, bytes_tx}
-      .ipsec_vpn_details — list of {peer, device, uptime, bytes_rx, bytes_tx}
+      .vpn_timeline — base64 PNG string (legacy)
+      .user_count_timeline — base64 PNG string (new stacked chart)
+      .bandwidth_detail — base64 PNG string (new per-user chart)
+      .active_users — list of {username, protocol, device, login_time, bytes_in, bytes_out}
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_vpn_users(data) %}
-{% set has_content = data.ssl_vpn_count is defined or data.ipsec_vpn_count is defined or data.vpn_timeline %}
+{% set has_content = data.ssl_vpn_count is defined or data.ipsec_vpn_count is defined or data.vpn_timeline or data.user_count_timeline %}
 {% if has_content %}
 
 <div class="page-break"></div>
-<h2 class="section-title">Active VPN Users <span class="timeframe-badge">{{ time_range }}</span></h2>
+<h2 class="section-title">VPN Users <span class="timeframe-badge">{{ time_range }}</span></h2>
 
 {% if data.total_vpn_count is defined or data.ssl_vpn_count is defined or data.ipsec_vpn_count is defined %}
 <div class="kpi-grid">
@@ -932,54 +933,47 @@ body {
 </div>
 {% endif %}
 
+{% if data.user_count_timeline %}
+<div class="chart-card">
+    <h3>VPN User Count Over Time</h3>
+    {{ chart_img(data.user_count_timeline, 'VPN user count timeline chart') }}
+</div>
+{% endif %}
+
+{% if data.active_users %}
+<div class="card">
+    <h3>Active VPN Users</h3>
+    <table>
+        <thead>
+            <tr><th>User</th><th>Protocol</th><th>Device</th><th>Login Time</th><th class="num-col">Bytes In</th><th class="num-col">Bytes Out</th></tr>
+        </thead>
+        <tbody>
+        {% for u in data.active_users[:20] %}
+            <tr>
+                <td>{{ u.username }}</td>
+                <td>{{ u.protocol }}</td>
+                <td>{{ u.device | default('—') }}</td>
+                <td>{{ u.login_time | default('—') }}</td>
+                <td class="num-col">{{ bytes_human(u.bytes_in) }}</td>
+                <td class="num-col">{{ bytes_human(u.bytes_out) }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if data.bandwidth_detail %}
+<div class="chart-card">
+    <h3>Bandwidth Detail: {{ data.active_users[0].username if data.active_users else 'Selected User' }}</h3>
+    {{ chart_img(data.bandwidth_detail, 'User bandwidth detail chart') }}
+</div>
+{% endif %}
+
 {% if data.vpn_timeline %}
 <div class="chart-card">
-    <h3>VPN Users Over Time</h3>
-    {{ chart_img(data.vpn_timeline, 'VPN users timeline chart') }}
-</div>
-{% endif %}
-
-{% if data.ssl_vpn_details %}
-<div class="card">
-    <h3>SSL VPN Active Sessions</h3>
-    <table>
-        <thead>
-            <tr><th>User</th><th>Device</th><th>Login Time</th><th class="num-col">RX</th><th class="num-col">TX</th></tr>
-        </thead>
-        <tbody>
-        {% for u in data.ssl_vpn_details %}
-            <tr>
-                <td>{{ u.user }}</td>
-                <td>{{ u.device }}</td>
-                <td>{{ u.login_time | default('—') }}</td>
-                <td class="num-col">{{ bytes_human(u.bytes_rx) }}</td>
-                <td class="num-col">{{ bytes_human(u.bytes_tx) }}</td>
-            </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-</div>
-{% endif %}
-
-{% if data.ipsec_vpn_details %}
-<div class="card">
-    <h3>IPsec VPN Active Tunnels</h3>
-    <table>
-        <thead>
-            <tr><th>Peer</th><th>Device</th><th>Uptime</th><th class="num-col">RX</th><th class="num-col">TX</th></tr>
-        </thead>
-        <tbody>
-        {% for p in data.ipsec_vpn_details %}
-            <tr>
-                <td>{{ p.peer }}</td>
-                <td>{{ p.device }}</td>
-                <td>{{ p.uptime | default('—') }}</td>
-                <td class="num-col">{{ bytes_human(p.bytes_rx) }}</td>
-                <td class="num-col">{{ bytes_human(p.bytes_tx) }}</td>
-            </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+    <h3>VPN Users Summary</h3>
+    {{ chart_img(data.vpn_timeline, 'VPN users summary chart') }}
 </div>
 {% endif %}
 

@@ -6,9 +6,7 @@ Q-01: ALL queries include @timestamp range filter with gte/lte.
 from __future__ import annotations
 
 from typing import Optional
-
 from opensearchpy import AsyncOpenSearch
-
 from app.opensearch.client import get_dc_client
 
 
@@ -57,7 +55,98 @@ async def active_sslvpn_users_count(
     return resp["aggregations"]["active_users"]["value"]
 
 
-async def active_sslvpn_users_detail(
+async def all_sslvpn_users_count(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    site_names: Optional[list[str]] = None,
+) -> int:
+    """
+    Q-07: single query across all configured SSLVPN sites.
+    Uses terms agg on measurement_name + cardinality sub-agg.
+    """
+    if client is None:
+        client = get_dc_client()
+    if site_names is None:
+        from app.core.config import get_settings
+        site_names = get_settings().sslvpn_sites_list
+    if not site_names:
+        return 0
+
+    body = {
+        "size": 0,
+        "query": {
+            "bool": {
+                "filter": [
+                    {
+                        "range": {
+                            "@timestamp": {
+                                "gte": gte_ms,
+                                "lte": lte_ms,
+                                "format": "epoch_millis",
+                            }
+                        }
+                    },
+                    {"terms": {"measurement_name.keyword": site_names}},  # Q-06: exact list
+                ]
+            }
+        },
+        "aggs": {
+            "active_users": {
+                "cardinality": {"field": "tag.username.keyword"}
+            }
+        },
+    }
+
+    resp = await client.search(index="telegraf-index*", body=body)
+    return resp["aggregations"]["active_users"]["value"]
+
+
+async def all_sslvpn_users_count_timeline(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    site_names: Optional[list[str]] = None,
+    interval: str = "1h",
+) -> dict[int, int]:
+    """
+    Q-05: date_histogram with cardinality sub-agg for user count over time.
+    Returns dict mapping timestamp (ms) -> user count.
+    """
+    if client is None:
+        client = get_dc_client()
+    if site_names is None:
+        from app.core.config import get_settings
+        site_names = get_settings().sslvpn_sites_list
+    if not site_names:
+        return {}
+
+    body = {
+        "size": 0,
+        "query": {
+            "bool": {
+                "filter": [
+                    {"range": {"@timestamp": {"gte": gte_ms, "lte": lte_ms, "format": "epoch_millis"}}},
+                    {"terms": {"measurement_name.keyword": site_names}},
+                ]
+            }
+        },
+        "aggs": {
+            "over_time": {
+                "date_histogram": {"field": "@timestamp", "calendar_interval": interval},
+                "aggs": {"active_users": {"cardinality": {"field": "tag.username.keyword"}}},
+            }
+        },
+    }
+
+    resp = await client.search(index="telegraf-index*", body=body)
+    return {
+        int(bucket["key"]): int(bucket["doc_count"])
+        for bucket in resp["aggregations"]["over_time"]["buckets"]
+    }
+
+
+async def active_sslvpn_users(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,
     lte_ms: int = 0,
@@ -78,10 +167,7 @@ async def active_sslvpn_users_detail(
         },
         "aggs": {
             "by_user": {
-                "terms": {
-                    "field": "tag.username.keyword",
-                    "size": 500,  # Q-02
-                },
+                "terms": {"field": "tag.username.keyword", "size": 500},  # Q-02
                 "aggs": {
                     "latest": {
                         "top_hits": {
@@ -128,50 +214,56 @@ async def active_sslvpn_users_detail(
     return results
 
 
-async def all_sslvpn_users_count(
+async def user_bandwidth_timeline(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,
     lte_ms: int = 0,
+    username: str = "",
     site_names: Optional[list[str]] = None,
-) -> int:
+    interval: str = "5m",
+) -> list[dict]:
     """
-    Q-07: single query across all configured SSLVPN sites.
-    Uses terms agg on measurement_name + cardinality sub-agg.
+    Q-05: date_histogram with sum aggregation for bandwidth per user over time.
+    Returns list of {timestamp, bytes_in, bytes_out} points.
     """
     if client is None:
         client = get_dc_client()
-
     if site_names is None:
         from app.core.config import get_settings
         site_names = get_settings().sslvpn_sites_list
-
-    if not site_names:
-        return 0
+    if not site_names or not username:
+        return []
 
     body = {
         "size": 0,
         "query": {
             "bool": {
                 "filter": [
-                    {
-                        "range": {
-                            "@timestamp": {
-                                "gte": gte_ms,
-                                "lte": lte_ms,
-                                "format": "epoch_millis",
-                            }
-                        }
-                    },
-                    {"terms": {"measurement_name.keyword": site_names}},  # Q-06: exact list
+                    {"range": {"@timestamp": {"gte": gte_ms, "lte": lte_ms, "format": "epoch_millis"}}},
+                    {"terms": {"measurement_name.keyword": site_names}},
+                    {"term": {"tag.username.keyword": username}},
                 ]
             }
         },
         "aggs": {
-            "active_users": {
-                "cardinality": {"field": "tag.username.keyword"}
+            "over_time": {
+                "date_histogram": {"field": "@timestamp", "calendar_interval": interval},
+                "aggs": {
+                    "bytes_in": {"sum": {"field": "sslvpn.bytes_received"}},
+                    "bytes_out": {"sum": {"field": "sslvpn.bytes_sent"}},
+                },
             }
         },
     }
 
     resp = await client.search(index="telegraf-index*", body=body)
-    return resp["aggregations"]["active_users"]["value"]
+    results = []
+    for bucket in resp["aggregations"]["over_time"]["buckets"]:
+        aggs = bucket.get("bytes_in", {})
+        aggs_out = bucket.get("bytes_out", {})
+        results.append({
+            "timestamp": int(bucket["key"]),
+            "bytes_in": int(aggs.get("value", 0) or 0),
+            "bytes_out": int(aggs_out.get("value", 0) or 0),
+        })
+    return results
