@@ -82,10 +82,9 @@ async def get_active_sessions(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
-    """Get only users who are currently active (WS connected or have valid refresh tokens)."""
+    """Get only users who are currently active (have valid refresh tokens)."""
     from datetime import datetime, timezone
     from app.db.models import RefreshToken
-    from app.main import alert_ws_manager
 
     now = datetime.now(timezone.utc)
 
@@ -99,11 +98,8 @@ async def get_active_sessions(
     )
     active_user_ids = (await db.execute(stmt)).scalars().all()
 
-    # Also include any user currently connected via WebSocket
-    ws_connected_ids = set(alert_ws_manager._connections.keys())
-
-    # Union of both sets
-    target_user_ids = set(active_user_ids) | set(ws_connected_ids)
+    # Users are considered "logged in" if they have at least one valid refresh token
+    target_user_ids = set(active_user_ids)
     if not target_user_ids:
         return APIResponse.ok(data=[])
 
@@ -126,8 +122,6 @@ async def get_active_sessions(
         )
         tokens = tokens_result.scalars().all()
 
-        ws_connected = alert_ws_manager.is_connected(user.id)
-
         sessions = []
         for token in tokens:
             sessions.append({
@@ -148,7 +142,6 @@ async def get_active_sessions(
             "last_login": user.last_login.isoformat() if user.last_login else None,
             "sessions": sessions,
             "active_session_count": len(sessions),
-            "ws_connected": ws_connected,
         })
 
     return APIResponse.ok(data=sessions_data)

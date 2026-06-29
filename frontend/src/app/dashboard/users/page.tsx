@@ -39,7 +39,6 @@ interface SessionUser {
   last_login: string | null;
   sessions: SessionInfo[];
   active_session_count: number;
-  ws_connected: boolean;
 }
 
 export default function UsersPage() {
@@ -291,7 +290,6 @@ export default function UsersPage() {
                         <th className="text-left py-2 px-4">IP Address</th>
                         <th className="text-left py-2 px-4">Logged In</th>
                         <th className="text-left py-2 px-4">Expires</th>
-                        <th className="text-left py-2 px-4">WebSocket</th>
                         <th className="text-right py-2 px-4">Action</th>
                       </tr>
                     </thead>
@@ -306,23 +304,9 @@ export default function UsersPage() {
                               {idx === 0 && (
                                 <>
                                   <td className="py-2 px-4" rowSpan={su.sessions.length}>
-                                    <span
-                                      className={cn(
-                                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium",
-                                        su.ws_connected
-                                          ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
-                                          : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
-                                      )}
-                                    >
-                                      <span
-                                        className={cn(
-                                          "w-1.5 h-1.5 rounded-full",
-                                          su.ws_connected
-                                            ? "bg-blue-500"
-                                            : "bg-emerald-500"
-                                        )}
-                                      />
-                                      {su.ws_connected ? "Online" : "Active"}
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                      Active
                                     </span>
                                   </td>
                                   <td className="py-2 px-4" rowSpan={su.sessions.length}>
@@ -347,16 +331,6 @@ export default function UsersPage() {
                               </td>
                               <td className="py-2 px-4 text-xs text-muted-foreground">
                                 {sess.expires_at ? new Date(sess.expires_at).toLocaleString() : "—"}
-                              </td>
-                              <td className="py-2 px-4">
-                                {idx === 0 && su.ws_connected ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                                    Connected
-                                  </span>
-                                ) : idx === 0 ? (
-                                  <span className="text-xs text-muted-foreground">—</span>
-                                ) : null}
                               </td>
                               <td className="py-2 px-4 text-right">
                                 {sess.is_valid && (
