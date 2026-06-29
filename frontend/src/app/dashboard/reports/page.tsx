@@ -72,6 +72,9 @@ const SECTIONS: Record<string, { id: string; label: string }[]> = {
   "R-03": [
     { id: "ssl_vpn", label: "SSL VPN" },
     { id: "ipsec_vpn", label: "IPsec VPN" },
+    { id: "user_count", label: "User Count Timeline" },
+    { id: "active_users", label: "Active Users Table" },
+    { id: "bandwidth_detail", label: "Bandwidth Detail" },
   ],
   "R-04": [
     { id: "latency", label: "Latency" },
