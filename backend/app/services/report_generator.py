@@ -822,22 +822,31 @@ async def build_report_context(
                 ipsec_counts_raw = await ipsec_qb.active_ipsec_users_count_timeline(
                     gte_ms=gte_ms, lte_ms=lte_ms, interval="1h",
                 )
-                # Merge timelines into list of dicts for stacked chart
+                # Merge timelines into list of dicts for timeseries chart (series_key="protocol")
                 all_ts = set(ssl_counts_raw.keys()) | set(ipsec_counts_raw.keys())
-                user_count_timeline = [
-                    {
-                        "timestamp": ts,
-                        "ssl_vpn": ssl_counts_raw.get(ts, 0),
-                        "ipsec_vpn": ipsec_counts_raw.get(ts, 0),
-                    }
-                    for ts in sorted(all_ts)
-                ]
+                user_count_timeline = []
+                for ts in sorted(all_ts):
+                    ssl_val = ssl_counts_raw.get(ts, 0)
+                    ipsec_val = ipsec_counts_raw.get(ts, 0)
+                    if ssl_val > 0:
+                        user_count_timeline.append({
+                            "timestamp": ts,
+                            "protocol": "SSL VPN",
+                            "value": ssl_val,
+                        })
+                    if ipsec_val > 0:
+                        user_count_timeline.append({
+                            "timestamp": ts,
+                            "protocol": "IPsec VPN",
+                            "value": ipsec_val,
+                        })
                 if user_count_timeline:
                     charts["user_count_timeline"] = await _run_chart(
-                        render_stacked_timeseries_chart, user_count_timeline,
+                        render_timeseries_chart, user_count_timeline,
                         title="VPN User Count Over Time",
-                        series_keys=["ssl_vpn", "ipsec_vpn"],
-                        colors=["#2563eb", "#ef4444"],
+                        ylabel="Users",
+                        series_key="protocol",
+                        width=800, height=400,
                     )
             except Exception as exc:
                 logger.debug("VPN user count timeline not available: %s", exc)

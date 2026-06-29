@@ -919,7 +919,7 @@ body {
       .active_users — list of {username, protocol, device, login_time, bytes_in, bytes_out}
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_vpn_users(data) %}
-{% set has_content = data.ssl_vpn_count is defined or data.ipsec_vpn_count is defined or data.vpn_timeline or data.user_count_timeline %}
+{% set has_content = data.ssl_vpn_count is defined or data.ipsec_vpn_count is defined or data.vpn_timeline or data.user_count_timeline or data.active_users %}
 {% if has_content %}
 
 <div class="page-break"></div>
