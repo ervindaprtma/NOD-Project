@@ -28,8 +28,9 @@ class ReportJobStatus(BaseModel):
     job_id: str = Field(validation_alias="id")
     report_type: str
     output_format: str
-    status: str  # pending, running, completed, failed
+    status: str  # pending, running, completed, failed, expired
     file_size_bytes: Optional[int] = None
+    file_deleted: bool = False
     error_message: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None

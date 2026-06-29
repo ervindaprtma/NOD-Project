@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/v1/reports", tags=["Reports"])
 
 REPORT_OUTPUT_DIR = Path("reports/output")
 REPORT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-REPORT_TTL_HOURS = 1  # Purge after 1 hour
+REPORT_TTL_HOURS = 72  # Auto-cleanup after 72 hours
 
 
 @router.get("", response_model=APIResponse[list[ReportJobStatus]])
@@ -119,7 +119,11 @@ async def download_report(
     if job.status != "completed" or not job.file_path:
         raise HTTPException(status_code=400, detail="Report not ready or generation failed.")
 
+    # Check file existence and mark as deleted if missing
     if not os.path.exists(job.file_path):
+        if not job.file_deleted:
+            job.file_deleted = True
+            await db.commit()
         raise HTTPException(status_code=404, detail="Report file expired or not found.")
 
     media_types = {
@@ -160,7 +164,11 @@ async def preview_report(
     if job.status != "completed" or not job.file_path:
         raise HTTPException(status_code=400, detail="Report not ready or generation failed.")
 
+    # Check file existence and mark as deleted if missing
     if not os.path.exists(job.file_path):
+        if not job.file_deleted:
+            job.file_deleted = True
+            await db.commit()
         raise HTTPException(status_code=404, detail="Report file expired or not found.")
 
     if job.output_format != "html":
@@ -442,3 +450,68 @@ async def delete_schedule(
     await db.delete(schedule)
     await db.commit()
     return APIResponse.ok(data={"id": str(schedule_id), "status": "deleted"})
+
+
+# ─────────────────────────────────────────────────────────────────
+# Report Cleanup (P9)
+# ─────────────────────────────────────────────────────────────────
+
+@router.post("/cleanup", response_model=APIResponse[dict])
+async def cleanup_expired_reports(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("admin")),
+):
+    """
+    Delete expired report files and clean up database records.
+    Runs automatically or on-demand.
+    """
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(ReportJob).where(
+            ReportJob.expires_at < now
+        )
+    )
+    expired_jobs = result.scalars().all()
+
+    deleted_count = 0
+    errors = []
+
+    for job in expired_jobs:
+        try:
+            if job.file_path and os.path.exists(job.file_path):
+                os.remove(job.file_path)
+            await db.delete(job)
+            deleted_count += 1
+        except Exception as e:
+            errors.append({"job_id": str(job.id), "error": str(e)})
+
+    await db.commit()
+
+    return APIResponse.ok(data={
+        "deleted_count": deleted_count,
+        "remaining_errors": errors,
+        "message": f"Cleaned up {deleted_count} expired reports." if not errors else f"Cleaned {deleted_count} reports with {len(errors)} errors."
+    })
+
+
+# ─────────────────────────────────────────────────────────────────
+# Utility: Check file existence for all completed reports
+# ─────────────────────────────────────────────────────────────────
+
+def _check_report_files(db_session, logger):
+    """Check file existence for completed reports and update file_deleted flag."""
+    import asyncio
+    async def _check():
+        result = await db_session.execute(
+            select(ReportJob).where(
+                ReportJob.status == "completed",
+                ReportJob.file_deleted == False,
+            )
+        )
+        jobs = result.scalars().all()
+        for job in jobs:
+            if job.file_path and not os.path.exists(job.file_path):
+                job.file_deleted = True
+                logger.warning(f"Report file missing: {job.file_path}")
+        await db_session.commit()
+    return asyncio.create_task(_check())

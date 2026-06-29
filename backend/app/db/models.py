@@ -280,7 +280,7 @@ class ReportJob(Base):
     )  # pdf, html, docx
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"
-    )  # pending, running, completed, failed
+    )  # pending, running, completed, failed, expired
     created_by: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
     )
@@ -292,6 +292,7 @@ class ReportJob(Base):
     )
     file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     file_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    file_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, comment="True if file was deleted from storage")
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
