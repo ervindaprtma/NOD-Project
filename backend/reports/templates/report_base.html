@@ -941,11 +941,18 @@ body {
 {% endif %}
 
 {% if data.active_users %}
-<div class="card">
+<div class="table-card">
     <h3>Active VPN Users</h3>
     <table>
         <thead>
-            <tr><th>User</th><th>Protocol</th><th>Device</th><th>Login Time</th><th class="num-col">Bytes In</th><th class="num-col">Bytes Out</th></tr>
+            <tr>
+                <th>User</th>
+                <th>Protocol</th>
+                <th>Device</th>
+                <th>Login Time</th>
+                <th class="num-col">Bytes In</th>
+                <th class="num-col">Bytes Out</th>
+            </tr>
         </thead>
         <tbody>
         {% for u in data.active_users[:20] %}
