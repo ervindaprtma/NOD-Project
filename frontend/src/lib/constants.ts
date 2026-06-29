@@ -81,6 +81,56 @@ export function formatPercent(value: number): string {
 }
 
 /**
+ * Cross-day aware bucket label formatter for traffic charts (WIB / Asia/Jakarta).
+ *
+ * Returns a string suitable for the x-axis of AreaChart/StackedBarChart.
+ * - Inside the same WIB day, returns only the time portion: "09:00:00".
+ * - On the FIRST bucket of a new WIB day, prepends a date prefix so users
+ *   can distinguish "17 Aug 09:00:00" from "18 Aug 09:00:00".
+ *
+ * @param ms              Epoch milliseconds of the bucket.
+ * @param prevMs          Epoch milliseconds of the previous bucket (or null for the first).
+ * @param includeSeconds  Include HH:MM:SS (true) or just HH:MM (false).
+ *
+ * Example output for a 24h cross-day window:
+ *   "17 Aug 09:00:00", "10:00:00", ..., "23:00:00",
+ *   "18 Aug 00:00:00", "01:00:00", ..., "09:00:00"
+ */
+export function formatBucketLabelWIB(
+  ms: number,
+  prevMs: number | null,
+  includeSeconds: boolean = true,
+): string {
+  if (!ms || isNaN(ms)) return "";
+  const cur = new Date(ms);
+  const prev = prevMs ? new Date(prevMs) : null;
+
+  const timeOpts: Intl.DateTimeFormatOptions = {
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(includeSeconds ? { second: "2-digit" } : {}),
+    hour12: false,
+    timeZone: "Asia/Jakarta",
+  };
+
+  // Compare dates in WIB by formatting YYYY-MM-DD in Jakarta.
+  const dateKey = (d: Date) =>
+    d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); // en-CA → YYYY-MM-DD
+
+  const crossedDay = !prev || dateKey(cur) !== dateKey(prev);
+
+  const time = cur.toLocaleTimeString("en-US", timeOpts);
+  if (!crossedDay) return time;
+
+  const date = cur.toLocaleDateString("en-US", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "Asia/Jakarta",
+  });
+  return `${date} ${time}`;
+}
+
+/**
  * Shared Radix TabsTrigger className.
  * Active tab: white card with shadow on gray container.
  * Inactive tab: gray text with hover highlight.

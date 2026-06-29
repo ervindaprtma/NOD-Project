@@ -12,6 +12,7 @@ import {
   formatBytes,
   getDefaultTimeRange,
   TAB_TRIGGER_CLASS,
+  formatBucketLabelWIB,
 } from "@/lib/constants";
 import type {
   TrafficFlowSummary,
@@ -203,6 +204,7 @@ export default function TrafficPage() {
   // ── Derived data for charts ──
   const throughputTimeline = useMemo(() => {
     if (!chart?.chart_data) return [];
+    let prevMs: number | null = null;
     return chart.chart_data.map((row: Record<string, any>) => {
       let totalBytes = 0;
       for (const app of chart.app_names || []) {
@@ -210,21 +212,22 @@ export default function TrafficPage() {
       }
       const ms = row.timestampMs || (row.timestamp ? new Date(row.timestamp).getTime() : 0);
       const mbps = parseFloat(((totalBytes * 8) / bucketSeconds / 1_000_000).toFixed(2));
-      return {
-        timestamp: ms ? new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Jakarta" }) : row.timestamp,
-        mbps,
-      };
+      const label = ms ? formatBucketLabelWIB(ms, prevMs) : row.timestamp;
+      prevMs = ms || prevMs;
+      return { timestamp: label, mbps };
     });
   }, [chart, bucketSeconds]);
 
   const stackedBarData = useMemo(() => {
     if (!chart?.chart_data || !chart?.app_names) return { data: [], appNames: [] };
     const appNames = chart.app_names.filter(a => a !== "app-0").slice(0, 50);
+    let prevMs: number | null = null;
     const data = chart.chart_data.map((row: Record<string, any>) => {
       const ms = row.timestampMs || (row.timestamp ? new Date(row.timestamp).getTime() : 0);
       const entry: Record<string, any> = {
-        timestamp: ms ? new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Jakarta" }) : row.timestamp,
+        timestamp: ms ? formatBucketLabelWIB(ms, prevMs) : row.timestamp,
       };
+      prevMs = ms || prevMs;
       for (const app of appNames) {
         const bytes = Number(row[app]) || 0;
         entry[app] = parseFloat(((bytes * 8) / bucketSeconds / 1_000_000).toFixed(2));

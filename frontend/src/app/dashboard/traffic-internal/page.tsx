@@ -5,7 +5,7 @@ import useSWR from "swr";
 import * as d3Sankey from "d3-sankey";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, getDefaultTimeRange, TAB_TRIGGER_CLASS } from "@/lib/constants";
+import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, getDefaultTimeRange, TAB_TRIGGER_CLASS, formatBucketLabelWIB } from "@/lib/constants";
 import type { TrafficInternalSummary, TrafficInternalChartData, TrafficInboundTableData, TrafficInboundTableRecord, SankeyResponse } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { AreaChart } from "@/components/charts/AreaChart";
@@ -91,12 +91,15 @@ export default function TrafficInternalPage() {
 
   const throughputTimeline = useMemo(() => {
     if (!chart?.chart_data) return [];
+    let prevMs: number | null = null;
     return chart.chart_data.map((row: Record<string, any>) => {
       let totalBytes = 0;
       for (const svc of chart.service_names || []) totalBytes += Number(row[svc]) || 0;
       const ms = row.timestampMs || (row.timestamp ? new Date(row.timestamp).getTime() : 0);
       const mbps = parseFloat(((totalBytes * 8) / bucketSeconds / 1_000_000).toFixed(2));
-      return { timestamp: ms ? new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Jakarta" }) : row.timestamp, mbps };
+      const label = ms ? formatBucketLabelWIB(ms, prevMs) : row.timestamp;
+      prevMs = ms || prevMs;
+      return { timestamp: label, mbps };
     });
   }, [chart, bucketSeconds]);
 
@@ -221,7 +224,7 @@ export default function TrafficInternalPage() {
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
                 <h2 className="text-lg font-semibold mb-1">Service Throughput — {bucketSeconds}s Buckets</h2>
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText /> : chart?.chart_data?.length ? (
-                  <StackedBarChart data={chart.chart_data.map((row) => { const entry: Record<string, any> = { timestamp: row.timestampMs || row.timestamp }; for (const svc of chart.service_names || []) { entry[svc] = parseFloat(((Number(row[svc]) || 0) * 8 / bucketSeconds / 1_000_000).toFixed(2)); } return entry; })} serviceNames={chart.service_names || []} />
+                  <StackedBarChart data={(() => { let p: number | null = null; return chart.chart_data.map((row) => { const ms = typeof row.timestampMs === "number" ? row.timestampMs : (row.timestamp ? new Date(row.timestamp).getTime() : 0); const entry: Record<string, any> = { timestamp: ms ? formatBucketLabelWIB(ms, p) : row.timestamp }; p = ms || p; for (const svc of chart.service_names || []) { entry[svc] = parseFloat(((Number(row[svc]) || 0) * 8 / bucketSeconds / 1_000_000).toFixed(2)); } return entry; }); })()} serviceNames={chart.service_names || []} />
                 ) : <EmptyState message="No service throughput data" />}
               </div>
             </div>
@@ -340,7 +343,7 @@ function FlowRecordsTable({ records }: { records: TrafficInboundTableRecord[] })
 }
 
 function appColor(index: number, total: number): string { const hue = (index * 360) / total, sat = 70 + (index % 3) * 10, lit = 45 + (index % 4) * 8; return `hsl(${hue}, ${sat}%, ${lit}%)`; }
-function formatStackTs(row: Record<string, any>): string { const ts = row.timestampMs || row.timestamp; if (!ts) return ""; const ms = typeof ts === "number" ? ts : new Date(ts).getTime(); if (isNaN(ms)) return String(ts).slice(-8) || ""; return new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Jakarta" }); }
+function formatStackTs(row: Record<string, any>, prevRow: Record<string, any> | null = null): string { const ts = row.timestampMs || row.timestamp; if (!ts) return ""; const ms = typeof ts === "number" ? ts : new Date(ts).getTime(); if (isNaN(ms)) return String(ts).slice(-8) || ""; const prevTs = prevRow ? (prevRow.timestampMs || prevRow.timestamp) : null; const prevMs = typeof prevTs === "number" ? prevTs : (prevTs ? new Date(prevTs).getTime() : null); return formatBucketLabelWIB(ms, (prevMs && !isNaN(prevMs)) ? prevMs : null); }
 
 function StackedBarChart({ data, serviceNames }: { data: Record<string, any>[]; serviceNames: string[] }) {
   const [hoveredBar, setHoveredBar] = useState<{ barIndex: number; sBreakdown: { svc: string; mbps: number; color: string }[]; x: number } | null>(null);
@@ -356,7 +359,7 @@ function StackedBarChart({ data, serviceNames }: { data: Record<string, any>[]; 
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420 }}>
       {yTickValues.map((v) => <g key={v}><line x1={pad.left} x2={W - pad.right} y1={yScale(v)} y2={yScale(v)} className="stroke-muted-foreground/15" strokeWidth={0.5} /><text x={pad.left - 6} y={yScale(v) + 4} textAnchor="end" className="text-[10px] fill-muted-foreground">{v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v >= 0.01 ? v.toFixed(2) : v.toFixed(4)}</text></g>)}
       {data.map((row, i) => { const x = xScale(i); let yOff = yScale(0); return <g key={i}>{serviceNames.map((svc) => { const mbps = Number(row[svc]) || 0; if (mbps <= 0) return null; const barH = (mbps / maxTotal) * plotH, actualY = yOff - barH; const el = <rect key={svc} x={x} y={actualY} width={Math.max(1, barWidth - barGap)} height={Math.max(1, barH)} fill={colorMap[svc]} className="cursor-pointer transition-opacity hover:opacity-80" onMouseEnter={(e) => { const bd = serviceNames.filter((s) => (Number(row[s]) || 0) > 0).map((s) => ({ svc: s, mbps: Number(row[s]) || 0, color: colorMap[s] })).sort((a, b) => b.mbps - a.mbps); const rect = (e.target as SVGRectElement).getBoundingClientRect(); setHoveredBar({ barIndex: i, sBreakdown: bd, x: rect.left + rect.width / 2 }); }} onMouseLeave={() => setHoveredBar(null)} />; yOff = actualY; return el; })}</g>; })}
-      {data.map((row, i) => { if (i % xLabelEvery !== 0 && i !== data.length - 1) return null; return <text key={i} x={xScale(i) + barWidth / 2} y={H - pad.bottom + 16} textAnchor="middle" className="text-[9px] fill-muted-foreground">{formatStackTs(row)}</text>; })}
+      {data.map((row, i) => { if (i % xLabelEvery !== 0 && i !== data.length - 1) return null; return <text key={i} x={xScale(i) + barWidth / 2} y={H - pad.bottom + 16} textAnchor="middle" className="text-[9px] fill-muted-foreground">{formatStackTs(row, i > 0 ? data[i - 1] : null)}</text>; })}
       <text x={12} y={H / 2} textAnchor="middle" className="text-[10px] fill-muted-foreground" transform={`rotate(-90, 12, ${H / 2})`}>Mbps</text>
     </svg>
     {hoveredBar && <div className="fixed z-50 bg-card border rounded-lg shadow-lg p-3 text-xs pointer-events-none" style={{ left: Math.min(hoveredBar.x, window.innerWidth - 260), top: 60, maxWidth: 250 }}>

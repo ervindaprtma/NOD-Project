@@ -288,9 +288,32 @@ def render_timeseries_chart(
     height: int = 400,
     tz: Optional[timezone] = None,
 ) -> str:
-    """Render a timeseries line chart using Plotly. Returns base64 PNG."""
+    """Render a timeseries line chart using Plotly. Returns base64 PNG.
+
+    When tz is provided, the x-axis uses a cross-day aware tick formatter:
+    hour-only inside a day, "DD MMM HH:MM" on the first tick of a new day
+    in the chosen timezone, "DD MMM" for week+ ranges.
+    """
+    # Cross-day aware x-axis tick formatting (Plotly tickformatstops)
+    # - 1h–24h range → hour precision (clean intra-day)
+    # - 1d–7d range   → date + hour (clear cross-day boundaries)
+    # - 1w–1mo range  → date only (avoids crowding)
+    # - default       → fallback "%d %b %H:%M" for any unclassified range
+    cross_day_xaxis = (
+        dict(
+            tickformatstops=[
+                dict(dtickrange=[3600000, 86400000], value="%H:%M"),
+                dict(dtickrange=[86400000, 604800000], value="%d %b\n%H:%M"),
+                dict(dtickrange=[604800000, "M1"], value="%d %b"),
+            ],
+            tickformat="%d %b %H:%M",
+        )
+        if tz is not None
+        else None
+    )
+
     fig = go.Figure()
-    fig.update_layout(
+    layout_kwargs: dict = dict(
         title=dict(text=title, font=dict(size=13), x=0.5),
         yaxis=dict(title=ylabel, title_font=dict(size=10)),
         margin=dict(l=10, r=20, t=40, b=40),
@@ -299,6 +322,9 @@ def render_timeseries_chart(
         hovermode=False,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
+    if cross_day_xaxis is not None:
+        layout_kwargs["xaxis"] = cross_day_xaxis
+    fig.update_layout(**layout_kwargs)
 
     if series_key:
         series: dict[str, list[tuple]] = {}
@@ -342,12 +368,26 @@ def render_stacked_timeseries_chart(
     height: int = 400,
     tz: Optional[timezone] = None,
 ) -> str:
-    """Render a stacked timeseries line chart using Plotly. Returns base64 PNG."""
+    """Render a stacked timeseries line chart using Plotly. Returns base64 PNG.
+
+    When tz is provided, uses the same cross-day aware tick formatter as
+    render_timeseries_chart.
+    """
     fig = go.Figure()
+    xaxis_kwargs: dict = dict(title_font=dict(size=10))
+    if tz is not None:
+        xaxis_kwargs.update(
+            tickformatstops=[
+                dict(dtickrange=[3600000, 86400000], value="%H:%M"),
+                dict(dtickrange=[86400000, 604800000], value="%d %b\n%H:%M"),
+                dict(dtickrange=[604800000, "M1"], value="%d %b"),
+            ],
+            tickformat="%d %b %H:%M",
+        )
     fig.update_layout(
         title=dict(text=title, font=dict(size=13), x=0.5),
         yaxis=dict(title="Users", title_font=dict(size=10)),
-        xaxis=dict(title_font=dict(size=10)),
+        xaxis=xaxis_kwargs,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=10, r=20, t=40, b=40),
         height=height,
@@ -757,18 +797,21 @@ async def build_report_context(
                     render_timeseries_chart, all_cpu,
                     title="CPU Usage Over Time", ylabel="CPU %",
                     series_key="device",
+                    tz=ZoneInfo("Asia/Jakarta"),
                 )
             if all_mem:
                 charts["mem_timeline"] = await _run_chart(
                     render_timeseries_chart, all_mem,
                     title="Memory Usage Over Time", ylabel="Memory %",
                     series_key="device",
+                    tz=ZoneInfo("Asia/Jakarta"),
                 )
             if all_sessions:
                 charts["session_timeline"] = await _run_chart(
                     render_timeseries_chart, all_sessions,
                     title="Active Sessions Over Time", ylabel="Sessions",
                     series_key="device",
+                    tz=ZoneInfo("Asia/Jakarta"),
                 )
 
             # ── HA cluster status (DC only — DRC/Office are standalone)
