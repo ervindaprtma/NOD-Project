@@ -811,60 +811,67 @@ async def build_report_context(
             logger.warning("R-03: Office site selected but has no VPN session data.")
             vpn["warnings"] = ["Office site has no VPN session data available."]
 
+        # Determine current site for data scoping
+        current_site = site_list[0] if site_list else None
+        sslvpn_name = {
+            "Site_FGT-DC": "Site_FGT-DC_SSLVPN",
+            "Site_FGT-DRC": "Site_FGT-DRC_SSLVPN",
+        }.get(current_site, None) if current_site else None
+        has_sslvpn = (sslvpn_name is not None)
+        has_ipsec = (current_site == "Site_FGT-DRC")
+
         try:
             from app.opensearch import sslvpn as sslvpn_qb
             from app.opensearch import ipsec as ipsec_qb
 
-            # ── User Count Timeline (combined SSL + IPsec) ────────
-            # Query counts per time bucket for user count timeline chart
+            ssl_counts_raw: dict[int, int] = {}
+            ipsec_counts_raw: dict[int, int] = {}
+            ssl_users: list[dict] = []
+            ipsec_users: list[dict] = []
+            ssl_count: int = 0
+            ipsec_count: int = 0
+
+            # ── User Count Timeline (site-scoped) ────────────────
             try:
-                # Get SSL VPN user count timeline (returns dict[timestamp, count])
-                ssl_counts_raw = await sslvpn_qb.all_sslvpn_users_count_timeline(
-                    gte_ms=gte_ms, lte_ms=lte_ms,
-                    site_names=settings.sslvpn_sites_list,
-                    interval="1h",
-                )
-                # Get IPsec VPN user count timeline (returns dict[timestamp, count])
-                ipsec_counts_raw = await ipsec_qb.active_ipsec_users_count_timeline(
-                    gte_ms=gte_ms, lte_ms=lte_ms, interval="1h",
-                )
-                # Merge timelines into list of dicts for timeseries chart (series_key="protocol")
+                if has_sslvpn:
+                    ssl_counts_raw = await sslvpn_qb.all_sslvpn_users_count_timeline(
+                        gte_ms=gte_ms, lte_ms=lte_ms,
+                        site_names=[sslvpn_name],
+                        interval="1h",
+                    )
+                if has_ipsec:
+                    ipsec_counts_raw = await ipsec_qb.active_ipsec_users_count_timeline(
+                        gte_ms=gte_ms, lte_ms=lte_ms, interval="1h",
+                    )
+                # Merge timelines
                 all_ts = set(ssl_counts_raw.keys()) | set(ipsec_counts_raw.keys())
                 user_count_timeline = []
                 for ts in sorted(all_ts):
                     ssl_val = ssl_counts_raw.get(ts, 0)
                     ipsec_val = ipsec_counts_raw.get(ts, 0)
                     if ssl_val > 0:
-                        user_count_timeline.append({
-                            "timestamp": ts,
-                            "protocol": "SSL VPN",
-                            "value": ssl_val,
-                        })
+                        user_count_timeline.append({"timestamp": ts, "protocol": "SSL VPN", "value": ssl_val})
                     if ipsec_val > 0:
-                        user_count_timeline.append({
-                            "timestamp": ts,
-                            "protocol": "IPsec VPN",
-                            "value": ipsec_val,
-                        })
+                        user_count_timeline.append({"timestamp": ts, "protocol": "IPsec VPN", "value": ipsec_val})
                 if user_count_timeline:
                     charts["user_count_timeline"] = await _run_chart(
                         render_timeseries_chart, user_count_timeline,
-                        title="VPN User Count Over Time",
-                        ylabel="Users",
-                        series_key="protocol",
-                        width=800, height=400,
+                        title="VPN User Count Over Time", ylabel="Users",
+                        series_key="protocol", width=800, height=400,
                     )
             except Exception as exc:
                 logger.debug("VPN user count timeline not available: %s", exc)
 
-            # ── Active Users Table ─────────────────────────────────
-            ssl_users = await sslvpn_qb.active_sslvpn_users(
-                gte_ms=gte_ms, lte_ms=lte_ms,
-                site_name="Site_FGT-DC_SSLVPN",
-            )
-            ipsec_users = await ipsec_qb.active_ipsec_users_detail(
-                gte_ms=gte_ms, lte_ms=lte_ms,
-            )
+            # ── Active Users Table (site-scoped) ─────────────────
+            if has_sslvpn:
+                ssl_users = await sslvpn_qb.active_sslvpn_users(
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                    site_name=sslvpn_name,
+                )
+            if has_ipsec:
+                ipsec_users = await ipsec_qb.active_ipsec_users_detail(
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                )
 
             active_users = []
             for u in ssl_users[:50]:
@@ -898,35 +905,35 @@ async def build_report_context(
 
             vpn["active_users"] = active_users
 
-            # ── Bandwidth Detail (for first user if available) ─────
+            # ── Bandwidth Detail (site-scoped) ───────────────────
             if active_users:
                 first_user = active_users[0]["username"]
                 try:
-                    # Get bandwidth timeline for the selected user
                     user_bandwidth = await sslvpn_qb.user_bandwidth_timeline(
                         gte_ms=gte_ms, lte_ms=lte_ms,
                         username=first_user,
-                        site_names=settings.sslvpn_sites_list,
+                        site_names=[sslvpn_name] if sslvpn_name else None,
                         interval="5m",
                     )
                     if user_bandwidth:
                         charts["bandwidth_detail"] = await _run_chart(
                             render_timeseries_chart, user_bandwidth,
                             title=f"Bandwidth: {first_user}",
-                            ylabel="Bytes",
-                            series_key="device",
+                            ylabel="Bytes", series_key="device",
                         )
                 except Exception as exc:
                     logger.debug("User bandwidth detail not available: %s", exc)
 
-            # ── Summary Counts ───────────────────────────────────
-            ssl_count = await sslvpn_qb.all_sslvpn_users_count(
-                gte_ms=gte_ms, lte_ms=lte_ms,
-                site_names=settings.sslvpn_sites_list,
-            )
-            ipsec_count = await ipsec_qb.active_ipsec_users_count(
-                gte_ms=gte_ms, lte_ms=lte_ms,
-            )
+            # ── Summary Counts (site-scoped) ─────────────────────
+            if has_sslvpn:
+                ssl_count = await sslvpn_qb.all_sslvpn_users_count(
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                    site_names=[sslvpn_name],
+                )
+            if has_ipsec:
+                ipsec_count = await ipsec_qb.active_ipsec_users_count(
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                )
             vpn["ssl_vpn_count"] = ssl_count or 0
             vpn["ipsec_vpn_count"] = ipsec_count or 0
             vpn["total_vpn_count"] = (ssl_count or 0) + (ipsec_count or 0)
