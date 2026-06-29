@@ -320,6 +320,21 @@ body {
 .badge-info    { background: hsl(var(--info-bg));    color: hsl(var(--info-text)); }
 
 /* ══════════════════════════════════════════════════════════════════════
+   ALERT WARNING
+   ══════════════════════════════════════════════════════════════════════ */
+.alert-warning {
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-left: 4px solid #f59e0b;
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    font-size: 13px;
+    color: #92400e;
+    page-break-inside: avoid;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
    TABLE CARD
    ══════════════════════════════════════════════════════════════════════ */
 .table-card {
@@ -925,6 +940,12 @@ body {
 <div class="page-break"></div>
 <h2 class="section-title">VPN Users <span class="timeframe-badge">{{ time_range }}</span></h2>
 
+{% if data.warnings %}
+<div class="alert-warning">
+    <strong>⚠️ {{ data.warnings[0] }}</strong>
+</div>
+{% endif %}
+
 {% if data.total_vpn_count is defined or data.ssl_vpn_count is defined or data.ipsec_vpn_count is defined %}
 <div class="kpi-grid">
     {{ kpi_card('Total VPN Users', data.total_vpn_count | default(data.ssl_vpn_count | default(0) + data.ipsec_vpn_count | default(0)), 'info') }}
@@ -948,10 +969,11 @@ body {
             <tr>
                 <th>User</th>
                 <th>Protocol</th>
-                <th>Device</th>
-                <th>Login Time</th>
+                <th>Remote IP / Gateway</th>
+                <th>VPN IP / Assigned</th>
                 <th class="num-col">Bytes In</th>
                 <th class="num-col">Bytes Out</th>
+                <th>Device</th>
             </tr>
         </thead>
         <tbody>
@@ -959,10 +981,11 @@ body {
             <tr>
                 <td>{{ u.username }}</td>
                 <td>{{ u.protocol }}</td>
-                <td>{{ u.device | default('—') }}</td>
-                <td>{{ u.login_time | default('—') }}</td>
+                <td>{{ u.remote_ip | default(u.remote_gw | default('—')) }}</td>
+                <td>{{ u.vpn_ip | default(u.assigned_ip | default('—')) }}</td>
                 <td class="num-col">{{ bytes_human(u.bytes_in) }}</td>
                 <td class="num-col">{{ bytes_human(u.bytes_out) }}</td>
+                <td>{{ u.device | default('—') }}</td>
             </tr>
         {% endfor %}
         </tbody>

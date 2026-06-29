@@ -805,6 +805,12 @@ async def build_report_context(
     # ── R-03: VPN Users ─────────────────────────────────────────────
     if report_type in ("R-03", "R-08") and (not sections or "vpn_users" in sections):
         vpn: dict[str, Any] = {}
+
+        # Warn if Office site is selected (no VPN data available)
+        if "Site_FGT_Office" in site_list:
+            logger.warning("R-03: Office site selected but has no VPN session data.")
+            vpn["warnings"] = ["Office site has no VPN session data available."]
+
         try:
             from app.opensearch import sslvpn as sslvpn_qb
             from app.opensearch import ipsec as ipsec_qb
@@ -854,7 +860,7 @@ async def build_report_context(
             # ── Active Users Table ─────────────────────────────────
             ssl_users = await sslvpn_qb.active_sslvpn_users(
                 gte_ms=gte_ms, lte_ms=lte_ms,
-                site_names=settings.sslvpn_sites_list,
+                site_name="Site_FGT-DC_SSLVPN",
             )
             ipsec_users = await ipsec_qb.active_ipsec_users_detail(
                 gte_ms=gte_ms, lte_ms=lte_ms,
@@ -866,18 +872,28 @@ async def build_report_context(
                     "username": u.get("username", "—"),
                     "protocol": "SSL VPN",
                     "device": u.get("device", "—"),
-                    "login_time": u.get("login_time", u.get("login_at", "—")),
-                    "bytes_in": u.get("bytes_received", u.get("bytes_rx", 0)),
-                    "bytes_out": u.get("bytes_sent", u.get("bytes_tx", 0)),
+                    "remote_ip": u.get("remote_ip", "—"),
+                    "vpn_ip": u.get("vpn_ip", "—"),
+                    "bytes_in": u.get("bytes_in", 0),
+                    "bytes_out": u.get("bytes_out", 0),
                 })
             for u in ipsec_users[:50]:
+                tunnel_sec = u.get("tunnel_lifetime_sec", 0)
+                if tunnel_sec:
+                    hours, remainder = divmod(int(tunnel_sec), 3600)
+                    minutes = remainder // 60
+                    tunnel_str = f"{hours}h {minutes}m" if hours else f"{minutes}m"
+                else:
+                    tunnel_str = "—"
                 active_users.append({
                     "username": u.get("username", "—"),
                     "protocol": "IPsec VPN",
                     "device": u.get("device", "—"),
-                    "login_time": u.get("tunnel_lifetime_sec", 0),
+                    "remote_gw": u.get("remote_gw_ip", "—"),
+                    "assigned_ip": u.get("assigned_ip", "—"),
                     "bytes_in": u.get("bytes_in", 0),
                     "bytes_out": u.get("bytes_out", 0),
+                    "tunnel_duration": tunnel_str,
                 })
 
             vpn["active_users"] = active_users
