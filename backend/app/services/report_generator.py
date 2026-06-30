@@ -218,6 +218,41 @@ def _interval_to_seconds(interval: str) -> int:
     return val * mapping.get(unit, 60)
 
 
+def _compute_throughput_timeline(
+    chart_rows: list[dict],
+    bucket_seconds: int,
+    label_keys: tuple[str, ...] = ("app_names", "service_names"),
+) -> list[dict]:
+    """Convert raw flow_chart buckets into Mbps-per-bucket for a line chart.
+
+    Mirrors the frontend's `throughputTimeline` derivation for the
+    matching dashboard page (Traffic Internet / Inbound / Internal).
+    Each input row is `{"timestamp": ms, "@app_or_service": bytes, ...}`
+    — we sum all per-row byte columns and apply the same
+    `Mbps = bytes * 8 / bucket_seconds / 1_000_000` formula.
+
+    Args:
+        chart_rows:    list of dicts from traffic_*.flow_chart()["chart_data"]
+        bucket_seconds: bucket size used in the source aggregation
+        label_keys:    not used by R-05/R-06 but kept for forward-compat
+
+    Returns:
+        list of {"timestamp", "mbps"} dicts ready for render_timeseries_chart.
+    """
+    out = []
+    for row in chart_rows or []:
+        ts = row.get("timestampMs") or row.get("timestamp")
+        total = 0
+        for k, v in row.items():
+            if k in ("timestamp", "timestampMs"):
+                continue
+            if isinstance(v, (int, float)):
+                total += int(v)
+        mbps = (total * 8) / bucket_seconds / 1_000_000 if bucket_seconds else 0.0
+        out.append({"timestamp": ts, "mbps": round(mbps, 2)})
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # 2. CHART RENDERING HELPERS (Plotly → Base64 PNG)
 # ══════════════════════════════════════════════════════════════════════════
@@ -1118,6 +1153,29 @@ async def build_report_context(
                     )
                     site_dict: dict[str, Any] = {}
 
+                    # Throughput Timeline — mirror dashboard Traffic Inbound page
+                    # (uses same `flow_chart` aggregation + per-bucket Mbps math).
+                    try:
+                        bucket_seconds = _interval_to_seconds("15m")
+                        chart_res = await ti_qb.flow_chart(
+                            gte_ms=gte_ms, lte_ms=lte_ms,
+                            site_name=site, bucket_seconds=bucket_seconds,
+                            path_filter="inbound-vip",
+                        )
+                        tp_mbps = _compute_throughput_timeline(
+                            chart_res.get("chart_data", []),
+                            bucket_seconds,
+                        )
+                        if tp_mbps:
+                            site_dict["throughput_timeline"] = await _run_chart(
+                                render_timeseries_chart, tp_mbps,
+                                title=f"Inbound Throughput Over Time — {_site_label(site)}",
+                                ylabel="Throughput (Mbps)",
+                                tz=ZoneInfo("Asia/Jakarta"),
+                            )
+                    except Exception as exc:
+                        logger.debug("R-05 throughput timeline failed for %s: %s", site, exc)
+
                     if sd.get("top_services"):
                         max_val = max(
                             s["total_bytes"] for s in sd["top_services"][:10]
@@ -1214,6 +1272,29 @@ async def build_report_context(
                         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
                     )
                     site_dict: dict[str, Any] = {}
+
+                    # Throughput Timeline — mirror dashboard Traffic Internal page
+                    # (uses same `flow_chart` aggregation + per-bucket Mbps math).
+                    try:
+                        bucket_seconds = _interval_to_seconds("15m")
+                        chart_res = await tint_qb.flow_chart(
+                            gte_ms=gte_ms, lte_ms=lte_ms,
+                            site_name=site, bucket_seconds=bucket_seconds,
+                            traffic_path="all",
+                        )
+                        tp_mbps = _compute_throughput_timeline(
+                            chart_res.get("chart_data", []),
+                            bucket_seconds,
+                        )
+                        if tp_mbps:
+                            site_dict["throughput_timeline"] = await _run_chart(
+                                render_timeseries_chart, tp_mbps,
+                                title=f"Internal Throughput Over Time — {_site_label(site)}",
+                                ylabel="Throughput (Mbps)",
+                                tz=ZoneInfo("Asia/Jakarta"),
+                            )
+                    except Exception as exc:
+                        logger.debug("R-06 throughput timeline failed for %s: %s", site, exc)
 
                     if sd.get("top_services"):
                         max_val = max(

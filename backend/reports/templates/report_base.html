@@ -1188,8 +1188,15 @@ body {
 
 {% if data.sites %}
 {% for site_name, site_d in data.sites.items() %}
-{% if site_d.top_services or site_d.intra_lan_vs_inter_site or site_d.ingress_egress_interfaces %}
+{% if site_d.top_services or site_d.intra_lan_vs_inter_site or site_d.ingress_egress_interfaces or site_d.throughput_timeline %}
 {% call site_block(site_name) %}
+
+{% if site_d.throughput_timeline %}
+<div class="chart-card" style="margin-bottom:10px;">
+    <h3>Internal Throughput Over Time</h3>
+    {{ chart_img(site_d.throughput_timeline, 'Internal throughput ' ~ site_name) }}
+</div>
+{% endif %}
 
 {% if site_d.top_services %}
 <div class="card" style="margin-bottom:10px;">
