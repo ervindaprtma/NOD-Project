@@ -1085,7 +1085,7 @@ body {
       .global_top_countries — list of {label, value}
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_traffic_inbound(data) %}
-{% set has_content = data.throughput_timeline or data.sites or data.global_top_client_as or data.global_top_countries or data.per_site_summary %}
+{% set has_content = data.throughput_timeline or data.sites or data.global_top_client_as or data.global_top_countries or data.per_site_summary or data.no_data_sites %}
 {% if has_content %}
 
 <div class="page-break"></div>
