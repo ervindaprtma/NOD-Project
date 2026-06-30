@@ -972,15 +972,14 @@ function appColor(index: number, total: number): string {
   return `hsl(${hue}, ${sat}%, ${lit}%)`;
 }
 
-function formatStackTs(row: Record<string, any>): string {
+function formatStackTs(row: Record<string, any>, prevRow: Record<string, any> | null = null): string {
   const ts = row.timestampMs || row.timestamp;
   if (!ts) return "";
   const ms = typeof ts === "number" ? ts : new Date(ts).getTime();
   if (isNaN(ms)) return String(ts).slice(-8) || "";
-  return new Date(ms).toLocaleTimeString("en-US", {
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-    hour12: false, timeZone: "Asia/Jakarta",
-  });
+  const prevTs = prevRow ? (prevRow.timestampMs || prevRow.timestamp) : null;
+  const prevMs = typeof prevTs === "number" ? prevTs : (prevTs ? new Date(prevTs).getTime() : null);
+  return formatBucketLabelWIB(ms, (prevMs && !isNaN(prevMs)) ? prevMs : null);
 }
 
 function StackedBarChart({
@@ -1099,7 +1098,7 @@ function StackedBarChart({
           return (
             <text key={i} x={xScale(i) + barWidth / 2} y={H - pad.bottom + 16}
               textAnchor="middle" className="text-[9px] fill-muted-foreground">
-              {formatStackTs(row)}
+              {formatStackTs(row, i > 0 ? data[i - 1] : null)}
             </text>
           );
         })}
