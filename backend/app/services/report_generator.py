@@ -1030,37 +1030,66 @@ async def build_report_context(
                     except Exception as exc:
                         logger.debug("SLA %s timeline failed for %s: %s", metric, site, exc)
 
-                # SLA Summary
+                # SLA Summary — fetch once per site, reuse for table + link cards.
+                # sla_summary() returns dict with list-valued metrics (one entry per
+                # link) and parallel lists of labels / link_types. Build per-link
+                # rows for the table AND a flat link entry for the KPI cards.
                 try:
                     summary = await sdwan_qb.sla_summary(
                         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
                     )
-                    if summary:
+                except Exception as exc:
+                    logger.debug("SLA summary failed for %s: %s", site, exc)
+                    summary = summary or {}
+
+                if summary:
+                    # sla_summary returns parallel lists:
+                    #   avg_latency[i], avg_jitter[i], avg_packet_loss[i],
+                    #   labels[i], link_types[i]
+                    latencies       = summary.get("avg_latency", []) or []
+                    jitters         = summary.get("avg_jitter", []) or []
+                    packet_losses   = summary.get("avg_packet_loss", []) or []
+                    slabels         = summary.get("labels", []) or []
+                    slink_types     = summary.get("link_types", []) or []
+
+                    n_links = len(latencies) or len(slabels)
+                    # Default link labels when none returned (avoid empty "Primary")
+                    fallback_labels = [
+                        "WAN1", "WAN2", "IPSec1", "IPSec2",
+                        "WAN3", "WAN4",
+                    ]
+
+                    for i in range(max(n_links, len(slabels))):
+                        link_label = slabels[i] if i < len(slabels) else fallback_labels[i] if i < len(fallback_labels) else f"Link {i + 1}"
+                        link_type  = slink_types[i] if i < len(slink_types) else "WAN"
+                        avg_lat    = latencies[i]       if i < len(latencies)     else 0.0
+                        avg_jit    = jitters[i]         if i < len(jitters)       else 0.0
+                        avg_pl     = packet_losses[i]   if i < len(packet_losses) else 0.0
+
                         sla_summaries.append({
                             "site": _site_label(site),
                             "site_id": site,
-                            "link": "Primary",
-                            "avg_latency": round(summary.get("avg_latency", 0), 1),
-                            "avg_jitter": round(summary.get("avg_jitter", 0), 1),
-                            "avg_packet_loss": round(summary.get("avg_packet_loss", 0), 2),
-                            "sla_compliance": "Met"
-                            if summary.get("avg_packet_loss", 100) < 1.0
-                            else "Breached",
+                            "link": link_label,
+                            "link_type": link_type,
+                            "avg_latency": round(float(avg_lat), 1),
+                            "avg_jitter": round(float(avg_jit), 1),
+                            "avg_packet_loss": round(float(avg_pl), 2),
+                            "sla_compliance": "Met" if float(avg_pl) < 1.0 else "Breached",
                         })
-                except Exception as exc:
-                    logger.debug("SLA summary failed for %s: %s", site, exc)
 
-                # Link status cards
+                # Link status cards — use first link's metrics as the primary
+                # status for this site. Fall back to 0 if summary unavailable.
+                first_link = sla_summaries[-1] if sla_summaries else None
+                primary_latency     = first_link["avg_latency"]     if first_link else 0.0
+                primary_jitter      = first_link["avg_jitter"]      if first_link else 0.0
+                primary_packet_loss = first_link["avg_packet_loss"] if first_link else 0.0
                 sla_links.append({
                     "site": _site_label(site),
-                    "link_name": "Primary",
+                    "link_name": first_link["link"] if first_link else "Primary",
                     "status": "up",
-                    "latency": round(summary.get("avg_latency", 0), 1)
-                    if summary else 0,
-                    "jitter": round(summary.get("avg_jitter", 0), 1)
-                    if summary else 0,
-                    "packet_loss": round(summary.get("avg_packet_loss", 0), 2)
-                    if summary else 0,
+                    "latency": primary_latency,
+                    "jitter": primary_jitter,
+                    "packet_loss": primary_packet_loss,
                 })
 
             if sla_links:
