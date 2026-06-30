@@ -1218,7 +1218,7 @@ body {
       .global_top_services — list of {label, value}
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_traffic_internal(data) %}
-{% set has_content = data.throughput_timeline or data.sites or data.global_top_services or data.per_site_summary or data.no_data_sites %}
+{% set has_content = data.throughput_timeline or data.throughput_timeline_inter_site or data.throughput_timeline_intra_lan or data.sites or data.global_top_services or data.per_site_summary or data.no_data_sites %}
 {% if has_content %}
 
 <div class="page-break"></div>
@@ -1246,6 +1246,21 @@ body {
 <div class="chart-card" style="margin-bottom:10px;">
     <h3>Internal Throughput Over Time</h3>
     {{ chart_img(data.throughput_timeline, 'Internal throughput timeline') }}
+</div>
+{% endif %}
+
+{# Separate timeline charts for Inter-Site and Intra-LAN #}
+{% if data.throughput_timeline_inter_site %}
+<div class="chart-card" style="margin-bottom:10px;">
+    <h3>Inter-Site Throughput Over Time</h3>
+    {{ chart_img(data.throughput_timeline_inter_site, 'Inter-site throughput timeline') }}
+</div>
+{% endif %}
+
+{% if data.throughput_timeline_intra_lan %}
+<div class="chart-card" style="margin-bottom:10px;">
+    <h3>Intra-LAN Throughput Over Time</h3>
+    {{ chart_img(data.throughput_timeline_intra_lan, 'Intra-LAN throughput timeline') }}
 </div>
 {% endif %}
 

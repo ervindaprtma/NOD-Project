@@ -1327,30 +1327,46 @@ async def build_report_context(
         try:
             from app.opensearch import traffic_internal as tint_qb
 
-            # Global Throughput Timeline — match R-01 pattern: query first site
-            # for an aggregate line chart showing combined internal traffic.
+            # Per-path Throughput Timelines — inter-site and intra-lan separately
+            bucket_seconds = _interval_to_seconds("15m")
+            for path, label in [("inter-site", "Inter-Site"), ("intra-lan", "Intra-LAN")]:
+                try:
+                    site = site_list[0] if site_list else DEFAULT_SITES[0]
+                    chart_res = await tint_qb.flow_chart(
+                        gte_ms=gte_ms, lte_ms=lte_ms,
+                        site_name=site, bucket_seconds=bucket_seconds,
+                        traffic_path=path,
+                    )
+                    tp_mbps = _compute_throughput_timeline(
+                        chart_res.get("chart_data", []), bucket_seconds,
+                    )
+                    if tp_mbps:
+                        internal[f"throughput_timeline_{path.replace('-', '_')}"] = await _run_chart(
+                            render_timeseries_chart, tp_mbps,
+                            title=f"{label} Throughput Over Time",
+                            ylabel="Throughput (Mbps)", y_key="mbps",
+                            tz=ZoneInfo("Asia/Jakarta"),
+                        )
+                except Exception as exc:
+                    logger.debug(f"R-06 {path} throughput timeline failed: %s", exc)
+
+            # Keep combined timeline for backward compat
             try:
-                site = site_list[0] if site_list else DEFAULT_SITES[0]
-                bucket_seconds = _interval_to_seconds("15m")
                 chart_res = await tint_qb.flow_chart(
                     gte_ms=gte_ms, lte_ms=lte_ms,
-                    site_name=site, bucket_seconds=bucket_seconds,
-                    traffic_path="all",
+                    site_name=site_list[0] if site_list else DEFAULT_SITES[0],
+                    bucket_seconds=bucket_seconds, traffic_path="all",
                 )
-                tp_mbps = _compute_throughput_timeline(
-                    chart_res.get("chart_data", []),
-                    bucket_seconds,
-                )
+                tp_mbps = _compute_throughput_timeline(chart_res.get("chart_data", []), bucket_seconds)
                 if tp_mbps:
                     internal["throughput_timeline"] = await _run_chart(
                         render_timeseries_chart, tp_mbps,
                         title="Internal Throughput Over Time",
-                        ylabel="Throughput (Mbps)",
-                        y_key="mbps",
+                        ylabel="Throughput (Mbps)", y_key="mbps",
                         tz=ZoneInfo("Asia/Jakarta"),
                     )
             except Exception as exc:
-                logger.debug("R-06 global throughput timeline failed: %s", exc)
+                logger.debug("R-06 combined throughput timeline failed: %s", exc)
 
             duration_s = max((lte_ms - gte_ms) / 1000.0, 1.0)
             per_site_summary = []
