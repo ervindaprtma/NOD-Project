@@ -1112,20 +1112,43 @@ async def build_report_context(
                             "sla_compliance": "Met" if float(avg_pl) < 1.0 else "Breached",
                         })
 
-                # Link status cards — use first link's metrics as the primary
-                # status for this site. Fall back to 0 if summary unavailable.
-                first_link = sla_summaries[-1] if sla_summaries else None
-                primary_latency     = first_link["avg_latency"]     if first_link else 0.0
-                primary_jitter      = first_link["avg_jitter"]      if first_link else 0.0
-                primary_packet_loss = first_link["avg_packet_loss"] if first_link else 0.0
-                sla_links.append({
-                    "site": _site_label(site),
-                    "link_name": first_link["link"] if first_link else "Primary",
-                    "status": "up",
-                    "latency": primary_latency,
-                    "jitter": primary_jitter,
-                    "packet_loss": primary_packet_loss,
-                })
+                # Link status cards — one card per link (all links per site),
+                # not just the primary link. Reuse already-fetched summary.
+                # Default link labels when none returned (avoid empty "Primary")
+                fallback_labels = [
+                    "WAN1", "WAN2", "IPSec1", "IPSec2",
+                    "WAN3", "WAN4",
+                ]
+
+                # Find this site's entries in sla_summaries (already appended above)
+                site_summary_indices = [
+                    idx for idx, s in enumerate(sla_summaries)
+                    if s["site_id"] == site
+                ]
+
+                if site_summary_indices:
+                    for sidx in site_summary_indices:
+                        s = sla_summaries[sidx]
+                        sla_links.append({
+                            "site": _site_label(site),
+                            "link_name": s["link"],
+                            "link_type": s["link_type"],
+                            "status": "up",
+                            "latency": s["avg_latency"],
+                            "jitter": s["avg_jitter"],
+                            "packet_loss": s["avg_packet_loss"],
+                        })
+                else:
+                    # Fallback: no summary available, single "Primary" card
+                    sla_links.append({
+                        "site": _site_label(site),
+                        "link_name": "Primary",
+                        "link_type": "WAN",
+                        "status": "unknown",
+                        "latency": 0.0,
+                        "jitter": 0.0,
+                        "packet_loss": 0.0,
+                    })
 
             if sla_links:
                 sla["links"] = sla_links

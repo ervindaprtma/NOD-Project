@@ -1023,7 +1023,7 @@ body {
 <div class="kpi-grid">
     {% for lnk in data.links %}
     <div class="kpi-card status-{{ 'success' if (lnk.status | lower) == 'up' else 'danger' }}">
-        <div class="kpi-label">{{ lnk.site }} — {{ lnk.link_name }}</div>
+        <div class="kpi-label">{{ lnk.site }} — {{ lnk.link_name }} ({{ lnk.link_type | default('WAN') }})</div>
         <div class="kpi-value status-{{ 'success' if (lnk.status | lower) == 'up' else 'danger' }}">{{ lnk.status | upper }}</div>
         <div class="kpi-note">Latency: {{ lnk.latency }}ms / Jitter: {{ lnk.jitter }}ms / Loss: {{ lnk.packet_loss }}%</div>
     </div>
