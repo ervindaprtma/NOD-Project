@@ -1085,7 +1085,7 @@ body {
       .global_top_countries — list of {label, value}
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_traffic_inbound(data) %}
-{% set has_content = data.sites or data.global_top_client_as or data.global_top_countries %}
+{% set has_content = data.throughput_timeline or data.sites or data.global_top_client_as or data.global_top_countries %}
 {% if has_content %}
 
 <div class="page-break"></div>
@@ -1105,9 +1105,16 @@ body {
 </div>
 {% endif %}
 
+{% if data.throughput_timeline %}
+<div class="chart-card" style="margin-bottom:10px;">
+    <h3>Inbound Throughput Over Time</h3>
+    {{ chart_img(data.throughput_timeline, 'Inbound throughput timeline') }}
+</div>
+{% endif %}
+
 {% if data.sites %}
 {% for site_name, site_d in data.sites.items() %}
-{% if site_d.top_services or site_d.throughput_timeline or site_d.protocol_distribution or site_d.egress_breakdown %}
+{% if site_d.top_services or site_d.protocol_distribution or site_d.egress_breakdown %}
 {% call site_block(site_name) %}
 
 {% if site_d.top_services %}
@@ -1128,13 +1135,6 @@ body {
 <div class="card" style="margin-bottom:10px;">
     <h3>Top Source Countries</h3>
     {{ hbar_list(site_d.top_countries) }}
-</div>
-{% endif %}
-
-{% if site_d.throughput_timeline %}
-<div class="chart-card" style="margin-bottom:10px;">
-    <h3>Inbound Throughput Over Time</h3>
-    {{ chart_img(site_d.throughput_timeline, 'Inbound throughput ' ~ site_name) }}
 </div>
 {% endif %}
 
@@ -1173,7 +1173,7 @@ body {
       .global_top_services — list of {label, value}
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_traffic_internal(data) %}
-{% set has_content = data.sites or data.global_top_services %}
+{% set has_content = data.throughput_timeline or data.sites or data.global_top_services %}
 {% if has_content %}
 
 <div class="page-break"></div>
@@ -1186,17 +1186,17 @@ body {
 </div>
 {% endif %}
 
-{% if data.sites %}
-{% for site_name, site_d in data.sites.items() %}
-{% if site_d.top_services or site_d.intra_lan_vs_inter_site or site_d.ingress_egress_interfaces or site_d.throughput_timeline %}
-{% call site_block(site_name) %}
-
-{% if site_d.throughput_timeline %}
+{% if data.throughput_timeline %}
 <div class="chart-card" style="margin-bottom:10px;">
     <h3>Internal Throughput Over Time</h3>
-    {{ chart_img(site_d.throughput_timeline, 'Internal throughput ' ~ site_name) }}
+    {{ chart_img(data.throughput_timeline, 'Internal throughput timeline') }}
 </div>
 {% endif %}
+
+{% if data.sites %}
+{% for site_name, site_d in data.sites.items() %}
+{% if site_d.top_services or site_d.intra_lan_vs_inter_site or site_d.ingress_egress_interfaces %}
+{% call site_block(site_name) %}
 
 {% if site_d.top_services %}
 <div class="card" style="margin-bottom:10px;">

@@ -1146,35 +1146,36 @@ async def build_report_context(
         try:
             from app.opensearch import traffic_inbound as ti_qb
 
+            # Global Throughput Timeline — match R-01 pattern: query first site
+            # for an aggregate line chart showing combined inbound traffic.
+            try:
+                site = site_list[0] if site_list else DEFAULT_SITES[0]
+                bucket_seconds = _interval_to_seconds("15m")
+                chart_res = await ti_qb.flow_chart(
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                    site_name=site, bucket_seconds=bucket_seconds,
+                    path_filter="inbound-vip",
+                )
+                tp_mbps = _compute_throughput_timeline(
+                    chart_res.get("chart_data", []),
+                    bucket_seconds,
+                )
+                if tp_mbps:
+                    inbound["throughput_timeline"] = await _run_chart(
+                        render_timeseries_chart, tp_mbps,
+                        title="Inbound Throughput Over Time",
+                        ylabel="Throughput (Mbps)",
+                        tz=ZoneInfo("Asia/Jakarta"),
+                    )
+            except Exception as exc:
+                logger.debug("R-05 global throughput timeline failed: %s", exc)
+
             for site in site_list:
                 try:
                     sd = await ti_qb.flow_summary(
                         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
                     )
                     site_dict: dict[str, Any] = {}
-
-                    # Throughput Timeline — mirror dashboard Traffic Inbound page
-                    # (uses same `flow_chart` aggregation + per-bucket Mbps math).
-                    try:
-                        bucket_seconds = _interval_to_seconds("15m")
-                        chart_res = await ti_qb.flow_chart(
-                            gte_ms=gte_ms, lte_ms=lte_ms,
-                            site_name=site, bucket_seconds=bucket_seconds,
-                            path_filter="inbound-vip",
-                        )
-                        tp_mbps = _compute_throughput_timeline(
-                            chart_res.get("chart_data", []),
-                            bucket_seconds,
-                        )
-                        if tp_mbps:
-                            site_dict["throughput_timeline"] = await _run_chart(
-                                render_timeseries_chart, tp_mbps,
-                                title=f"Inbound Throughput Over Time — {_site_label(site)}",
-                                ylabel="Throughput (Mbps)",
-                                tz=ZoneInfo("Asia/Jakarta"),
-                            )
-                    except Exception as exc:
-                        logger.debug("R-05 throughput timeline failed for %s: %s", site, exc)
 
                     if sd.get("top_services"):
                         max_val = max(
@@ -1266,35 +1267,36 @@ async def build_report_context(
         try:
             from app.opensearch import traffic_internal as tint_qb
 
+            # Global Throughput Timeline — match R-01 pattern: query first site
+            # for an aggregate line chart showing combined internal traffic.
+            try:
+                site = site_list[0] if site_list else DEFAULT_SITES[0]
+                bucket_seconds = _interval_to_seconds("15m")
+                chart_res = await tint_qb.flow_chart(
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                    site_name=site, bucket_seconds=bucket_seconds,
+                    traffic_path="all",
+                )
+                tp_mbps = _compute_throughput_timeline(
+                    chart_res.get("chart_data", []),
+                    bucket_seconds,
+                )
+                if tp_mbps:
+                    internal["throughput_timeline"] = await _run_chart(
+                        render_timeseries_chart, tp_mbps,
+                        title="Internal Throughput Over Time",
+                        ylabel="Throughput (Mbps)",
+                        tz=ZoneInfo("Asia/Jakarta"),
+                    )
+            except Exception as exc:
+                logger.debug("R-06 global throughput timeline failed: %s", exc)
+
             for site in site_list:
                 try:
                     sd = await tint_qb.flow_summary(
                         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
                     )
                     site_dict: dict[str, Any] = {}
-
-                    # Throughput Timeline — mirror dashboard Traffic Internal page
-                    # (uses same `flow_chart` aggregation + per-bucket Mbps math).
-                    try:
-                        bucket_seconds = _interval_to_seconds("15m")
-                        chart_res = await tint_qb.flow_chart(
-                            gte_ms=gte_ms, lte_ms=lte_ms,
-                            site_name=site, bucket_seconds=bucket_seconds,
-                            traffic_path="all",
-                        )
-                        tp_mbps = _compute_throughput_timeline(
-                            chart_res.get("chart_data", []),
-                            bucket_seconds,
-                        )
-                        if tp_mbps:
-                            site_dict["throughput_timeline"] = await _run_chart(
-                                render_timeseries_chart, tp_mbps,
-                                title=f"Internal Throughput Over Time — {_site_label(site)}",
-                                ylabel="Throughput (Mbps)",
-                                tz=ZoneInfo("Asia/Jakarta"),
-                            )
-                    except Exception as exc:
-                        logger.debug("R-06 throughput timeline failed for %s: %s", site, exc)
 
                     if sd.get("top_services"):
                         max_val = max(
