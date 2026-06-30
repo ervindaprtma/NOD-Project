@@ -316,11 +316,11 @@ def render_timeseries_chart(
     layout_kwargs: dict = dict(
         title=dict(text=title, font=dict(size=13), x=0.5),
         yaxis=dict(title=ylabel, title_font=dict(size=10)),
-        margin=dict(l=10, r=20, t=40, b=40),
+        margin=dict(l=10, r=20, t=40, b=80),
         height=height,
         font=dict(family="Arial, sans-serif"),
         hovermode=False,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5),
     )
     if cross_day_xaxis is not None:
         layout_kwargs["xaxis"] = cross_day_xaxis
@@ -388,8 +388,8 @@ def render_stacked_timeseries_chart(
         title=dict(text=title, font=dict(size=13), x=0.5),
         yaxis=dict(title="Users", title_font=dict(size=10)),
         xaxis=xaxis_kwargs,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10, r=20, t=40, b=40),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5),
+        margin=dict(l=10, r=20, t=40, b=80),
         height=height,
         font=dict(family="Arial, sans-serif"),
         hovermode="x unified",
