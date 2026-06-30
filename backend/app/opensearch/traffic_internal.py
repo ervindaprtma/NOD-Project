@@ -123,6 +123,8 @@ async def flow_summary(
         "size": 0,
         "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)}},
         "aggs": {
+            "grand_total_bytes": {"sum": {"field": "flow.bytes"}},
+            "session_count": {"cardinality": {"field": "flow.connection_id"}},
             "top_services": {
                 "terms": {"field": "flow.server.l4.port.id", "size": 20, "order": {"total_bytes": "desc"}},
                 "aggs": _bytes_sum(),
@@ -163,6 +165,8 @@ async def flow_summary(
     duration_s = max((lte_ms - gte_ms) / 1000.0, 1.0)
 
     return {
+        "total_bytes": int(aggs.get("grand_total_bytes", {}).get("value", 0)),
+        "total_sessions": int(aggs.get("session_count", {}).get("value", 0)),
         "top_services": [
             {"service_name": _port_to_service(b["key"]), "service_port": int(b["key"]) if str(b["key"]).isdigit() else b["key"],
              "total_bytes": int(b["total_bytes"]["value"]),

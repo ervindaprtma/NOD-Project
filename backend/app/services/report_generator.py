@@ -1165,10 +1165,15 @@ async def build_report_context(
                         render_timeseries_chart, tp_mbps,
                         title="Inbound Throughput Over Time",
                         ylabel="Throughput (Mbps)",
+                        y_key="mbps",
                         tz=ZoneInfo("Asia/Jakarta"),
                     )
             except Exception as exc:
                 logger.debug("R-05 global throughput timeline failed: %s", exc)
+
+            duration_s = max((lte_ms - gte_ms) / 1000.0, 1.0)
+            per_site_summary: list[dict[str, Any]] = []
+            total_throughput_bytes: int = 0
 
             for site in site_list:
                 try:
@@ -1176,6 +1181,22 @@ async def build_report_context(
                         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
                     )
                     site_dict: dict[str, Any] = {}
+
+                    # Per-site summary data — only include sites with actual traffic
+                    ps_total_bytes = int(sd.get("total_bytes", 0) or 0)
+                    ps_sessions = int(sd.get("total_sessions", 0) or 0)
+                    if ps_total_bytes > 0:
+                        ps_mbps = round((ps_total_bytes * 8) / duration_s / 1_000_000, 2) if duration_s else 0
+                        top_app = sd.get("top_services", [{}])[0].get("service_name", "—") if sd.get("top_services") else "—"
+                        per_site_summary.append({
+                            "site": _site_label(site),
+                            "site_id": site,
+                            "total_bytes": ps_total_bytes,
+                            "total_mbps": ps_mbps,
+                            "top_app": top_app,
+                            "sessions": ps_sessions,
+                        })
+                        total_throughput_bytes += ps_total_bytes
 
                     if sd.get("top_services"):
                         max_val = max(
@@ -1252,8 +1273,24 @@ async def build_report_context(
                 except Exception as exc:
                     logger.error("R-05 site %s failed: %s", site, exc)
 
+            if per_site_summary:
+                inbound["per_site_summary"] = per_site_summary
+                inbound["total_throughput_bytes"] = total_throughput_bytes
+
             if inbound_sites:
                 inbound["sites"] = inbound_sites
+
+            # Track sites with no inbound data for "tidak tersedia" message
+            had_data = set(inbound_sites.keys())
+            if per_site_summary:
+                had_data |= {ps["site"] for ps in per_site_summary}
+            no_data = []
+            for s in site_list:
+                label = _site_label(s)
+                if label not in had_data:
+                    no_data.append(label)
+            if no_data:
+                inbound["no_data_sites"] = no_data
 
         except Exception as exc:
             logger.error("R-05 data fetch failed: %s", exc, exc_info=True)
@@ -1286,10 +1323,15 @@ async def build_report_context(
                         render_timeseries_chart, tp_mbps,
                         title="Internal Throughput Over Time",
                         ylabel="Throughput (Mbps)",
+                        y_key="mbps",
                         tz=ZoneInfo("Asia/Jakarta"),
                     )
             except Exception as exc:
                 logger.debug("R-06 global throughput timeline failed: %s", exc)
+
+            duration_s = max((lte_ms - gte_ms) / 1000.0, 1.0)
+            per_site_summary = []
+            total_throughput_bytes = 0
 
             for site in site_list:
                 try:
@@ -1297,6 +1339,22 @@ async def build_report_context(
                         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
                     )
                     site_dict: dict[str, Any] = {}
+
+                    # Per-site summary data — only include sites with actual traffic
+                    ps_total_bytes = int(sd.get("total_bytes", 0) or 0)
+                    ps_sessions = int(sd.get("total_sessions", 0) or 0)
+                    if ps_total_bytes > 0:
+                        ps_mbps = round((ps_total_bytes * 8) / duration_s / 1_000_000, 2) if duration_s else 0
+                        top_app = sd.get("top_services", [{}])[0].get("service_name", "—") if sd.get("top_services") else "—"
+                        per_site_summary.append({
+                            "site": _site_label(site),
+                            "site_id": site,
+                            "total_bytes": ps_total_bytes,
+                            "total_mbps": ps_mbps,
+                            "top_app": top_app,
+                            "sessions": ps_sessions,
+                        })
+                        total_throughput_bytes += ps_total_bytes
 
                     if sd.get("top_services"):
                         max_val = max(
@@ -1343,6 +1401,10 @@ async def build_report_context(
 
             if internal_sites:
                 internal["sites"] = internal_sites
+
+            if per_site_summary:
+                internal["per_site_summary"] = per_site_summary
+                internal["total_throughput_bytes"] = total_throughput_bytes
 
         except Exception as exc:
             logger.error("R-06 data fetch failed: %s", exc, exc_info=True)

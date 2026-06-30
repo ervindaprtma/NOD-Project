@@ -1085,11 +1085,22 @@ body {
       .global_top_countries — list of {label, value}
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_traffic_inbound(data) %}
-{% set has_content = data.throughput_timeline or data.sites or data.global_top_client_as or data.global_top_countries %}
+{% set has_content = data.throughput_timeline or data.sites or data.global_top_client_as or data.global_top_countries or data.per_site_summary %}
 {% if has_content %}
 
 <div class="page-break"></div>
 <h2 class="section-title">Traffic Inbound Analysis <span class="timeframe-badge">{{ time_range }}</span></h2>
+
+{% if data.total_throughput_bytes is defined %}
+<div class="kpi-grid">
+    {{ kpi_card('Total Inbound Throughput', bytes_human(data.total_throughput_bytes), 'info', 'All sites combined') }}
+    {% if data.per_site_summary %}
+    {% for ps in data.per_site_summary %}
+        {{ kpi_card(ps.site, bytes_human(ps.total_bytes), 'info', 'Top: ' + (ps.top_app | default('—'))) }}
+    {% endfor %}
+    {% endif %}
+</div>
+{% endif %}
 
 {% if data.global_top_client_as %}
 <div class="card">
@@ -1157,6 +1168,40 @@ body {
 {% endfor %}
 {% endif %}
 
+{% if data.no_data_sites %}
+{% for site_name in data.no_data_sites %}
+<div class="card">
+    <p class="no-data">Data tidak tersedia untuk <strong>{{ site_name }}</strong> — site ini bukan Data Center, sehingga tidak memiliki inbound traffic dengan <code>traffic.path = inbound-vip</code>. Laporan inbound hanya mencakup site Data Center (DC dan DRC) yang menerima traffic dari internet melalui VIP.</p>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if data.per_site_summary %}
+<div class="table-card">
+    <h3 style="padding:10px 14px 4px;font-size:10pt;font-weight:600;">Per-Site Inbound Traffic Summary</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Site</th>
+                <th class="num-col">Total Traffic</th>
+                <th class="num-col">Throughput (Mbps)</th>
+                <th class="num-col">Sessions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for ps in data.per_site_summary %}
+            <tr>
+                <td><strong>{{ ps.site }}</strong></td>
+                <td class="num-col">{{ bytes_human(ps.total_bytes) }}</td>
+                <td class="num-col">{{ "%0.2f"|format(ps.total_mbps | default(0)) }} Mbps</td>
+                <td class="num-col">{{ ps.sessions | default('—') }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
 {% else %}
 <div class="card"><p class="no-data">Traffic inbound data is not available for the selected timeframe.</p></div>
 {% endif %}
@@ -1173,11 +1218,22 @@ body {
       .global_top_services — list of {label, value}
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_traffic_internal(data) %}
-{% set has_content = data.throughput_timeline or data.sites or data.global_top_services %}
+{% set has_content = data.throughput_timeline or data.sites or data.global_top_services or data.per_site_summary %}
 {% if has_content %}
 
 <div class="page-break"></div>
 <h2 class="section-title">Traffic Internal Analysis <span class="timeframe-badge">{{ time_range }}</span></h2>
+
+{% if data.total_throughput_bytes is defined %}
+<div class="kpi-grid">
+    {{ kpi_card('Total Internal Throughput', bytes_human(data.total_throughput_bytes), 'info', 'All sites combined') }}
+    {% if data.per_site_summary %}
+    {% for ps in data.per_site_summary %}
+        {{ kpi_card(ps.site, bytes_human(ps.total_bytes), 'info', 'Top: ' + (ps.top_app | default('—'))) }}
+    {% endfor %}
+    {% endif %}
+</div>
+{% endif %}
 
 {% if data.global_top_services %}
 <div class="card">
@@ -1239,6 +1295,32 @@ body {
 {% endcall %}
 {% endif %}
 {% endfor %}
+{% endif %}
+
+{% if data.per_site_summary %}
+<div class="table-card">
+    <h3 style="padding:10px 14px 4px;font-size:10pt;font-weight:600;">Per-Site Internal Traffic Summary</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Site</th>
+                <th class="num-col">Total Traffic</th>
+                <th class="num-col">Throughput (Mbps)</th>
+                <th class="num-col">Sessions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for ps in data.per_site_summary %}
+            <tr>
+                <td><strong>{{ ps.site }}</strong></td>
+                <td class="num-col">{{ bytes_human(ps.total_bytes) }}</td>
+                <td class="num-col">{{ "%0.2f"|format(ps.total_mbps | default(0)) }} Mbps</td>
+                <td class="num-col">{{ ps.sessions | default('—') }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
 {% endif %}
 
 {% else %}
