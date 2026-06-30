@@ -555,7 +555,7 @@ export default function TrafficPage() {
         <TabsContent value="sankey">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div>
-                <h3 className="text-base font-semibold text-slate-200 mb-2">Upload</h3>
+                <h3 className="text-base font-semibold text-foreground mb-2">Upload</h3>
                 <SankeyView
                   data={sankeyUploadData}
                   loading={sankeyUploadLoading}
@@ -563,7 +563,7 @@ export default function TrafficPage() {
                 />
               </div>
               <div>
-                <h3 className="text-base font-semibold text-slate-200 mb-2">Download</h3>
+                <h3 className="text-base font-semibold text-foreground mb-2">Download</h3>
                 <SankeyView
                   data={sankeyDownloadData}
                   loading={sankeyDownloadLoading}

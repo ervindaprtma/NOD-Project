@@ -291,11 +291,11 @@ export default function TrafficInboundPage() {
         <TabsContent value="sankey">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div>
-                <h3 className="text-base font-semibold text-slate-200 mb-2">Upload Customers</h3>
+                <h3 className="text-base font-semibold text-foreground mb-2">Upload Customers</h3>
                 <SankeyView data={sankeyUploadData} loading={sankeyUploadLoading} error={!!sankeyUploadError} />
               </div>
               <div>
-                <h3 className="text-base font-semibold text-slate-200 mb-2">Download Customers</h3>
+                <h3 className="text-base font-semibold text-foreground mb-2">Download Customers</h3>
                 <SankeyView data={sankeyDownloadData} loading={sankeyDownloadLoading} error={!!sankeyDownloadError} />
               </div>
             </div>

@@ -239,7 +239,7 @@ export default function TrafficInternalPage() {
           </TabsContent>
 
           <TabsContent value="sankey">
-            <h3 className="text-base font-semibold text-slate-200 mb-2">Internal Traffic Flow</h3>
+            <h3 className="text-base font-semibold text-foreground mb-2">Internal Traffic Flow</h3>
             <SankeyView data={sankeyData} loading={sankeyLoading} error={!!sankeyError} />
           </TabsContent>
         </Tabs>
