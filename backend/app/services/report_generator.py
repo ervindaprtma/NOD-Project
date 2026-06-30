@@ -1476,18 +1476,123 @@ async def build_report_context(
             summary["active_alerts"] = 0
 
             sla_summaries = sd.get("sla_summary", [])
+            
+            # ── 5. SD-WAN Health Detail ──────────────────────────────────────────
             if sla_summaries:
-                met = sum(1 for s in sla_summaries if s["sla_compliance"] == "Met")
+                summary["sdwan_health"] = [
+                    {
+                        "site": s.get("site_id", ""),
+                        "link_name": s.get("link", ""),
+                        "status": s.get("status", "UP"),
+                        "latency": s.get("avg_latency", 0),
+                        "jitter": s.get("avg_jitter", 0),
+                        "loss_pct": s.get("avg_loss_pct", 0),
+                    }
+                    for s in sla_summaries
+                ]
+                met = sum(1 for s in sla_summaries if s.get("sla_compliance") == "Met")
                 summary["sla_compliance_pct"] = round(met / len(sla_summaries) * 100, 1)
             else:
                 summary["sla_compliance_pct"] = 100.0
 
-            top_apps = to.get("top_applications", [])
-            if top_apps:
-                summary["top_applications"] = [
-                    {"app": a["label"], "bytes": a["value"]}
-                    for a in top_apps[:5]
-                ]
+            # ── Populate per-site matrix dengan data inbound + internal + vpn ───────
+            inbound = context.get("report_data", {}).get("traffic_inbound", {})
+            internal = context.get("report_data", {}).get("traffic_internal", {})
+
+            for ps in summary.get("per_site_status", []):
+                site_name = ps["site"]
+
+                # Inbound (hanya DC/DRC, Office=none)
+                inbound_sites = inbound.get("per_site_summary", [])
+                inbound_match = next((s for s in inbound_sites if s.get("site") == site_name), None)
+                ps["inbound"] = inbound_match.get("total_bytes", 0) if inbound_match else None
+
+                # Internal traffic (inter-site + intra-lan combined)
+                internal_sites = internal.get("per_site_summary", [])
+                internal_match = next((s for s in internal_sites if s.get("site") == site_name), None)
+                ps["internal"] = internal_match.get("total_bytes", 0) if internal_match else None
+
+                # VPN count per site
+                # SSL VPN hanya DC, IPsec hanya DRC, Office tidak punya
+                if site_name == "DC":
+                    ssl = vu.get("ssl_vpn_users", {})
+                    ps["vpn"] = ssl.get("active_count", 0) or None
+                elif site_name == "DRC":
+                    ipsec = vu.get("ipsec_vpn_users", {})
+                    ps["vpn"] = ipsec.get("active_count", 0) or None
+                else:
+                    ps["vpn"] = None
+
+                # SD-WAN status (up/partial/down) based on links
+                site_links = [l for l in (summary.get("sdwan_health") or []) if l.get("site") == site_name]
+                if len(site_links) == 0:
+                    ps["sdwan"] = None
+                elif all(l.get("status", "").upper() == "UP" for l in site_links):
+                    # ── 2. Per-Site Status Matrix ─────────────────────────────────────────────
+                                per_site_status = []
+                                inbound = context.get("report_data", {}).get("traffic_inbound", {})
+                                internal = context.get("report_data", {}).get("traffic_internal", {})
+                                inbound_sites = inbound.get("per_site_summary", [])
+                                internal_sites = internal.get("per_site_summary", [])
+
+                                for site in site_list:
+                                    site_label = _site_label(site)
+                                    site_status = {"site": site_label, "internet": None, "inbound": None, "internal": None, "vpn": None, "sdwan": None}
+
+                                    # Internet traffic (from overview per_site_summary)
+                                    overview_sites = to.get("per_site_summary", [])
+                                    overview_match = next((s for s in overview_sites if s.get("site") == site_label), None)
+                                    if overview_match and overview_match.get("total_bytes"):
+                                        site_status["internet"] = overview_match["total_bytes"]
+
+                                    # Inbound (hanya DC/DRC, Office=none)
+                                    inbound_match = next((s for s in inbound_sites if s.get("site") == site_label), None)
+                                    if inbound_match and inbound_match.get("total_bytes"):
+                                        site_status["inbound"] = inbound_match["total_bytes"]
+
+                                    # Internal traffic (inter-site + intra-lan combined)
+                                    internal_match = next((s for s in internal_sites if s.get("site") == site_label), None)
+                                    if internal_match and internal_match.get("total_bytes"):
+                                        site_status["internal"] = internal_match["total_bytes"]
+
+                                    # VPN count per site
+                                    if site_label == "DC":
+                                        ssl = vu.get("ssl_vpn_users", {})
+                                        if ssl.get("active_count"):
+                                            site_status["vpn"] = ssl["active_count"]
+                                    elif site_label == "DRC":
+                                        ipsec = vu.get("ipsec_vpn_users", {})
+                                        if ipsec.get("active_count"):
+                                            site_status["vpn"] = ipsec["active_count"]
+
+                                    per_site_status.append(site_status)
+
+                                summary["per_site_status"] = per_site_status
+
+                                # ── 5. SD-WAN Health Detail ──────────────────────────────────────────
+                                if sla_summaries:
+                                    summary["sdwan_health"] = [
+                                        {
+                                            "site": s.get("site_id", ""),
+                                            "link_name": s.get("link", ""),
+                                            "status": s.get("status", "UP"),
+                                            "latency": s.get("avg_latency", 0),
+                                            "jitter": s.get("avg_jitter", 0),
+                                            "loss_pct": s.get("avg_loss_pct", 0),
+                                        }
+                                        for s in sla_summaries
+                                    ]
+                                    met = sum(1 for s in sla_summaries if s.get("sla_compliance") == "Met")
+                                    summary["sla_compliance_pct"] = round(met / len(sla_summaries) * 100, 1)
+                                else:
+                                    summary["sla_compliance_pct"] = 100.0
+
+                                top_apps = to.get("top_applications", [])
+                                if top_apps:
+                                    summary["top_applications"] = [
+                                        {"app": a["label"], "bytes": a["value"]}
+                                        for a in top_apps[:5]
+                                    ]
 
         except Exception as exc:
             logger.error("R-07 executive summary build failed: %s", exc, exc_info=True)

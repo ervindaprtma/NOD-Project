@@ -1340,7 +1340,12 @@ body {
 
 {## ════════════════════════════════════════════════════════════════════════
     SECTION: R-07 — EXECUTIVE SUMMARY
-    This is always rendered first for R-07, or after all sections in R-08.
+    Layout: Per-Design (June 2026)
+      1. KPI Cards (global summary)
+      2. Per-Site Status Matrix
+      3. Combined Throughput Timeline
+      4. Top Applications (horizontal bars)
+      5. SD-WAN Health Detail
     Expects report_data.executive_summary:
       .total_throughput_bytes — int
       .total_throughput_human — pre-formatted string
@@ -1349,10 +1354,13 @@ body {
       .ha_health — {total_clusters, synchronized, unsynchronized}
       .active_alerts — int
       .sla_compliance_pct — float
-      .top_applications — list of {app, bytes} (top 5)
-  ════════════════════════════════════════════════════════════════════════ #}
+      .top_applications — list of {app, bytes}
+      .per_site_status — list of {site, internet, inbound, internal, vpn, sdwan}
+      .throughput_timeline — for chart
+      .sdwan_health — list of {site, link_name, status, latency, jitter, loss}
+   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_executive_summary(data) %}
-{% set has_content = data.total_throughput_bytes is defined or data.device_health or data.active_alerts is defined %}
+{% set has_content = data.total_throughput_bytes is defined or data.device_health or data.active_alerts is defined or data.per_site_status or data.sdwan_health or data.throughput_timeline is defined %}
 {% if has_content %}
 
 <div class="page-break"></div>
@@ -1379,6 +1387,81 @@ body {
         <tbody>
         {% for a in data.top_applications[:5] %}
             <tr><td>{{ loop.index }}</td><td>{{ a.app }}</td><td class="num-col">{{ bytes_human(a.bytes) }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{# ── 2. Per-Site Status Matrix ───────────────────────────────────────────── #}
+{% if data.per_site_status %}
+<div class="card">
+    <h3>Per-Site Status Matrix</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Site</th>
+                <th class="num-col">Internet</th>
+                <th class="num-col">Inbound</th>
+                <th class="num-col">Internal</th>
+                <th class="num-col">VPN</th>
+                <th class="num-col">SD-WAN</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for ps in data.per_site_status %}
+            <tr>
+                <td><strong>{{ ps.site }}</strong></td>
+                <td class="num-col">{{ bytes_human(ps.internet | default(0)) if ps.internet else '&mdash;' | safe }}</td>
+                <td class="num-col">{{ bytes_human(ps.inbound | default(0)) if ps.inbound else '&mdash;' | safe }}</td>
+                <td class="num-col">{{ bytes_human(ps.internal | default(0)) if ps.internal else '&mdash;' | safe }}</td>
+                <td class="num-col">{{ ps.vpn if ps.vpn else '&mdash;' | safe }}</td>
+                <td class="num-col">{% if ps.sdwan == 'up' %}✓ UP{% elif ps.sdwan == 'partial' %}Partial{% elif ps.sdwan == 'down' %}✗ DOWN{% else %}&mdash;{% endif %}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{# ── 3. Combined Throughput Timeline Chart ─────────────────────────────────── #}
+{% set has_timeline = data.throughput_timeline is defined %}
+{% if has_timeline %}
+<div class="card">
+    <h3>Combined Throughput Over Time</h3>
+    {% if data.throughput_timeline %}
+    {{ line_chart_inline(data.throughput_timeline, ylabel='Mbps', height=180) | safe }}
+    {% else %}
+    <p class="no-data">No throughput timeline data available.</p>
+    {% endif %}
+</div>
+{% endif %}
+
+{# ── 5. SD-WAN Health Detail ─────────────────────────────────────────────── #}
+{% if data.sdwan_health %}
+<div class="card">
+    <h3>SD-WAN Health Detail</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Site</th>
+                <th>Link Name</th>
+                <th>Status</th>
+                <th>Latency</th>
+                <th>Jitter</th>
+                <th>Loss %</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for lnk in data.sdwan_health %}
+            <tr>
+                <td><strong>{{ lnk.site }}</strong></td>
+                <td>{{ lnk.link_name }}</td>
+                <td class="{{ lnk.status | lower }}">{{ lnk.status | upper }}</td>
+                <td>{{ lnk.latency if lnk.latency else '&mdash;' | safe }}</td>
+                <td>{{ lnk.jitter if lnk.jitter else '&mdash;' | safe }}</td>
+                <td>{{ ('%0.2f' | format(lnk.loss_pct)) if lnk.loss_pct is defined else '&mdash;' | safe }}</td>
+            </tr>
         {% endfor %}
         </tbody>
     </table>
