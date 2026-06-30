@@ -81,29 +81,38 @@ export function formatPercent(value: number): string {
 }
 
 /**
- * Cross-day aware bucket label formatter for traffic charts (WIB / Asia/Jakarta).
+ * Bucket label formatter for traffic charts (WIB / Asia/Jakarta).
  *
- * Returns a string suitable for the x-axis of AreaChart/StackedBarChart.
- * - Inside the same WIB day, returns only the time portion: "09:00:00".
- * - On the FIRST bucket of a new WIB day, prepends a date prefix so users
- *   can distinguish "17 Aug 09:00:00" from "18 Aug 09:00:00".
+ * Always emits "DD MMM HH:MM[:SS]" so users can read each bucket's date
+ * unambiguously — important when the queried window does NOT match the
+ * current local date (e.g. yesterday's traffic shown today).
+ *
+ * To reduce visual noise on dense intra-day charts, callers may pass
+ * `alwaysDate=false` to drop the date prefix when the bucket is on the
+ * SAME day as the previous bucket. The default is `alwaysDate=true`
+ * because cross-day queries are common in network reports.
  *
  * @param ms              Epoch milliseconds of the bucket.
- * @param prevMs          Epoch milliseconds of the previous bucket (or null for the first).
+ * @param prevMs          Epoch milliseconds of the previous bucket (or null).
  * @param includeSeconds  Include HH:MM:SS (true) or just HH:MM (false).
+ * @param alwaysDate      If true, always include "DD MMM " prefix.
+ *                        If false, omit prefix when same day as prev bucket.
  *
- * Example output for a 24h cross-day window:
- *   "17 Aug 09:00:00", "10:00:00", ..., "23:00:00",
- *   "18 Aug 00:00:00", "01:00:00", ..., "09:00:00"
+ * Example output (alwaysDate=true) for a 24h cross-day window:
+ *   "29 Jun 09:00:00", "29 Jun 10:00:00", ..., "29 Jun 23:00:00",
+ *   "30 Jun 00:00:00", "30 Jun 01:00:00", ..., "30 Jun 08:00:00"
+ *
+ * Example output (alwaysDate=false) for the same window:
+ *   "29 Jun 09:00:00", "10:00:00", ..., "23:00:00",
+ *   "30 Jun 00:00:00", "01:00:00", ..., "08:00:00"
  */
 export function formatBucketLabelWIB(
   ms: number,
   prevMs: number | null,
   includeSeconds: boolean = true,
+  alwaysDate: boolean = true,
 ): string {
   if (!ms || isNaN(ms)) return "";
-  const cur = new Date(ms);
-  const prev = prevMs ? new Date(prevMs) : null;
 
   const timeOpts: Intl.DateTimeFormatOptions = {
     hour: "2-digit",
@@ -117,10 +126,12 @@ export function formatBucketLabelWIB(
   const dateKey = (d: Date) =>
     d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); // en-CA → YYYY-MM-DD
 
-  const crossedDay = !prev || dateKey(cur) !== dateKey(prev);
+  const cur = new Date(ms);
+  const prev = prevMs ? new Date(prevMs) : null;
 
   const time = cur.toLocaleTimeString("en-US", timeOpts);
-  if (!crossedDay) return time;
+  const shouldIncludeDate = alwaysDate || !prev || dateKey(cur) !== dateKey(prev);
+  if (!shouldIncludeDate) return time;
 
   const date = cur.toLocaleDateString("en-US", {
     day: "2-digit",

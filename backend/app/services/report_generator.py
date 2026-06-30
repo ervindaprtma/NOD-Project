@@ -294,15 +294,15 @@ def render_timeseries_chart(
     hour-only inside a day, "DD MMM HH:MM" on the first tick of a new day
     in the chosen timezone, "DD MMM" for week+ ranges.
     """
-    # Cross-day aware x-axis tick formatting (Plotly tickformatstops)
-    # - 1h–24h range → hour precision (clean intra-day)
-    # - 1d–7d range   → date + hour (clear cross-day boundaries)
-    # - 1w–1mo range  → date only (avoids crowding)
-    # - default       → fallback "%d %b %H:%M" for any unclassified range
+    # X-axis tick formatting (date-prefix on all ranges)
+    # - 1h–24h range → date + hour (always show date so cross-day windows are unambiguous)
+    # - 1d–7d range   → date + hour
+    # - 1w–1mo range  → date only
+    # - default       → "%d %b %H:%M" for any unclassified range
     cross_day_xaxis = (
         dict(
             tickformatstops=[
-                dict(dtickrange=[3600000, 86400000], value="%H:%M"),
+                dict(dtickrange=[3600000, 86400000], value="%d %b\n%H:%M"),
                 dict(dtickrange=[86400000, 604800000], value="%d %b\n%H:%M"),
                 dict(dtickrange=[604800000, "M1"], value="%d %b"),
             ],
@@ -378,7 +378,7 @@ def render_stacked_timeseries_chart(
     if tz is not None:
         xaxis_kwargs.update(
             tickformatstops=[
-                dict(dtickrange=[3600000, 86400000], value="%H:%M"),
+                dict(dtickrange=[3600000, 86400000], value="%d %b\n%H:%M"),
                 dict(dtickrange=[86400000, 604800000], value="%d %b\n%H:%M"),
                 dict(dtickrange=[604800000, "M1"], value="%d %b"),
             ],
