@@ -523,7 +523,7 @@ async def build_report_context(
     site_list: list[str] = _resolve_sites(sites)
 
     # ── R-01: Traffic Overview ──────────────────────────────────────
-    if report_type in ("R-01", "R-08") and (not sections or "traffic_overview" in sections):
+    if report_type in ("R-01", "R-07", "R-08") and (not sections or "traffic_overview" in sections or report_type in ("R-07", "R-08")):
         traffic: dict[str, Any] = {}
         try:
             from app.opensearch import appid as appid_qb
@@ -707,7 +707,7 @@ async def build_report_context(
         context["report_data"]["traffic_overview"] = traffic
 
     # ── R-02: Resource Usage (per-site or all sites) ───────────────────
-    if report_type in ("R-02", "R-08") and (not sections or "resource_usage" in sections):
+    if report_type in ("R-02", "R-07", "R-08") and (not sections or "resource_usage" in sections or report_type in ("R-07", "R-08")):
         resources: dict[str, Any] = {}
         all_devices: list[dict] = []
         all_cpu: list[dict] = []
@@ -881,7 +881,7 @@ async def build_report_context(
         context["report_data"]["resource_usage"] = resources
 
     # ── R-03: VPN Users ─────────────────────────────────────────────
-    if report_type in ("R-03", "R-08") and (not sections or "vpn_users" in sections):
+    if report_type in ("R-03", "R-07", "R-08") and (not sections or "vpn_users" in sections or report_type in ("R-07", "R-08")):
         vpn: dict[str, Any] = {}
 
         # Warn if Office site is selected (no VPN data available)
@@ -1035,7 +1035,7 @@ async def build_report_context(
         context["report_data"]["vpn_users"] = vpn
 
     # ── R-04: SD-WAN SLA ────────────────────────────────────────────
-    if report_type in ("R-04", "R-08") and (not sections or "sdwan_sla" in sections):
+    if report_type in ("R-04", "R-07", "R-08") and (not sections or "sdwan_sla" in sections or report_type in ("R-07", "R-08")):
         sla: dict[str, Any] = {}
         sla_timelines: dict[str, str] = {}
         try:
@@ -1163,7 +1163,7 @@ async def build_report_context(
         context["report_data"]["sdwan_sla"] = sla
 
     # ── R-05: Traffic Inbound ────────────────────────────────────────
-    if report_type in ("R-05", "R-08") and (not sections or "traffic_inbound" in sections):
+    if report_type in ("R-05", "R-07", "R-08") and (not sections or "traffic_inbound" in sections or report_type in ("R-07", "R-08")):
         inbound: dict[str, Any] = {}
         inbound_sites: dict[str, Any] = {}
         try:
@@ -1321,7 +1321,7 @@ async def build_report_context(
         context["report_data"]["traffic_inbound"] = inbound
 
     # ── R-06: Traffic Internal ──────────────────────────────────────
-    if report_type in ("R-06", "R-08") and (not sections or "traffic_internal" in sections):
+    if report_type in ("R-06", "R-07", "R-08") and (not sections or "traffic_internal" in sections or report_type in ("R-07", "R-08")):
         internal: dict[str, Any] = {}
         internal_sites: dict[str, Any] = {}
         try:
