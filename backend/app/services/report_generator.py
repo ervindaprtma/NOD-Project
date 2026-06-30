@@ -964,6 +964,7 @@ async def build_report_context(
                             render_timeseries_chart, user_bandwidth,
                             title=f"Bandwidth: {first_user}",
                             ylabel="Bytes", series_key="device",
+                            tz=ZoneInfo("Asia/Jakarta"),
                         )
                 except Exception as exc:
                     logger.debug("User bandwidth detail not available: %s", exc)
@@ -1024,6 +1025,7 @@ async def build_report_context(
                                 title=f"SD-WAN {metric.title()} — {_site_label(site)}",
                                 ylabel=metric.title(),
                                 series_key="label",
+                                tz=ZoneInfo("Asia/Jakarta"),
                             )
                     except Exception as exc:
                         logger.debug("SLA %s timeline failed for %s: %s", metric, site, exc)
