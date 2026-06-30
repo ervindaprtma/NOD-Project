@@ -1358,17 +1358,20 @@ async def build_report_context(
 
             for site in site_list:
                 try:
-                    sd = await tint_qb.flow_summary(
-                        gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
-                    )
                     site_dict: dict[str, Any] = {}
 
-                    # Per-site summary data — only include sites with actual traffic
-                    ps_total_bytes = int(sd.get("total_bytes", 0) or 0)
-                    ps_sessions = int(sd.get("total_sessions", 0) or 0)
+                    # Per-site summary — combined (all paths) for the global
+                    # KPI cards / per-site summary table at the bottom.
+                    sd_all = await tint_qb.flow_summary(
+                        gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+                        traffic_path="all",
+                    )
+
+                    ps_total_bytes = int(sd_all.get("total_bytes", 0) or 0)
+                    ps_sessions = int(sd_all.get("total_sessions", 0) or 0)
                     if ps_total_bytes > 0:
                         ps_mbps = round((ps_total_bytes * 8) / duration_s / 1_000_000, 2) if duration_s else 0
-                        top_app = sd.get("top_services", [{}])[0].get("service_name", "—") if sd.get("top_services") else "—"
+                        top_app = sd_all.get("top_services", [{}])[0].get("service_name", "—") if sd_all.get("top_services") else "—"
                         per_site_summary.append({
                             "site": _site_label(site),
                             "site_id": site,
@@ -1379,42 +1382,56 @@ async def build_report_context(
                         })
                         total_throughput_bytes += ps_total_bytes
 
-                    if sd.get("top_services"):
+                    # Per-path breakdown: fetch INTER-SITE and INTRA-LAN
+                    # separately, store under site_dict[path] so the template
+                    # can render two distinct sections per site.
+                    def _top_services_from(sd: dict) -> list[dict]:
+                        if not sd.get("top_services"):
+                            return []
                         max_val = max(
                             s["total_bytes"] for s in sd["top_services"][:10]
                         ) if sd["top_services"] else 1
-                        site_dict["top_services"] = [
+                        return [
                             {
                                 "label": s["service_name"],
                                 "value": s["total_bytes"],
-                                "pct": round(s["total_bytes"] / max_val * 100, 1)
-                                if max_val else 0,
+                                "pct": round(s["total_bytes"] / max_val * 100, 1) if max_val else 0,
                                 "color": CHART_COLORS[i % len(CHART_COLORS)],
                             }
                             for i, s in enumerate(sd["top_services"][:10])
                         ]
 
-                    # Intra-LAN vs Inter-Site
-                    intra = sd.get("intra_lan_bytes", 0) or 0
-                    inter = sd.get("inter_site_bytes", 0) or 0
-                    total_b = intra + inter
-                    site_dict["intra_lan_vs_inter_site"] = {
-                        "intra_lan_bytes": intra,
-                        "inter_site_bytes": inter,
-                        "intra_pct": round(intra / total_b * 100, 1) if total_b else 0,
-                        "inter_pct": round(inter / total_b * 100, 1) if total_b else 0,
-                    }
+                    # ① Inter-Site (traffic.path = "inter-site") — listed FIRST
+                    try:
+                        sd_inter = await tint_qb.flow_summary(
+                            gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+                            traffic_path="inter-site",
+                        )
+                        inter_bytes = int(sd_inter.get("total_bytes", 0) or 0)
+                        site_dict["inter_site"] = {
+                            "total_bytes": inter_bytes,
+                            "total_sessions": int(sd_inter.get("total_sessions", 0) or 0),
+                            "top_services": _top_services_from(sd_inter),
+                        }
+                    except Exception as exc:
+                        logger.debug("R-06 inter-site fetch failed for %s: %s", site, exc)
+                        site_dict["inter_site"] = {"total_bytes": 0, "total_sessions": 0, "top_services": []}
 
-                    # Ingress/Egress interfaces
-                    if sd.get("ingress_egress_breakdown"):
-                        site_dict["ingress_egress_interfaces"] = [
-                            {
-                                "interface": e.get("interface", "—"),
-                                "direction": e.get("direction", "—"),
-                                "bytes": e.get("total_bytes", 0),
-                            }
-                            for e in sd["ingress_egress_breakdown"]
-                        ]
+                    # ② Intra-LAN (traffic.path = "intra-lan") — listed SECOND
+                    try:
+                        sd_intra = await tint_qb.flow_summary(
+                            gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+                            traffic_path="intra-lan",
+                        )
+                        intra_bytes = int(sd_intra.get("total_bytes", 0) or 0)
+                        site_dict["intra_lan"] = {
+                            "total_bytes": intra_bytes,
+                            "total_sessions": int(sd_intra.get("total_sessions", 0) or 0),
+                            "top_services": _top_services_from(sd_intra),
+                        }
+                    except Exception as exc:
+                        logger.debug("R-06 intra-lan fetch failed for %s: %s", site, exc)
+                        site_dict["intra_lan"] = {"total_bytes": 0, "total_sessions": 0, "top_services": []}
 
                     if site_dict:
                         internal_sites[_site_label(site)] = site_dict

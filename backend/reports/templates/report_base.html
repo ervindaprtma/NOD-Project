@@ -1218,7 +1218,7 @@ body {
       .global_top_services — list of {label, value}
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_traffic_internal(data) %}
-{% set has_content = data.throughput_timeline or data.sites or data.global_top_services or data.per_site_summary %}
+{% set has_content = data.throughput_timeline or data.sites or data.global_top_services or data.per_site_summary or data.no_data_sites %}
 {% if has_content %}
 
 <div class="page-break"></div>
@@ -1249,46 +1249,55 @@ body {
 </div>
 {% endif %}
 
+{# Per-site blocks — INTER-SITE first, then INTRA-LAN #}
 {% if data.sites %}
 {% for site_name, site_d in data.sites.items() %}
-{% if site_d.top_services or site_d.intra_lan_vs_inter_site or site_d.ingress_egress_interfaces %}
+{% if site_d.inter_site or site_d.intra_lan %}
 {% call site_block(site_name) %}
 
-{% if site_d.top_services %}
+{# ① Inter-Site Traffic (traffic.path = "inter-site") #}
+{% if site_d.inter_site %}
 <div class="card" style="margin-bottom:10px;">
-    <h3>Top Internal Services</h3>
-    {{ hbar_list(site_d.top_services) }}
-</div>
-{% endif %}
-
-{% if site_d.intra_lan_vs_inter_site %}
-<div class="card" style="margin-bottom:10px;">
-    <h3>Intra-LAN vs Inter-Site Traffic</h3>
-    <table>
-        <thead><tr><th>Category</th><th class="num-col">Bytes</th><th class="num-col">%</th></tr></thead>
+    <h3>Inter-Site Traffic <span style="font-size:9pt;font-weight:400;opacity:0.7;">(traffic.path = inter-site)</span></h3>
+    <table style="margin-bottom:10px;">
         <tbody>
-            <tr><td>Intra-LAN</td><td class="num-col">{{ bytes_human(site_d.intra_lan_vs_inter_site.intra_lan_bytes) }}</td><td class="num-col">{{ site_d.intra_lan_vs_inter_site.intra_pct }}%</td></tr>
-            <tr><td>Inter-Site</td><td class="num-col">{{ bytes_human(site_d.intra_lan_vs_inter_site.inter_site_bytes) }}</td><td class="num-col">{{ site_d.intra_lan_vs_inter_site.inter_pct }}%</td></tr>
-        </tbody>
-    </table>
-</div>
-{% endif %}
-
-{% if site_d.ingress_egress_interfaces %}
-<div class="card" style="margin-bottom:10px;">
-    <h3>Ingress / Egress Interfaces</h3>
-    <table>
-        <thead><tr><th>Interface</th><th>Direction</th><th class="num-col">Bytes</th></tr></thead>
-        <tbody>
-        {% for iface in site_d.ingress_egress_interfaces %}
             <tr>
-                <td>{{ iface.interface }}</td>
-                <td>{{ badge('info' if iface.direction == 'ingress' else 'warning', iface.direction) }}</td>
-                <td class="num-col">{{ bytes_human(iface.bytes) }}</td>
+                <td style="opacity:0.7;">Total Bytes</td>
+                <td class="num-col"><strong>{{ bytes_human(site_d.inter_site.total_bytes) }}</strong></td>
             </tr>
-        {% endfor %}
+            <tr>
+                <td style="opacity:0.7;">Sessions</td>
+                <td class="num-col">{{ site_d.inter_site.total_sessions | default(0) }}</td>
+            </tr>
         </tbody>
     </table>
+    {% if site_d.inter_site.top_services %}
+    <h4 style="font-size:10pt;font-weight:600;margin:8px 0 4px;">Top Inter-Site Services</h4>
+    {{ hbar_list(site_d.inter_site.top_services) }}
+    {% endif %}
+</div>
+{% endif %}
+
+{# ② Intra-LAN Traffic (traffic.path = "intra-lan") #}
+{% if site_d.intra_lan %}
+<div class="card" style="margin-bottom:10px;">
+    <h3>Intra-LAN Traffic <span style="font-size:9pt;font-weight:400;opacity:0.7;">(traffic.path = intra-lan)</span></h3>
+    <table style="margin-bottom:10px;">
+        <tbody>
+            <tr>
+                <td style="opacity:0.7;">Total Bytes</td>
+                <td class="num-col"><strong>{{ bytes_human(site_d.intra_lan.total_bytes) }}</strong></td>
+            </tr>
+            <tr>
+                <td style="opacity:0.7;">Sessions</td>
+                <td class="num-col">{{ site_d.intra_lan.total_sessions | default(0) }}</td>
+            </tr>
+        </tbody>
+    </table>
+    {% if site_d.intra_lan.top_services %}
+    <h4 style="font-size:10pt;font-weight:600;margin:8px 0 4px;">Top Intra-LAN Services</h4>
+    {{ hbar_list(site_d.intra_lan.top_services) }}
+    {% endif %}
 </div>
 {% endif %}
 
