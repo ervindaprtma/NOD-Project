@@ -1170,8 +1170,8 @@ body {
 
 {% if data.no_data_sites %}
 {% for site_name in data.no_data_sites %}
-<div class="card">
-    <p class="no-data">No data available for <strong>{{ site_name }}</strong> — this site is not a Data Center and has no inbound traffic via Virtual IP (<code>traffic.path = inbound-vip</code>). The inbound report covers DC and DRC only.</p>
+<div class="alert-warning">
+    <strong>⚠️ {{ site_name }}</strong> — this site is not a Data Center and has no inbound traffic via Virtual IP (<code>traffic.path = inbound-vip</code>). The inbound report covers DC and DRC only.
 </div>
 {% endfor %}
 {% endif %}
