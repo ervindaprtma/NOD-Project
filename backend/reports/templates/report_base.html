@@ -855,6 +855,7 @@ body {
         </tbody>
     </table>
 </div>
+{% endif %}
 {{ kpi_card('Active VPN', data.active_vpn_sessions | default(0), 'success', 'SSL + IPsec') }}
 
 {% if data.devices %}
