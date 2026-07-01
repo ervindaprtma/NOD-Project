@@ -1602,6 +1602,7 @@ async def build_report_context(
                 internal["sites"] = internal_sites
 
             # ── Per-site throughput timeline charts (R-08 only) ──
+            # NOTE: Generate SEPARATE charts for Inter-Site and Intra-LAN traffic paths
             if report_type == "R-08" and internal_sites:
                 bucket_sec = _auto_bucket_seconds(gte_ms, lte_ms)
                 for site in site_list:
@@ -1610,6 +1611,7 @@ async def build_report_context(
                     if not sdict:
                         continue
                     try:
+                        # Combined internal throughput (all traffic paths)
                         chart_res = await tint_qb.flow_chart(
                             gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
                             bucket_seconds=bucket_sec, traffic_path="all",
@@ -1621,6 +1623,38 @@ async def build_report_context(
                             sdict["throughput_timeline"] = await _run_chart(
                                 render_timeseries_chart, tp_mbps,
                                 title=f"Internal Throughput Over Time — {sl}",
+                                ylabel="Throughput (Mbps)", y_key="mbps",
+                                tz=ZoneInfo("Asia/Jakarta"),
+                            )
+
+                        # Inter-Site throughput timeline
+                        chart_res_inter = await tint_qb.flow_chart(
+                            gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+                            bucket_seconds=bucket_sec, traffic_path="inter-site",
+                        )
+                        tp_inter = _compute_throughput_timeline(
+                            chart_res_inter.get("chart_data", []), bucket_sec,
+                        )
+                        if tp_inter and "inter_site" in sdict:
+                            sdict["inter_site"]["throughput_timeline"] = await _run_chart(
+                                render_timeseries_chart, tp_inter,
+                                title=f"Inter-Site Throughput — {sl}",
+                                ylabel="Throughput (Mbps)", y_key="mbps",
+                                tz=ZoneInfo("Asia/Jakarta"),
+                            )
+
+                        # Intra-LAN throughput timeline
+                        chart_res_intra = await tint_qb.flow_chart(
+                            gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+                            bucket_seconds=bucket_sec, traffic_path="intra-lan",
+                        )
+                        tp_intra = _compute_throughput_timeline(
+                            chart_res_intra.get("chart_data", []), bucket_sec,
+                        )
+                        if tp_intra and "intra_lan" in sdict:
+                            sdict["intra_lan"]["throughput_timeline"] = await _run_chart(
+                                render_timeseries_chart, tp_intra,
+                                title=f"Intra-LAN Throughput — {sl}",
                                 ylabel="Throughput (Mbps)", y_key="mbps",
                                 tz=ZoneInfo("Asia/Jakarta"),
                             )

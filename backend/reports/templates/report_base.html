@@ -1352,6 +1352,13 @@ body {
     {{ hbar_list(site_d.inter_site.top_services) }}
     {% endif %}
 </div>
+{# Inter-Site Throughput Timeline #}
+{% if site_d.inter_site.throughput_timeline and report_type == 'R-08' %}
+<div class="chart-card" style="margin-bottom:10px;">
+    <h3>Inter-Site Throughput Over Time</h3>
+    {{ chart_img(site_d.inter_site.throughput_timeline, 'Inter-Site throughput ' ~ site_name) }}
+</div>
+{% endif %}
 {% endif %}
 
 {# ② Intra-LAN Traffic (traffic.path = "intra-lan") #}
@@ -1375,6 +1382,13 @@ body {
     {{ hbar_list(site_d.intra_lan.top_services) }}
     {% endif %}
 </div>
+{# Intra-LAN Throughput Timeline #}
+{% if site_d.intra_lan.throughput_timeline and report_type == 'R-08' %}
+<div class="chart-card" style="margin-bottom:10px;">
+    <h3>Intra-LAN Throughput Over Time</h3>
+    {{ chart_img(site_d.intra_lan.throughput_timeline, 'Intra-LAN throughput ' ~ site_name) }}
+</div>
+{% endif %}
 {% endif %}
 
 {% endcall %}
