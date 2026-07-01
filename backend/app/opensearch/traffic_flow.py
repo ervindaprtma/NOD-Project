@@ -437,3 +437,37 @@ async def flow_table(
         })
 
     return {"records": records, "after_key": result.get("after_key")}
+
+
+async def top_dst_as_orgs(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    size: int = 10,
+    site_name: str = "Site_FGT-DC",
+) -> list[dict]:
+    """Q-02: terms agg on flow.dst.as.org — top destination AS organizations."""
+    if client is None:
+        client = _get_client(site_name)
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": [_time_range(gte_ms, lte_ms), _site_filter(site_name)]}},
+        "aggs": {
+            "top_as_orgs": {
+                "terms": {
+                    "field": "flow.dst.as.org",
+                    "size": min(size, 500),
+                    "order": {"total_bytes": "desc"},
+                },
+                "aggs": {
+                    "total_bytes": {"sum": {"script": {"source": "doc['flow.bytes'].value", "lang": "painless"}}}
+                },
+            }
+        },
+    }
+    resp = await client.search(index=FLOW_INDEX, body=body)
+    buckets = resp["aggregations"]["top_as_orgs"]["buckets"]
+    return [
+        {"as_org": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
+        for b in buckets
+    ]
