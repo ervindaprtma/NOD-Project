@@ -34,9 +34,9 @@ async def safe_query(
     label = fn_name or getattr(fn, "__name__", "query")
     try:
         result = await fn(**kwargs)
-        if not isinstance(result, dict):
-            logger.warning(f"{label} returned non-dict: {type(result).__name__}")
-            return None, "invalid_response_type"
+        # Accept any non-None return type (dict, list, int, str, etc.)
+        if result is None:
+            return None, "null_response"
         return result, None
     except Exception as e:
         logger.error(f"{label} failed: {type(e).__name__}: {e}")
