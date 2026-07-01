@@ -1,14 +1,16 @@
 """
-OpenSearch query helpers with timeout, caching, and error handling.
+OpenSearch query helpers with timeout, caching, and per-endpoint rate limiting.
 
 Provides safe_search() wrapper that:
 - Wraps OpenSearch queries with asyncio.wait_for timeout
-- Adds request-level timeout to each .search() call
 - Implements lightweight in-memory caching for expensive aggregations
-- Returns empty results on timeout/error instead of raising
+- Returns skeleton responses on timeout/error instead of raising
 - Per-client cache namespacing to prevent cross-endpoint data leakage
+- Per-client semaphore to prevent overwhelming the cluster
 
-This prevents the backend from hanging or crashing on expensive 24h+ queries.
+This prevents the backend from hitting OpenSearch circuit breakers
+when multiple parallel queries (12 for Overview, 4 per traffic page)
+hit the same cluster simultaneously.
 """
 from __future__ import annotations
 
@@ -25,14 +27,19 @@ from app.core.config import get_settings
 settings = get_settings()
 
 # Per-client cache namespacing (keyed by client id(hosts))
-# Prevents DC and DRC query results from being served to wrong endpoint
 _client_caches: dict[str, dict[str, tuple[float, Any]]] = {}
-_CACHE_TTL_SECONDS = 30  # short TTL — 30s — for aggregation queries
-_CACHE_MAX_ENTRIES = 256  # per-client cap
+# Per-client semaphore to limit concurrent queries to a given cluster
+# DC cluster: 2 concurrent (prevent circuit breaker on large aggs)
+# DRC cluster: 4 concurrent (lighter data, more headroom)
+_client_semaphores: dict[str, asyncio.Semaphore] = {}
+_DEFAULT_DC_CONCURRENCY = 2
+_DEFAULT_DRC_CONCURRENCY = 4
+
+_CACHE_TTL_SECONDS = 30
+_CACHE_MAX_ENTRIES = 256
 
 
 def _client_id(client: AsyncOpenSearch) -> str:
-    """Generate a stable id for an OpenSearch client (based on its hosts)."""
     try:
         return json.dumps(client.transport.hosts, sort_keys=True)
     except Exception:
@@ -40,21 +47,31 @@ def _client_id(client: AsyncOpenSearch) -> str:
 
 
 def _get_cache(client: AsyncOpenSearch) -> dict[str, tuple[float, Any]]:
-    """Get the cache dict for a specific client, creating if needed."""
     cid = _client_id(client)
     if cid not in _client_caches:
         _client_caches[cid] = {}
     return _client_caches[cid]
 
 
+def _get_semaphore(client: AsyncOpenSearch) -> asyncio.Semaphore:
+    """Get a semaphore for a client, with DC getting lower concurrency."""
+    cid = _client_id(client)
+    if cid not in _client_semaphores:
+        # DC cluster (10.80.150.108) gets lower concurrency
+        # because it has 3.6x more data and hits circuit breaker
+        if "10.80.150.108" in cid:
+            _client_semaphores[cid] = asyncio.Semaphore(_DEFAULT_DC_CONCURRENCY)
+        else:
+            _client_semaphores[cid] = asyncio.Semaphore(_DEFAULT_DRC_CONCURRENCY)
+    return _client_semaphores[cid]
+
+
 def _cache_key(index: str, body: dict) -> str:
-    """Generate a stable cache key for an index+body pair."""
     raw = f"{index}::{json.dumps(body, sort_keys=True, default=str)}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
 def _cache_get(cache: dict, key: str) -> Optional[Any]:
-    """Get cached result if not expired."""
     if key not in cache:
         return None
     ts, val = cache[key]
@@ -65,7 +82,6 @@ def _cache_get(cache: dict, key: str) -> Optional[Any]:
 
 
 def _cache_set(cache: dict, key: str, val: Any) -> None:
-    """Store result in cache with TTL, evicting oldest if at capacity."""
     if len(cache) >= _CACHE_MAX_ENTRIES:
         oldest_key = min(cache, key=lambda k: cache[k][0])
         cache.pop(oldest_key, None)
@@ -73,8 +89,8 @@ def _cache_set(cache: dict, key: str, val: Any) -> None:
 
 
 def clear_cache() -> None:
-    """Clear all cached results across all clients. Call after writes or test setup."""
     _client_caches.clear()
+    _client_semaphores.clear()
 
 
 async def safe_search(
@@ -84,11 +100,11 @@ async def safe_search(
     use_cache: bool = True,
     timeout_s: int | None = None,
 ) -> dict:
-    """
-    Execute an OpenSearch search query with:
-    - Per-query timeout (asyncio.wait_for + request_timeout)
+    """Execute an OpenSearch search query with:
+    - Per-cluster concurrency limit (2 for DC, 4 for DRC) to prevent circuit breaker
+    - Per-query timeout (asyncio.wait_for)
     - Optional in-memory caching (default 30s TTL)
-    - Returns empty result dict on timeout/error
+    - Skeleton response on timeout/error
 
     Args:
         client: AsyncOpenSearch client
@@ -98,7 +114,7 @@ async def safe_search(
         timeout_s: Query timeout in seconds (default from config)
 
     Returns:
-        Search response dict, or empty dict on timeout/error
+        Search response dict with aggregations/hits keys always present
     """
     if timeout_s is None:
         timeout_s = settings.OPENSEARCH_QUERY_TIMEOUT
@@ -112,41 +128,51 @@ async def safe_search(
         if cached is not None:
             return cached
 
-    try:
-        t0 = time.monotonic()
-        resp = await asyncio.wait_for(
-            client.search(index=index, body=body),
-            timeout=timeout_s + 5,  # outer safety margin
-        )
-        elapsed = time.monotonic() - t0
-        # Alert on slow queries (>50% of timeout) without blocking
-        if elapsed > timeout_s * 0.5:
-            import logging
-            logger = logging.getLogger("nod.opensearch")
-            logger.warning(
-                f"Slow OpenSearch query: {elapsed:.1f}s / {timeout_s}s timeout — "
-                f"client={_client_id(client)} index={index} body_keys={list(body.keys())}"
-            )
-        resp_dict = dict(resp) if not isinstance(resp, dict) else resp
-        # Ensure response has the expected skeleton keys for aggregations/size-0 queries
-        if "aggregations" not in resp_dict:
-            resp_dict["aggregations"] = {}
-        if "hits" not in resp_dict:
-            resp_dict["hits"] = {"total": {"value": 0, "relation": "eq"}, "hits": []}
-        if cache_key is not None:
-            _cache_set(cache, cache_key, resp_dict)
-        return resp_dict
-    except asyncio.TimeoutError:
-        import logging
-        logger = logging.getLogger("nod.opensearch")
-        logger.error(
-            f"OpenSearch query timeout after {timeout_s}s — client={_client_id(client)} "
-            f"index={index} body_keys={list(body.keys())}"
-        )
-        # Return skeleton with empty aggregations so callers can proceed
-        return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_timed_out": True}
-    except Exception as e:
-        import logging
-        logger = logging.getLogger("nod.opensearch")
-        logger.error(f"OpenSearch query error: {type(e).__name__}: {e}")
-        return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_error": str(e)}
+    # Acquire per-cluster semaphore to prevent overwhelming the endpoint
+    sem = _get_semaphore(client)
+    async with sem:
+        max_retries = 2  # retry up to 2x for transient circuit breaker errors
+        for attempt in range(max_retries + 1):
+            try:
+                t0 = time.monotonic()
+                resp = await asyncio.wait_for(
+                    client.search(index=index, body=body),
+                    timeout=timeout_s + 5,
+                )
+                elapsed = time.monotonic() - t0
+                if elapsed > timeout_s * 0.5:
+                    import logging
+                    logger = logging.getLogger("nod.opensearch")
+                    logger.warning(
+                        f"Slow OpenSearch query: {elapsed:.1f}s / {timeout_s}s timeout — "
+                        f"client={_client_id(client)} index={index}"
+                    )
+                resp_dict = dict(resp) if not isinstance(resp, dict) else resp
+                if "aggregations" not in resp_dict:
+                    resp_dict["aggregations"] = {}
+                if "hits" not in resp_dict:
+                    resp_dict["hits"] = {"total": {"value": 0, "relation": "eq"}, "hits": []}
+                if cache_key is not None:
+                    _cache_set(cache, cache_key, resp_dict)
+                return resp_dict
+            except asyncio.TimeoutError:
+                import logging
+                logger = logging.getLogger("nod.opensearch")
+                logger.error(f"OpenSearch query timeout after {timeout_s}s — client={_client_id(client)} index={index}")
+                return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_timed_out": True}
+            except Exception as e:
+                err_str = str(e)
+                is_circuit_breaker = "circuit_breaking_exception" in err_str or "Data too large" in err_str
+                if is_circuit_breaker and attempt < max_retries:
+                    import logging
+                    logger = logging.getLogger("nod.opensearch")
+                    logger.warning(
+                        f"DC circuit breaker hit, retrying in {2**attempt}s (attempt {attempt+1}/{max_retries+1}) — "
+                        f"client={_client_id(client)} index={index}"
+                    )
+                    await asyncio.sleep(2 ** attempt)  # 1s, 2s backoff
+                    continue
+                import logging
+                logger = logging.getLogger("nod.opensearch")
+                logger.error(f"OpenSearch query error: {type(e).__name__}: {e}")
+                return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_error": err_str[:200]}
