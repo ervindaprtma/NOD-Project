@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Optional
 
 from opensearchpy import AsyncOpenSearch
-
 from app.opensearch.client import get_drc_client
 
 
@@ -98,7 +97,6 @@ async def application_categories(
     """Q-02: terms agg on flow.application.category."""
     if client is None:
         client = get_drc_client()
-
     body = {
         "size": 0,
         "query": {
@@ -142,7 +140,6 @@ async def throughput_timeline(
     """Q-05: date_histogram with sum sub-agg for throughput timeline."""
     if client is None:
         client = get_drc_client()
-
     body = {
         "size": 0,
         "query": {
@@ -238,7 +235,7 @@ async def sankey_data(
                                     }
                                 }
                             }
-                        }
+                        },
                     },
                 },
             }
@@ -296,7 +293,6 @@ async def top_client_ips(
     """Q-02: terms agg with explicit size."""
     if client is None:
         client = get_drc_client()
-
     body = {
         "size": 0,
         "query": {
@@ -340,7 +336,6 @@ async def top_server_ips(
     """Q-02: terms agg with explicit size."""
     if client is None:
         client = get_drc_client()
-
     body = {
         "size": 0,
         "query": {
@@ -383,7 +378,6 @@ async def protocol_distribution(
     """Q-02: terms agg on l4.proto.name with sum on bytes and packets."""
     if client is None:
         client = get_drc_client()
-
     body = {
         "size": 0,
         "query": {
@@ -433,7 +427,6 @@ async def egress_interface_breakdown(
     """Q-02: terms agg on flow.out.netif.alias."""
     if client is None:
         client = get_drc_client()
-
     body = {
         "size": 0,
         "query": {
@@ -520,100 +513,34 @@ async def top_dst_as_countries(
     ]
 
 
-async def top_dst_as_orgs(
-    client: AsyncOpenSearch | None = None,
-    gte_ms: int = 0,
-    lte_ms: int = 0,
-    size: int = 20,
-) -> list[dict]:
-    """Q-02: terms agg on flow.dst.as.org + max on flow.dst.as.number for AS number."""
-    if client is None:
-        client = get_drc_client()
-
-    body = {
-        "size": 0,
-        "query": {
-            "bool": {
-                "filter": [_time_range(gte_ms, lte_ms)],
-                "must_not": [_exclude_app0(), _exclude_private_as()],
-            }
-        },
-        "aggs": {
-            "top_as_orgs": {
-                "terms": {
-                    "field": "flow.dst.as.org",
-                    "size": min(size, 50),  # Q-02
-                    "order": {"total_bytes": "desc"},
-                },
-                "aggs": {
-                    "total_bytes": {
-                        "sum": {
-                            "script": {
-                                "source": "doc['flow.client.bytes'].value + doc['flow.server.bytes'].value",
-                                "lang": "painless",
-                            }
-                        }
-                    },
-                    "as_number": {
-                        "max": {"field": "flow.dst.as.number"},
-                    },
-                    "as_country": {
-                        "terms": {
-                            "field": "flow.dst.as.country",
-                            "size": 1,
-                        }
-                    },
-                },
-            }
-        },
-    }
-
-    resp = await client.search(index="fortigate-appid-flow-*", body=body)
-    buckets = resp["aggregations"]["top_as_orgs"]["buckets"]
-    return [
-        {
-            "as_org": b["key"],
-            "as_number": int(b["as_number"]["value"] or 0),
-            "total_bytes": int(b["total_bytes"]["value"]),
-            "country": b["as_country"]["buckets"][0]["key"] if b["as_country"]["buckets"] else "",
-        }
-        for b in buckets
-    ]
+# ─────────────────────────────────────────────────────────────────
+# Total Bytes
+# ─────────────────────────────────────────────────────────────────
 
 
-async def total_throughput(
-    client: AsyncOpenSearch | None = None,
-    gte_ms: int = 0,
-    lte_ms: int = 0,
-) -> int:
-    """Q-05: sum aggregation for total throughput in time window."""
-    if client is None:
-        client = get_drc_client()
-
+async def total_bytes(gte_ms: int = 0, lte_ms: int = 0) -> int:
+    """Return total bytes for the time range."""
+    client = get_drc_client()
     body = {
         "size": 0,
         "query": {
             "bool": {"filter": [_time_range(gte_ms, lte_ms)], "must_not": [_exclude_app0(), _exclude_private_as()]}
         },
-        "aggs": {
-            "total_bytes": {
-                "sum": {
-                    "script": {
-                        "source": "doc['flow.client.bytes'].value + doc['flow.server.bytes'].value",
-                        "lang": "painless",
-                    }
-                }
-            }
-        },
+        "aggs": {"total_bytes": {"sum": {"script": {"source": "doc['flow.client.bytes'].value + doc['flow.server.bytes'].value", "lang": "painless"}}}},
     }
-
     resp = await client.search(index="fortigate-appid-flow-*", body=body)
-    return int(resp["aggregations"]["total_bytes"]["value"])
+    return int(resp["aggregations"]["total_bytes"]["value"] or 0)
 
 
 # ─────────────────────────────────────────────────────────────────
 # FR-05: Raw Data Table (search_after pagination)
 # ─────────────────────────────────────────────────────────────────
+
+
+def _tf_site_filter(site_name: str) -> dict:
+    """Filter flows by FortiGate export IP (site identifier)."""
+    from app.opensearch.traffic_flow import _site_filter as _tf_site_filter_impl
+    return _tf_site_filter_impl(site_name)
 
 
 async def raw_flows(
@@ -670,11 +597,11 @@ async def raw_flows(
 
     must_filters = [_time_range(gte_ms, lte_ms), _tf_site_filter(site_name)]
     must_not_filters = [_exclude_app0(), _exclude_private_as()]
-    
+
     # Apply traffic path filter (internet, inter-site, intra-lan)
     if path_filter and path_filter != "all":
         must_filters.append({"term": {"flow.traffic.path": path_filter}})
-    
+
     # Apply direction filter (upload, download)
     if direction == "upload":
         must_filters.append({"term": {"flow.in.netif.sec.zone.name": "internal"}})
@@ -682,7 +609,7 @@ async def raw_flows(
     elif direction == "download":
         must_filters.append({"term": {"flow.in.netif.sec.zone.name": "internet"}})
         must_filters.append({"term": {"flow.out.netif.sec.zone.name": "internal"}})
-    
+
     # Apply additional filters
     if filters:
         if "client_ip" in filters and filters["client_ip"]:
@@ -722,7 +649,12 @@ async def raw_flows(
     if search_after:
         body["search_after"] = search_after  # Q-04: search_after, not scroll
 
-    resp = await client.search(index="fortigate-appid-flow-*", body=body)
+    try:
+        resp = await client.search(index="fortigate-appid-flow-*", body=body, request_timeout=30)
+    except Exception as e:
+        # Return empty result instead of crashing - frontend can show "No data"
+        return {"records": [], "search_after": None, "total_hits": 0, "error": str(e)}
+
     hits = resp["hits"]["hits"]
 
     records = []
