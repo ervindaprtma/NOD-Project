@@ -667,7 +667,7 @@ async def raw_flows(
             "application": src.get("flow.application.name", ""),
             "category": src.get("flow.application.category", ""),
             "protocol": src.get("l4.proto.name", ""),
-            "dst_port": src.get("flow.dst.l4.port.id", 0),
+            "dst_port": src.get("flow.dst.l4.port.id") or 0,
             "total_bytes": (src.get("flow.client.bytes", 0) or 0) + (src.get("flow.server.bytes", 0) or 0),
             "packets": src.get("flow.packets", 0),
             "ingress_zone": src.get("flow.in.netif.alias", ""),
