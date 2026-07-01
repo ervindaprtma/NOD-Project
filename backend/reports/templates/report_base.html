@@ -1395,8 +1395,8 @@ body {
 </div>
 
 {% if data.top_applications %}
-<div class="card">
-    <h3>Top 5 Applications by Traffic Volume</h3>
+<div class="table-card">
+    <h3 style="padding:8px 12px;margin:0;font-size:9pt;border-bottom:1px solid hsl(var(--border));">Top 5 Applications by Traffic Volume</h3>
     <table>
         <thead><tr><th>#</th><th>Application</th><th class="num-col">Traffic Volume</th></tr></thead>
         <tbody>
@@ -1410,8 +1410,8 @@ body {
 
 {# ── 2. Per-Site Status Matrix ───────────────────────────────────────────── #}
 {% if data.per_site_status %}
-<div class="card">
-    <h3>Per-Site Status Matrix</h3>
+<div class="table-card">
+    <h3 style="padding:8px 12px;margin:0;font-size:9pt;border-bottom:1px solid hsl(var(--border));">Per-Site Status Matrix</h3>
     <table>
         <thead>
             <tr>
@@ -1419,19 +1419,33 @@ body {
                 <th class="num-col">Internet</th>
                 <th class="num-col">Inbound</th>
                 <th class="num-col">Internal</th>
+                <th class="num-col">Total Traffic</th>
+                <th>Composition</th>
                 <th class="num-col">VPN</th>
                 <th class="num-col">SD-WAN</th>
             </tr>
         </thead>
         <tbody>
         {% for ps in data.per_site_status %}
-            <tr>
+            <tr{% if ps.site == 'TOTAL' %} style="font-weight:700;border-top:2px solid hsl(var(--border));"{% endif %}>
                 <td><strong>{{ ps.site }}</strong></td>
-                <td class="num-col">{{ bytes_human(ps.internet | default(0)) if ps.internet else '&mdash;' | safe }}</td>
-                <td class="num-col">{{ bytes_human(ps.inbound | default(0)) if ps.inbound else '&mdash;' | safe }}</td>
-                <td class="num-col">{{ bytes_human(ps.internal | default(0)) if ps.internal else '&mdash;' | safe }}</td>
-                <td class="num-col">{{ ps.vpn if ps.vpn else '&mdash;' | safe }}</td>
-                <td class="num-col">{% if ps.sdwan == 'up' %}✓ UP{% elif ps.sdwan == 'partial' %}Partial{% elif ps.sdwan == 'down' %}✗ DOWN{% else %}&mdash;{% endif %}</td>
+                <td class="num-col">{{ bytes_human(ps.internet) if ps.internet else '—' }}</td>
+                <td class="num-col">{{ bytes_human(ps.inbound) if ps.inbound else '—' }}</td>
+                <td class="num-col">{{ bytes_human(ps.internal) if ps.internal else '—' }}</td>
+                <td class="num-col">{{ bytes_human(ps.total_traffic) if ps.total_traffic else '—' }}</td>
+                <td>
+                    {% if ps.internet_pct is defined and ps.site != 'TOTAL' %}
+                        <span class="text-muted" style="font-size:7.5pt;">
+                            I:{{ ps.internet_pct }}%{% if ps.inbound_pct %} · B:{{ ps.inbound_pct }}%{% endif %} · N:{{ ps.internal_pct }}%
+                        </span>
+                    {% elif ps.site == 'TOTAL' %}
+                        <span class="text-muted" style="font-size:7.5pt;">100%</span>
+                    {% else %}
+                        <span class="text-muted" style="font-size:7.5pt;">—</span>
+                    {% endif %}
+                </td>
+                <td class="num-col">{{ ps.vpn if ps.vpn else '—' }}</td>
+                <td class="num-col">{% if ps.sdwan == 'up' %}✓ UP{% elif ps.sdwan == 'partial' %}Partial{% elif ps.sdwan == 'down' %}✗ DOWN{% else %}—{% endif %}</td>
             </tr>
         {% endfor %}
         </tbody>
@@ -1454,17 +1468,17 @@ body {
 
 {# ── 5. SD-WAN Health Detail ─────────────────────────────────────────────── #}
 {% if data.sdwan_health %}
-<div class="card">
-    <h3>SD-WAN Health Detail</h3>
+<div class="table-card">
+    <h3 style="padding:8px 12px;margin:0;font-size:9pt;border-bottom:1px solid hsl(var(--border));">SD-WAN Health Detail</h3>
     <table>
         <thead>
             <tr>
                 <th>Site</th>
-                <th>Link Name</th>
-                <th>Status</th>
-                <th>Latency</th>
-                <th>Jitter</th>
-                <th>Loss %</th>
+                <th>Link</th>
+                <th class="num-col">Status</th>
+                <th class="num-col">Latency (ms)</th>
+                <th class="num-col">Jitter (ms)</th>
+                <th class="num-col">Loss %</th>
             </tr>
         </thead>
         <tbody>
@@ -1472,10 +1486,10 @@ body {
             <tr>
                 <td><strong>{{ lnk.site }}</strong></td>
                 <td>{{ lnk.link_name }}</td>
-                <td class="{{ lnk.status | lower }}">{{ lnk.status | upper }}</td>
-                <td>{{ lnk.latency if lnk.latency else '&mdash;' | safe }}</td>
-                <td>{{ lnk.jitter if lnk.jitter else '&mdash;' | safe }}</td>
-                <td>{{ ('%0.2f' | format(lnk.loss_pct)) if lnk.loss_pct is defined else '&mdash;' | safe }}</td>
+                <td class="num-col"><span class="badge badge-{{ 'success' if lnk.status|upper == 'UP' else 'danger' if lnk.status|upper == 'DOWN' else 'warning' }}">{{ lnk.status | upper }}</span></td>
+                <td class="num-col">{% if lnk.latency %}{{ '%0.1f' | format(lnk.latency) }}{% else %}—{% endif %}</td>
+                <td class="num-col">{% if lnk.jitter %}{{ '%0.1f' | format(lnk.jitter) }}{% else %}—{% endif %}</td>
+                <td class="num-col">{% if lnk.loss_pct is defined %}{{ '%0.2f' | format(lnk.loss_pct) }}{% else %}—{% endif %}</td>
             </tr>
         {% endfor %}
         </tbody>

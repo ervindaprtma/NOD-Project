@@ -24,6 +24,8 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Optional
 
+import pandas as pd
+
 from weasyprint import HTML
 from jinja2 import Environment, FileSystemLoader
 
@@ -1591,8 +1593,54 @@ async def build_report_context(
 
                 per_site_status.append(site_status)
 
+            # ── Pandas: add computed columns + totals row ────────────────
             if per_site_status:
-                summary["per_site_status"] = per_site_status
+                df = pd.DataFrame(per_site_status)
+
+                # Total traffic per site (sum of numeric traffic columns)
+                for col in ["internet", "inbound", "internal"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype("int64")
+                df["total_traffic"] = df["internet"] + df["inbound"] + df["internal"]
+
+                # Traffic composition pct (avoid /0)
+                df["internet_pct"] = df.apply(
+                    lambda r: round(r["internet"] / r["total_traffic"] * 100, 1)
+                    if r["total_traffic"] > 0 else 0, axis=1
+                )
+                df["inbound_pct"] = df.apply(
+                    lambda r: round(r["inbound"] / r["total_traffic"] * 100, 1)
+                    if r["total_traffic"] > 0 else 0, axis=1
+                )
+                df["internal_pct"] = df.apply(
+                    lambda r: round(r["internal"] / r["total_traffic"] * 100, 1)
+                    if r["total_traffic"] > 0 else 0, axis=1
+                )
+
+                # Totals row
+                totals = {
+                    "site": "TOTAL",
+                    "internet": int(df["internet"].sum()),
+                    "inbound": int(df["inbound"].sum()),
+                    "internal": int(df["internal"].sum()),
+                    "total_traffic": int(df["total_traffic"].sum()),
+                    "internet_pct": 100.0,
+                    "inbound_pct": 100.0,
+                    "internal_pct": 100.0,
+                    "vpn": None,
+                    "sdwan": None,
+                }
+                totals_df = pd.DataFrame([totals])
+
+                # Convert back to list of dicts, append totals row
+                df_with_totals = pd.concat([df, totals_df], ignore_index=True)
+                # Replace 0 with None for cleaner template rendering (show — instead of 0 B)
+                for col in ["internet", "inbound", "internal"]:
+                    df_with_totals.loc[
+                        (df_with_totals[col] == 0) & (df_with_totals["site"] != "TOTAL"),
+                        col
+                    ] = None
+
+                summary["per_site_status"] = df_with_totals.to_dict(orient="records")
 
         except Exception as exc:
             logger.error("R-07 executive summary build failed: %s", exc, exc_info=True)
