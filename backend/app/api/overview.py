@@ -121,7 +121,7 @@ async def get_overview(
     ]
 
     # Top Destination AS Organizations
-    top_as_orgs_raw = await appid_qb.top_dst_as_orgs(gte_ms=gte_ms, lte_ms=lte_ms, size=10)
+    top_as_orgs_raw = await tf_qb.top_dst_as_orgs(gte_ms=gte_ms, lte_ms=lte_ms, size=10)
     top_as_orgs = [
         TopASOrg(
             org_name=a["as_org"],
