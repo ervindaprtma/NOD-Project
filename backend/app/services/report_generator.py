@@ -700,6 +700,92 @@ async def build_report_context(
             if per_site:
                 traffic["per_site_summary"] = per_site
 
+            # ── Per-site data (R-08 only): throughput chart + per-site data objects ──
+            if report_type == "R-08":
+                sites_dict: dict[str, Any] = {}
+                bucket_sec = _interval_to_seconds("15m")
+                for site in site_list:
+                    sl = _site_label(site)
+                    psd: dict[str, Any] = {}
+                    try:
+                        sd = await tf_qb.flow_summary(gte_ms=gte_ms, lte_ms=lte_ms, site_name=site, path_filter="internet")
+                        if sd:
+                            # Top Applications — data objects for hbar_list
+                            if sd.get("top_apps"):
+                                top = sd["top_apps"][:10]
+                                mx = max(a["total_bytes"] for a in top)
+                                psd["top_applications"] = [
+                                    {"label": a["app_name"], "value": a["total_bytes"],
+                                     "pct": round(a["total_bytes"] / mx * 100, 1) if mx else 0,
+                                     "color": CHART_COLORS[i % len(CHART_COLORS)]}
+                                    for i, a in enumerate(top)
+                                ]
+                            # Top AS Orgs
+                            if sd.get("top_dst_as_org"):
+                                top = sd["top_dst_as_org"][:10]
+                                mx = max(a["total_bytes"] for a in top)
+                                psd["top_as_orgs"] = [
+                                    {"label": a.get("org_name") or a.get("as_org"), "value": a["total_bytes"],
+                                     "pct": round(a["total_bytes"] / mx * 100, 1) if mx else 0,
+                                     "color": CHART_COLORS[i % len(CHART_COLORS)]}
+                                    for i, a in enumerate(top)
+                                ]
+                            # Top Countries
+                            if sd.get("top_dst_as_country"):
+                                top = sd["top_dst_as_country"][:10]
+                                mx = max(c["total_bytes"] for c in top)
+                                psd["top_countries"] = [
+                                    {"label": c["country"], "value": c["total_bytes"],
+                                     "pct": round(c["total_bytes"] / mx * 100, 1) if mx else 0,
+                                     "color": CHART_COLORS[i % len(CHART_COLORS)]}
+                                    for i, c in enumerate(top)
+                                ]
+                            # Protocol Distribution — data for hbar_list
+                            if sd.get("protocol_dist"):
+                                top = sd["protocol_dist"][:10]
+                                mx = max(p["total_bytes"] for p in top)
+                                psd["protocol_distribution"] = [
+                                    {"label": p["protocol"], "value": p["total_bytes"],
+                                     "pct": round(p["total_bytes"] / mx * 100, 1) if mx else 0,
+                                     "color": CHART_COLORS[i % len(CHART_COLORS)]}
+                                    for i, p in enumerate(top)
+                                ]
+                    except Exception as exc:
+                        logger.debug("R-08 per-site data (internet) failed for %s: %s", site, exc)
+
+                    # Per-site Throughput Over Time chart
+                    try:
+                        fcr = await tf_qb.flow_chart(gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+                                                     bucket_seconds=bucket_sec, path_filter="internet")
+                        tp_raw = []
+                        for row in fcr.get("chart_data", []):
+                            bs = 0
+                            for k, v in row.items():
+                                if k in ("timestamp", "timestampMs"):
+                                    continue
+                                if isinstance(v, (int, float)):
+                                    bs += int(v)
+                            tp_raw.append({"timestamp": row.get("timestampMs") or row.get("timestamp"), "bytes": bs})
+                        if tp_raw:
+                            tp_mbps = []
+                            for b in tp_raw:
+                                bv = int(b.get("bytes", 0) or 0)
+                                mbps = (bv * 8) / bucket_sec / 1_000_000
+                                tp_mbps.append({"timestamp": b.get("timestamp"), "mbps": round(mbps, 2)})
+                            psd["throughput_timeline"] = await _run_chart(
+                                render_timeseries_chart, tp_mbps,
+                                title=f"Throughput Over Time — {sl}",
+                                ylabel="Throughput (Mbps)", y_key="mbps",
+                                tz=ZoneInfo("Asia/Jakarta"),
+                            )
+                    except Exception as exc:
+                        logger.debug("R-08 per-site throughput chart failed for %s: %s", site, exc)
+
+                    if psd:
+                        sites_dict[sl] = psd
+                if sites_dict:
+                    traffic["sites"] = sites_dict
+
         except Exception as exc:
             logger.error("R-01 data fetch failed: %s", exc, exc_info=True)
 
@@ -1293,6 +1379,13 @@ async def build_report_context(
                         )
 
                     if site_dict:
+                        # Attach per-site chart strings from the charts dict
+                        prot_chart = charts.pop(f"inbound_protocol_{site}", None)
+                        if prot_chart:
+                            site_dict["protocol_distribution"] = prot_chart
+                        egr_chart = charts.pop(f"inbound_egress_{site}", None)
+                        if egr_chart:
+                            site_dict["egress_breakdown"] = egr_chart
                         inbound_sites[_site_label(site)] = site_dict
 
                 except Exception as exc:
@@ -1304,6 +1397,32 @@ async def build_report_context(
 
             if inbound_sites:
                 inbound["sites"] = inbound_sites
+
+            # ── Per-site throughput timeline charts (R-08 only) ──
+            if report_type == "R-08" and inbound_sites:
+                bucket_sec = _interval_to_seconds("15m")
+                for site in site_list:
+                    sl = _site_label(site)
+                    sdict = inbound_sites.get(sl)
+                    if not sdict:
+                        continue
+                    try:
+                        chart_res = await ti_qb.flow_chart(
+                            gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+                            bucket_seconds=bucket_sec, path_filter="inbound-vip",
+                        )
+                        tp_mbps = _compute_throughput_timeline(
+                            chart_res.get("chart_data", []), bucket_sec,
+                        )
+                        if tp_mbps:
+                            sdict["throughput_timeline"] = await _run_chart(
+                                render_timeseries_chart, tp_mbps,
+                                title=f"Inbound Throughput Over Time — {sl}",
+                                ylabel="Throughput (Mbps)", y_key="mbps",
+                                tz=ZoneInfo("Asia/Jakarta"),
+                            )
+                    except Exception as exc:
+                        logger.debug("R-08 per-site inbound throughput chart failed for %s: %s", site, exc)
 
             # Track sites with no inbound data for "tidak tersedia" message
             had_data = set(inbound_sites.keys())
@@ -1459,6 +1578,32 @@ async def build_report_context(
 
             if internal_sites:
                 internal["sites"] = internal_sites
+
+            # ── Per-site throughput timeline charts (R-08 only) ──
+            if report_type == "R-08" and internal_sites:
+                bucket_sec = _interval_to_seconds("15m")
+                for site in site_list:
+                    sl = _site_label(site)
+                    sdict = internal_sites.get(sl)
+                    if not sdict:
+                        continue
+                    try:
+                        chart_res = await tint_qb.flow_chart(
+                            gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+                            bucket_seconds=bucket_sec, traffic_path="all",
+                        )
+                        tp_mbps = _compute_throughput_timeline(
+                            chart_res.get("chart_data", []), bucket_sec,
+                        )
+                        if tp_mbps:
+                            sdict["throughput_timeline"] = await _run_chart(
+                                render_timeseries_chart, tp_mbps,
+                                title=f"Internal Throughput Over Time — {sl}",
+                                ylabel="Throughput (Mbps)", y_key="mbps",
+                                tz=ZoneInfo("Asia/Jakarta"),
+                            )
+                    except Exception as exc:
+                        logger.debug("R-08 per-site internal throughput chart failed for %s: %s", site, exc)
 
             if per_site_summary:
                 internal["per_site_summary"] = per_site_summary

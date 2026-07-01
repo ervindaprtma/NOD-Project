@@ -742,39 +742,85 @@ body {
 </div>
 {% endif %}
 
-{% if data.top_applications %}
+{% if data.top_applications and (report_type != 'R-08' or not data.sites) %}
 <div class="card">
     <h3>Top 10 Applications by Traffic Volume</h3>
     {{ hbar_list(data.top_applications) }}
 </div>
 {% endif %}
 
-{% if data.throughput_timeline %}
+{% if data.throughput_timeline and (report_type != 'R-08' or not data.sites) %}
 <div class="chart-card">
     <h3>Throughput Over Time</h3>
     {{ chart_img(data.throughput_timeline, 'Throughput timeline chart') }}
 </div>
 {% endif %}
 
-{% if data.top_as_orgs %}
+{% if data.top_as_orgs and (report_type != 'R-08' or not data.sites) %}
 <div class="card">
     <h3>Top 10 Destination AS Organizations</h3>
     {{ hbar_list(data.top_as_orgs) }}
 </div>
 {% endif %}
 
-{% if data.top_countries %}
+{% if data.top_countries and (report_type != 'R-08' or not data.sites) %}
 <div class="card">
     <h3>Top 10 Destination Countries</h3>
     {{ hbar_list(data.top_countries) }}
 </div>
 {% endif %}
 
-{% if data.protocol_distribution %}
+{% if data.protocol_distribution and (report_type != 'R-08' or not data.sites) %}
 <div class="chart-card">
     <h3>Protocol Distribution by Traffic Volume</h3>
     {{ chart_img(data.protocol_distribution, 'Protocol distribution chart') }}
 </div>
+{% endif %}
+
+{# Per-site blocks for R-08 mode #}
+{% if data.sites and report_type == 'R-08' %}
+{% for site_name, site_d in data.sites.items() %}
+{% if site_d.throughput_timeline or site_d.top_applications or site_d.top_as_orgs or site_d.top_countries or site_d.protocol_distribution %}
+{% call site_block(site_name) %}
+
+{% if site_d.throughput_timeline %}
+<div class="chart-card" style="margin-bottom:10px;">
+    <h3>Throughput Over Time</h3>
+    {{ chart_img(site_d.throughput_timeline, 'Throughput ' ~ site_name) }}
+</div>
+{% endif %}
+
+{% if site_d.top_applications %}
+<div class="card" style="margin-bottom:10px;">
+    <h3>Top 10 Applications</h3>
+    {{ hbar_list(site_d.top_applications) }}
+</div>
+{% endif %}
+
+{% if site_d.top_as_orgs %}
+<div class="card" style="margin-bottom:10px;">
+    <h3>Top Destination AS Organizations</h3>
+    {{ hbar_list(site_d.top_as_orgs) }}
+</div>
+{% endif %}
+
+{% if site_d.top_countries %}
+<div class="card" style="margin-bottom:10px;">
+    <h3>Top Destination Countries</h3>
+    {{ hbar_list(site_d.top_countries) }}
+</div>
+{% endif %}
+
+{% if site_d.protocol_distribution %}
+<div class="card" style="margin-bottom:10px;">
+    <h3>Protocol Distribution</h3>
+    {{ hbar_list(site_d.protocol_distribution) }}
+</div>
+{% endif %}
+
+{% endcall %}
+{% endif %}
+{% endfor %}
 {% endif %}
 
 {% if data.per_site_summary and report_type != 'R-08' %}
@@ -1095,7 +1141,7 @@ body {
 {% if data.total_throughput_bytes is defined %}
 <div class="kpi-grid">
     {{ kpi_card('Total Inbound Throughput', bytes_human(data.total_throughput_bytes), 'info', 'All sites combined') }}
-    {% if data.per_site_summary %}
+    {% if data.per_site_summary and report_type != 'R-08' %}
     {% for ps in data.per_site_summary %}
         {{ kpi_card(ps.site, bytes_human(ps.total_bytes), 'info', 'Top: ' + (ps.top_app | default('—'))) }}
     {% endfor %}
@@ -1117,7 +1163,7 @@ body {
 </div>
 {% endif %}
 
-{% if data.throughput_timeline %}
+{% if data.throughput_timeline and (report_type != 'R-08' or not data.sites) %}
 <div class="chart-card" style="margin-bottom:10px;">
     <h3>Inbound Throughput Over Time</h3>
     {{ chart_img(data.throughput_timeline, 'Inbound throughput timeline') }}
@@ -1126,8 +1172,15 @@ body {
 
 {% if data.sites %}
 {% for site_name, site_d in data.sites.items() %}
-{% if site_d.top_services or site_d.protocol_distribution or site_d.egress_breakdown %}
+{% if site_d.throughput_timeline or site_d.top_services or site_d.top_client_as or site_d.top_countries or site_d.protocol_distribution or site_d.egress_breakdown %}
 {% call site_block(site_name) %}
+
+{% if site_d.throughput_timeline and report_type == 'R-08' %}
+<div class="chart-card" style="margin-bottom:10px;">
+    <h3>Inbound Throughput Over Time</h3>
+    {{ chart_img(site_d.throughput_timeline, 'Inbound throughput ' ~ site_name) }}
+</div>
+{% endif %}
 
 {% if site_d.top_services %}
 <div class="card" style="margin-bottom:10px;">
@@ -1228,7 +1281,7 @@ body {
 {% if data.total_throughput_bytes is defined %}
 <div class="kpi-grid">
     {{ kpi_card('Total Internal Throughput', bytes_human(data.total_throughput_bytes), 'info', 'All sites combined') }}
-    {% if data.per_site_summary %}
+    {% if data.per_site_summary and report_type != 'R-08' %}
     {% for ps in data.per_site_summary %}
         {{ kpi_card(ps.site, bytes_human(ps.total_bytes), 'info', 'Top: ' + (ps.top_app | default('—'))) }}
     {% endfor %}
@@ -1243,7 +1296,7 @@ body {
 </div>
 {% endif %}
 
-{% if data.throughput_timeline %}
+{% if data.throughput_timeline and (report_type != 'R-08' or not data.sites) %}
 <div class="chart-card" style="margin-bottom:10px;">
     <h3>Internal Throughput Over Time</h3>
     {{ chart_img(data.throughput_timeline, 'Internal throughput timeline') }}
@@ -1251,14 +1304,14 @@ body {
 {% endif %}
 
 {# Separate timeline charts for Inter-Site and Intra-LAN #}
-{% if data.throughput_timeline_inter_site %}
+{% if data.throughput_timeline_inter_site and (report_type != 'R-08' or not data.sites) %}
 <div class="chart-card" style="margin-bottom:10px;">
     <h3>Inter-Site Throughput Over Time</h3>
     {{ chart_img(data.throughput_timeline_inter_site, 'Inter-site throughput timeline') }}
 </div>
 {% endif %}
 
-{% if data.throughput_timeline_intra_lan %}
+{% if data.throughput_timeline_intra_lan and (report_type != 'R-08' or not data.sites) %}
 <div class="chart-card" style="margin-bottom:10px;">
     <h3>Intra-LAN Throughput Over Time</h3>
     {{ chart_img(data.throughput_timeline_intra_lan, 'Intra-LAN throughput timeline') }}
@@ -1268,8 +1321,15 @@ body {
 {# Per-site blocks — INTER-SITE first, then INTRA-LAN #}
 {% if data.sites %}
 {% for site_name, site_d in data.sites.items() %}
-{% if site_d.inter_site or site_d.intra_lan %}
+{% if site_d.throughput_timeline or site_d.inter_site or site_d.intra_lan %}
 {% call site_block(site_name) %}
+
+{% if site_d.throughput_timeline and report_type == 'R-08' %}
+<div class="chart-card" style="margin-bottom:10px;">
+    <h3>Internal Throughput Over Time</h3>
+    {{ chart_img(site_d.throughput_timeline, 'Internal throughput ' ~ site_name) }}
+</div>
+{% endif %}
 
 {# ① Inter-Site Traffic (traffic.path = "inter-site") #}
 {% if site_d.inter_site %}
