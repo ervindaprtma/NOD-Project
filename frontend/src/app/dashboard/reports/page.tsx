@@ -12,8 +12,9 @@ interface ReportJob {
   job_id: string;
   report_type: string;
   output_format: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "expired";
   file_size_bytes: number | null;
+  file_deleted: boolean;
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
@@ -137,12 +138,20 @@ function statusBadge(s: string) {
     running: "bg-blue-500/10 text-blue-600",
     completed: "bg-emerald-500/10 text-emerald-600",
     failed: "bg-red-500/10 text-red-600",
+    expired: "bg-orange-500/10 text-orange-600",
   };
   return (
     <span className={cn("px-2 py-0.5 rounded text-xs font-medium", map[s] || "bg-muted text-muted-foreground")}>
       {s}
     </span>
   );
+}
+
+function isExpired(job: ReportJob): boolean {
+  if (job.file_deleted) return true;
+  if (job.status === "expired") return true;
+  if (job.expires_at && new Date(job.expires_at) < new Date()) return true;
+  return false;
 }
 
 // ── Main Page ─────────────────────────────────────────────────
@@ -269,7 +278,10 @@ export default function ReportsPage() {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         credentials: "include",
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const msg = res.status === 404 ? "Report expired or not found" : `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -280,7 +292,7 @@ export default function ReportsPage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (e) {
-      console.error("Download failed", e);
+      alert("Download failed: " + (e instanceof Error ? e.message : "Unknown error"));
     }
   }
 
@@ -530,7 +542,14 @@ export default function ReportsPage() {
                     <td className="py-2 pr-3 text-xs text-muted-foreground">{formatDate(job.created_at)}</td>
                     <td className="py-2 pr-3">
                       <div className="flex gap-1">
-                        {job.status === "completed" && canGenerateReports && (
+                        {isExpired(job) ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-xs text-orange-500 font-medium">Expired</span>
+                            {job.expires_at && (
+                              <span className="text-[10px] text-muted-foreground">since {formatDate(job.expires_at)}</span>
+                            )}
+                          </div>
+                        ) : job.status === "completed" && canGenerateReports ? (
                           <>
                             <button
                               onClick={() => handleDownload(job)}
@@ -547,12 +566,12 @@ export default function ReportsPage() {
                                       headers: tk ? { Authorization: `Bearer ${tk}` } : {},
                                       credentials: "include",
                                     });
-                                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                    if (!res.ok) throw new Error("Report expired or unavailable" + (res.status === 404 ? " (expired)" : ` (HTTP ${res.status})`));
                                     const blob = await res.blob();
                                     const blobUrl = URL.createObjectURL(blob);
                                     window.open(blobUrl, "_blank");
                                   } catch (e) {
-                                    console.error("Preview failed", e);
+                                    alert("Preview unavailable: " + (e instanceof Error ? e.message : "Unknown error"));
                                   }
                                 }}
                                 className="px-2 py-1 text-xs rounded bg-blue-500/10 text-blue-600 hover:bg-blue-500/20"
@@ -563,7 +582,6 @@ export default function ReportsPage() {
                             <button
                               onClick={() => {
                                 const next = distJobId === job.job_id ? null : job.job_id;
-                                console.log("[Distribute] click:", { jobId: job.job_id, current: distJobId, next });
                                 setDistJobId(next);
                               }}
                               className="px-2 py-1 text-xs rounded bg-blue-500/10 text-blue-600 hover:bg-blue-500/20"
@@ -571,15 +589,13 @@ export default function ReportsPage() {
                               Distribute
                             </button>
                           </>
-                        )}
-                        {job.status === "completed" && !canGenerateReports && (
+                        ) : job.status === "completed" && !canGenerateReports ? (
                           <span className="text-[11px] text-muted-foreground">—</span>
-                        )}
-                        {job.status === "failed" && job.error_message && (
+                        ) : job.status === "failed" && job.error_message ? (
                           <span className="text-xs text-red-500 truncate max-w-[120px]" title={job.error_message}>
                             {job.error_message.slice(0, 40)}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </td>
                   </tr>

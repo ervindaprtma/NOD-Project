@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/v1/reports", tags=["Reports"])
 
 REPORT_OUTPUT_DIR = Path("reports/output")
 REPORT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-REPORT_TTL_HOURS = 72  # Auto-cleanup after 72 hours
+REPORT_TTL_HOURS = 24  # Auto-cleanup after 24 hours
 
 
 @router.get("", response_model=APIResponse[list[ReportJobStatus]])
@@ -195,6 +195,9 @@ async def distribute_report(
 
     if job.status != "completed" or not job.file_path:
         raise HTTPException(status_code=400, detail="Report not ready for distribution.")
+
+    if job.file_deleted or not os.path.exists(job.file_path):
+        raise HTTPException(status_code=404, detail="Report file expired or not found.")
 
     # File size guard (20 MB)
     if job.file_size_bytes and job.file_size_bytes > 20 * 1024 * 1024:
@@ -456,41 +459,45 @@ async def delete_schedule(
 # Report Cleanup (P9)
 # ─────────────────────────────────────────────────────────────────
 
+
+async def _cleanup_expired_reports(db: AsyncSession) -> int:
+    """Internal: mark expired reports, delete files, keep DB records."""
+    import logging
+    logger = logging.getLogger(__name__)
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(ReportJob).where(
+            ReportJob.expires_at < now,
+            ReportJob.file_deleted == False,
+        )
+    )
+    expired = result.scalars().all()
+    count = 0
+    for job in expired:
+        try:
+            if job.file_path and os.path.exists(job.file_path):
+                os.remove(job.file_path)
+            job.file_deleted = True
+            job.status = "expired"
+            count += 1
+        except Exception as e:
+            logger.error(f"Cleanup error job {job.id}: {e}")
+    await db.commit()
+    if count:
+        logger.info(f"Cleaned up {count} expired reports")
+    return count
+
+
 @router.post("/cleanup", response_model=APIResponse[dict])
 async def cleanup_expired_reports(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
-    """
-    Delete expired report files and clean up database records.
-    Runs automatically or on-demand.
-    """
-    now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(ReportJob).where(
-            ReportJob.expires_at < now
-        )
-    )
-    expired_jobs = result.scalars().all()
-
-    deleted_count = 0
-    errors = []
-
-    for job in expired_jobs:
-        try:
-            if job.file_path and os.path.exists(job.file_path):
-                os.remove(job.file_path)
-            await db.delete(job)
-            deleted_count += 1
-        except Exception as e:
-            errors.append({"job_id": str(job.id), "error": str(e)})
-
-    await db.commit()
-
+    """Manually trigger expired report cleanup (admin only)."""
+    count = await _cleanup_expired_reports(db)
     return APIResponse.ok(data={
-        "deleted_count": deleted_count,
-        "remaining_errors": errors,
-        "message": f"Cleaned up {deleted_count} expired reports." if not errors else f"Cleaned {deleted_count} reports with {len(errors)} errors."
+        "deleted_count": count,
+        "message": f"Cleaned up {count} expired reports.",
     })
 
 

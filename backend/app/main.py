@@ -83,6 +83,13 @@ async def lifespan(app: FastAPI):
         await session.commit()
     logger.info("Reset pending/running report jobs from previous session")
 
+    # Auto-cleanup expired reports on startup
+    from app.api.reports import _cleanup_expired_reports
+    async with AsyncSessionLocal() as session:
+        cleaned = await _cleanup_expired_reports(session)
+        if cleaned:
+            logger.info(f"Cleaned up {cleaned} expired reports on startup")
+
     # DB connection pool is lazily initialized by SQLAlchemy
     yield
     # Shutdown
