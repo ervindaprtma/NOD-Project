@@ -57,6 +57,8 @@ export default function RawDataPage() {
     correlation_id: true, correlation_direction: true,
   });
   const [siteName, setSiteName] = useState("Site_FGT-DC");
+  const [pathFilter, setPathFilter] = useState("internet"); // internet, inter-site, intra-lan, all
+  const [direction, setDirection] = useState(""); // upload, download
 
   // Build query params
   const queryParams = useMemo(() => {
@@ -67,7 +69,9 @@ export default function RawDataPage() {
       sort_by: sort.column,
       sort_dir: sort.dir,
       site_name: siteName,
+      path_filter: pathFilter,
     };
+    if (direction) p.direction = direction;
     if (currentCursor) {
       p.search_after_timestamp = currentCursor[0];
       p.search_after_id = currentCursor[1];
@@ -81,7 +85,7 @@ export default function RawDataPage() {
     if (filters.ingress_zone) p.ingress_zone = filters.ingress_zone;
     if (filters.egress_link) p.egress_link = filters.egress_link;
     return p;
-  }, [gteMs, lteMs, pageSize, sort, currentCursor, filters, siteName]);
+  }, [gteMs, lteMs, pageSize, sort, currentCursor, filters, siteName, pathFilter, direction]);
 
   const token = typeof window !== "undefined" ? getAccessToken() : null;
   const { data, error, isLoading } = useSWR<APIResponse<RawFlowRecord[]>>(

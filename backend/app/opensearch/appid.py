@@ -625,14 +625,16 @@ async def raw_flows(
     sort_by: Optional[str] = None,
     sort_dir: str = "desc",
     filters: Optional[dict] = None,
-    site_name: str = "Site_FGT_Office",
+    site_name: str = "Site_FGT-DC",
+    path_filter: str = "internet",  # Support: internet, inter-site, intra-lan
+    direction: str = "",  # Support: upload, download
 ) -> dict:
     """
     Q-03: _source includes only required fields.
     Q-04: no scroll API — uses search_after.
     Q-08: valid search_after pagination.
     Routes to correct cluster per site (dc/drc).
-    Returns {"records": [...], "search_after": [...]}
+    Returns {"records": [...], "search_after": [...], "total_hits": ...}
     """
     if client is None:
         # Route to correct cluster per site
@@ -668,7 +670,19 @@ async def raw_flows(
 
     must_filters = [_time_range(gte_ms, lte_ms), _tf_site_filter(site_name)]
     must_not_filters = [_exclude_app0(), _exclude_private_as()]
-
+    
+    # Apply traffic path filter (internet, inter-site, intra-lan)
+    if path_filter and path_filter != "all":
+        must_filters.append({"term": {"flow.traffic.path": path_filter}})
+    
+    # Apply direction filter (upload, download)
+    if direction == "upload":
+        must_filters.append({"term": {"flow.in.netif.sec.zone.name": "internal"}})
+        must_filters.append({"term": {"flow.out.netif.sec.zone.name": "internet"}})
+    elif direction == "download":
+        must_filters.append({"term": {"flow.in.netif.sec.zone.name": "internet"}})
+        must_filters.append({"term": {"flow.out.netif.sec.zone.name": "internal"}})
+    
     # Apply additional filters
     if filters:
         if "client_ip" in filters and filters["client_ip"]:

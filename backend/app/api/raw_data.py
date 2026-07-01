@@ -8,9 +8,8 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-
-from app.api.auth import get_current_user, require_role
+from fastapi import APIRouter, Depends, Query
+from app.api.auth import require_role
 from app.opensearch import appid as appid_qb
 from app.schemas.common import APIResponse, Meta
 from app.schemas.traffic import RawFlowRecord
@@ -37,7 +36,7 @@ async def get_raw_flows(
     search_after_timestamp: Optional[int] = Query(default=None, description="search_after: @timestamp value"),
     search_after_id: Optional[str] = Query(default=None, description="search_after: _id tiebreaker"),
     sort_by: Optional[str] = Query(default="@timestamp", description="Sort column"),
-    sort_dir: Optional[str] = Query(default="desc", pattern=r"^(asc|desc)$"),
+    sort_dir: str = Query(default="desc", pattern=r"^(asc|desc)$"),
     client_ip: Optional[str] = Query(default=None),
     server_ip: Optional[str] = Query(default=None),
     application: Optional[str] = Query(default=None, description="Comma-separated application names"),
@@ -47,6 +46,8 @@ async def get_raw_flows(
     ingress_zone: Optional[str] = Query(default=None),
     egress_link: Optional[str] = Query(default=None),
     site_name: str = Query(default="Site_FGT-DC", description="Site: Site_FGT-DC, Site_FGT-DRC, Site_FGT_Office"),
+    path_filter: str = Query(default="internet", description="Traffic path: internet, inter-site, intra-lan, or 'all' for all paths"),
+    direction: Optional[str] = Query(default=None, description="Direction: 'upload' or 'download' (only for internet path)"),
     current_user=Depends(require_role("operator")),
 ):
     """
@@ -90,6 +91,8 @@ async def get_raw_flows(
         sort_dir=sort_dir,
         filters=filters,
         site_name=site_name,
+        path_filter=path_filter,
+        direction=direction or "",
     )
 
     elapsed = int((time.monotonic() - t0) * 1000)
