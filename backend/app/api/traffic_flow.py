@@ -1,24 +1,45 @@
 """
 Traffic Flow API routes (FortiGate AppID flow).
 Prefix: /api/v1/traffic-flow
+
+All endpoints have try/except error handling to prevent 500 errors on
+OpenSearch timeouts/connection issues. Returns empty result on error
+so the frontend can show "No data" instead of "Failed to load".
 """
 from __future__ import annotations
 
 import time
 import json
-from typing import Optional
+import logging
+from typing import Optional, Any
 
 from fastapi import APIRouter, Depends, Query
 
 from app.api.auth import get_current_user
 from app.opensearch import traffic_flow as tf_qb
-from app.schemas.common import APIResponse
+from app.schemas.common import APIResponse, Meta
 from app.schemas.traffic_flow import (
     TrafficSummaryResponse, TrafficChartResponse,
     TrafficTableResponse, SankeyResponse,
 )
 
+logger = logging.getLogger("nod.api.traffic_flow")
 router = APIRouter(prefix="/api/v1/traffic-flow", tags=["Traffic Flow"])
+
+
+# ─────────────────────────────────────────────────────────────────
+# Safe wrapper — returns empty result on OpenSearch error/timeout
+# ─────────────────────────────────────────────────────────────────
+
+async def _safe_query(fn_name: str, **kwargs):
+    """Run a query function with error handling.
+    Returns (data_dict, error_string). data_dict is None on error."""
+    fn = getattr(tf_qb, fn_name)
+    try:
+        return await fn(**kwargs), None
+    except Exception as e:
+        logger.error(f"{fn_name} failed: {type(e).__name__}: {e}")
+        return None, str(e)
 
 
 @router.get("/summary", response_model=APIResponse[TrafficSummaryResponse])
@@ -36,13 +57,25 @@ async def traffic_flow_summary(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
-    data = await tf_qb.flow_summary(
+    data, err = await _safe_query(
+        "flow_summary",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=TrafficSummaryResponse(**data), meta={"query_took_ms": elapsed})
+    meta = Meta(query_took_ms=elapsed)
+    if data is None:
+        # Return empty summary on error
+        empty = {
+            "top_apps": [], "app_categories": [],
+            "top_dst_as_org": [], "top_dst_as_country": [],
+            "top_clients": [], "top_servers": [],
+            "protocol_dist": [], "egress_breakdown": [],
+        }
+        logger.warning(f"summary empty result for {site_name} ({elapsed}ms): {err}")
+        return APIResponse.ok(data=TrafficSummaryResponse(**empty), meta=meta)
+    return APIResponse.ok(data=TrafficSummaryResponse(**data), meta=meta)
 
 
 @router.get("/chart", response_model=APIResponse[TrafficChartResponse])
@@ -61,14 +94,22 @@ async def traffic_flow_chart(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
-    data = await tf_qb.flow_chart(
+    data, err = await _safe_query(
+        "flow_chart",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         bucket_seconds=bucket_seconds,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=TrafficChartResponse(**data), meta={"query_took_ms": elapsed})
+    meta = Meta(query_took_ms=elapsed)
+    if data is None:
+        logger.warning(f"chart empty result for {site_name} ({elapsed}ms): {err}")
+        return APIResponse.ok(
+            data=TrafficChartResponse(chart_data=[], app_names=[]),
+            meta=meta,
+        )
+    return APIResponse.ok(data=TrafficChartResponse(**data), meta=meta)
 
 
 @router.get("/table", response_model=APIResponse[TrafficTableResponse])
@@ -91,14 +132,21 @@ async def traffic_flow_table(
     if after:
         try: after_key = json.loads(after)
         except json.JSONDecodeError: return APIResponse.fail("INVALID_AFTER", "after must be valid JSON")
-
-    data = await tf_qb.flow_table(
+    data, err = await _safe_query(
+        "flow_table",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, after=after_key, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=TrafficTableResponse(**data), meta={"query_took_ms": elapsed})
+    meta = Meta(query_took_ms=elapsed)
+    if data is None:
+        logger.warning(f"table empty result for {site_name} ({elapsed}ms): {err}")
+        return APIResponse.ok(
+            data=TrafficTableResponse(records=[], after_key=None),
+            meta=meta,
+        )
+    return APIResponse.ok(data=TrafficTableResponse(**data), meta=meta)
 
 
 @router.get("/sankey", response_model=APIResponse[SankeyResponse])
@@ -117,11 +165,20 @@ async def traffic_flow_sankey(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
-    data = await tf_qb.sankey_data(
+    data, err = await _safe_query(
+        "sankey_data",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         direction=direction,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=SankeyResponse(**data), meta={"query_took_ms": elapsed})
+    meta = Meta(query_took_ms=elapsed)
+    if data is None:
+        logger.warning(f"sankey empty result for {site_name} ({elapsed}ms): {err}")
+        empty_sankey = {"nodes": [], "links": [], "as_country_nodes": [], "as_country_links": []}
+        return APIResponse.ok(
+            data=SankeyResponse(**empty_sankey),
+            meta=meta,
+        )
+    return APIResponse.ok(data=SankeyResponse(**data), meta=meta)

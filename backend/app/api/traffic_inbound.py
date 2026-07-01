@@ -7,18 +7,22 @@ Endpoints:
   GET /chart    — 60s stacked bar chart data
   GET /table    — Paginated flow records table
   GET /sankey   — Sankey diagram nodes+links
+
+All endpoints have try/except error handling to prevent 500 errors.
 """
 from __future__ import annotations
 
 import time
 import json
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
 from app.api.auth import get_current_user
+from app.api._safe import safe_query
 from app.opensearch import traffic_inbound as ti_qb
-from app.schemas.common import APIResponse
+from app.schemas.common import APIResponse, Meta
 from app.schemas.traffic_inbound import (
     TrafficInboundSummaryResponse,
     TrafficInboundChartResponse,
@@ -26,6 +30,7 @@ from app.schemas.traffic_inbound import (
     SankeyResponse,
 )
 
+logger = logging.getLogger("nod.api.traffic_inbound")
 router = APIRouter(prefix="/api/v1/traffic-inbound", tags=["Traffic Inbound"])
 
 # Only DC and DRC for inbound VIP traffic
@@ -52,15 +57,24 @@ async def traffic_inbound_summary(
     """Returns all traffic inbound widget data (service/port-based)."""
     if site_name not in ALLOWED_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALLOWED_SITES)}")
-
     t0 = time.monotonic()
-    data = await ti_qb.flow_summary(
+    data, err = await safe_query(
+        ti_qb.flow_summary,
+        "traffic_inbound.flow_summary",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter="inbound-vip",
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=dst_port,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=TrafficInboundSummaryResponse(**data), meta={"query_took_ms": elapsed})
+    meta = Meta(query_took_ms=elapsed)
+    if data is None:
+        empty = {
+            "top_services": [], "top_clients": [], "top_servers": [],
+            "ingress_breakdown": [], "egress_breakdown": [], "protocol_dist": [],
+        }
+        logger.warning(f"traffic-inbound summary empty for {site_name} ({elapsed}ms): {err}")
+        return APIResponse.ok(data=TrafficInboundSummaryResponse(**empty), meta=meta)
+    return APIResponse.ok(data=TrafficInboundSummaryResponse(**data), meta=meta)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -84,16 +98,24 @@ async def traffic_inbound_chart(
     """Returns stacked bar chart for service throughput (port-based)."""
     if site_name not in ALLOWED_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALLOWED_SITES)}")
-
     t0 = time.monotonic()
-    data = await ti_qb.flow_chart(
+    data, err = await safe_query(
+        ti_qb.flow_chart,
+        "traffic_inbound.flow_chart",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         path_filter="inbound-vip", bucket_seconds=bucket_seconds,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=dst_port,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=TrafficInboundChartResponse(**data), meta={"query_took_ms": elapsed})
+    meta = Meta(query_took_ms=elapsed)
+    if data is None:
+        logger.warning(f"traffic-inbound chart empty for {site_name} ({elapsed}ms): {err}")
+        return APIResponse.ok(
+            data=TrafficInboundChartResponse(chart_data=[], service_names=[]),
+            meta=meta,
+        )
+    return APIResponse.ok(data=TrafficInboundChartResponse(**data), meta=meta)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -117,7 +139,6 @@ async def traffic_inbound_table(
     """Returns paginated inbound flow records with composite aggregation."""
     if site_name not in ALLOWED_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALLOWED_SITES)}")
-
     t0 = time.monotonic()
     after_key: Optional[dict] = None
     if after:
@@ -125,15 +146,23 @@ async def traffic_inbound_table(
             after_key = json.loads(after)
         except json.JSONDecodeError:
             return APIResponse.fail("INVALID_AFTER", "after parameter must be valid JSON")
-
-    data = await ti_qb.flow_table(
+    data, err = await safe_query(
+        ti_qb.flow_table,
+        "traffic_inbound.flow_table",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         after=after_key, path_filter="inbound-vip",
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=dst_port,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=TrafficInboundTableResponse(**data), meta={"query_took_ms": elapsed})
+    meta = Meta(query_took_ms=elapsed)
+    if data is None:
+        logger.warning(f"traffic-inbound table empty for {site_name} ({elapsed}ms): {err}")
+        return APIResponse.ok(
+            data=TrafficInboundTableResponse(records=[], after_key=None),
+            meta=meta,
+        )
+    return APIResponse.ok(data=TrafficInboundTableResponse(**data), meta=meta)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -157,13 +186,19 @@ async def traffic_inbound_sankey(
     """Returns Sankey diagram nodes+links. direction='' for unfiltered, 'upload' or 'download' for zone-based direction."""
     if site_name not in ALLOWED_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALLOWED_SITES)}")
-
     t0 = time.monotonic()
-    data = await ti_qb.sankey_data(
+    data, err = await safe_query(
+        ti_qb.sankey_data,
+        "traffic_inbound.sankey_data",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter="inbound-vip",
         direction=direction,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=dst_port,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=SankeyResponse(**data), meta={"query_took_ms": elapsed})
+    meta = Meta(query_took_ms=elapsed)
+    if data is None:
+        empty = {"nodes": [], "links": [], "as_country_nodes": [], "as_country_links": []}
+        logger.warning(f"traffic-inbound sankey empty for {site_name} ({elapsed}ms): {err}")
+        return APIResponse.ok(data=SankeyResponse(**empty), meta=meta)
+    return APIResponse.ok(data=SankeyResponse(**data), meta=meta)
