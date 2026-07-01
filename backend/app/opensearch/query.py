@@ -93,15 +93,34 @@ async def safe_search(
             return cached
 
     try:
+        t0 = time.monotonic()
         resp = await asyncio.wait_for(
             client.search(index=index, body=body),
             timeout=timeout_s + 5,  # outer safety margin
         )
+        elapsed = time.monotonic() - t0
+        # Alert on slow queries (>50% of timeout) without blocking
+        if elapsed > timeout_s * 0.5:
+            import logging
+            logger = logging.getLogger("nod.opensearch")
+            logger.warning(
+                f"Slow OpenSearch query: {elapsed:.1f}s / {timeout_s}s timeout — "
+                f"index={index} body_keys={list(body.keys())}"
+            )
         resp_dict = dict(resp) if not isinstance(resp, dict) else resp
         if cache_key:
             _cache_set(cache_key, resp_dict)
         return resp_dict
     except asyncio.TimeoutError:
+        import logging
+        logger = logging.getLogger("nod.opensearch")
+        logger.error(
+            f"OpenSearch query timeout after {timeout_s}s — index={index} "
+            f"body_keys={list(body.keys())}"
+        )
         return {}
-    except Exception:
+    except Exception as e:
+        import logging
+        logger = logging.getLogger("nod.opensearch")
+        logger.error(f"OpenSearch query error: {type(e).__name__}: {e}")
         return {}
