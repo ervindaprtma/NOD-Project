@@ -108,6 +108,11 @@ async def safe_search(
                 f"index={index} body_keys={list(body.keys())}"
             )
         resp_dict = dict(resp) if not isinstance(resp, dict) else resp
+        # Ensure response has the expected skeleton keys for aggregations/size-0 queries
+        if "aggregations" not in resp_dict:
+            resp_dict["aggregations"] = {}
+        if "hits" not in resp_dict:
+            resp_dict["hits"] = {"total": {"value": 0, "relation": "eq"}, "hits": []}
         if cache_key:
             _cache_set(cache_key, resp_dict)
         return resp_dict
@@ -118,9 +123,10 @@ async def safe_search(
             f"OpenSearch query timeout after {timeout_s}s — index={index} "
             f"body_keys={list(body.keys())}"
         )
-        return {}
+        # Return skeleton with empty aggregations so callers can proceed
+        return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_timed_out": True}
     except Exception as e:
         import logging
         logger = logging.getLogger("nod.opensearch")
         logger.error(f"OpenSearch query error: {type(e).__name__}: {e}")
-        return {}
+        return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_error": str(e)}
