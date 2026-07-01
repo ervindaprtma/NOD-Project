@@ -220,6 +220,29 @@ def _interval_to_seconds(interval: str) -> int:
     return val * mapping.get(unit, 60)
 
 
+def _auto_interval_str(gte_ms: int, lte_ms: int) -> str:
+    """Compute dynamic date_histogram interval string based on time range.
+
+    Aims for ~60 data points across the chart.
+    """
+    delta_sec = (lte_ms - gte_ms) / 1000
+    if delta_sec <= 3600:           # ≤ 1h
+        return "60s"
+    elif delta_sec <= 14400:        # ≤ 4h
+        return "5m"
+    elif delta_sec <= 86400:        # ≤ 24h
+        return "15m"
+    elif delta_sec <= 604800:       # ≤ 7d
+        return "1h"
+    else:                            # > 7d
+        return "6h"
+
+
+def _auto_bucket_seconds(gte_ms: int, lte_ms: int) -> int:
+    """Return bucket_seconds, complement of _auto_interval_str for flow_chart APIs."""
+    return _interval_to_seconds(_auto_interval_str(gte_ms, lte_ms))
+
+
 def _compute_throughput_timeline(
     chart_rows: list[dict],
     bucket_seconds: int,
@@ -563,7 +586,7 @@ async def build_report_context(
 
             # Throughput Timeline — use traffic_flow.flow_chart per-site and sum per-bucket
             try:
-                bucket_seconds = _interval_to_seconds("15m")
+                bucket_seconds = _auto_bucket_seconds(gte_ms, lte_ms)
                 flow_chart_res = await tf_qb.flow_chart(
                     gte_ms=gte_ms, lte_ms=lte_ms, site_name=site, bucket_seconds=bucket_seconds, path_filter="internet"
                 )
@@ -583,8 +606,7 @@ async def build_report_context(
             if tp_raw:
                 # Convert bytes per-bucket into Mbps to match frontend logic:
                 # Mbps = (bytes * 8) / bucket_seconds / 1_000_000
-                interval = "15m"
-                bucket_seconds = _interval_to_seconds(interval)
+                bucket_seconds = _auto_bucket_seconds(gte_ms, lte_ms)
                 tp_mbps = []
                 for b in tp_raw:
                     bytes_val = int(b.get("bytes", 0) or 0)
@@ -703,7 +725,7 @@ async def build_report_context(
             # ── Per-site data (R-08 only): throughput chart + per-site data objects ──
             if report_type == "R-08":
                 sites_dict: dict[str, Any] = {}
-                bucket_sec = _interval_to_seconds("15m")
+                bucket_sec = _auto_bucket_seconds(gte_ms, lte_ms)
                 for site in site_list:
                     sl = _site_label(site)
                     psd: dict[str, Any] = {}
@@ -832,7 +854,7 @@ async def build_report_context(
                         })
 
                 dc_timeline = await ha_qb.resource_timeline(
-                    gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
+                    gte_ms=gte_ms, lte_ms=lte_ms, interval=_auto_interval_str(gte_ms, lte_ms)
                 )
                 all_cpu.extend(dc_timeline.get("cpu", []))
                 all_mem.extend(dc_timeline.get("memory", []))
@@ -856,7 +878,7 @@ async def build_report_context(
                             "ha_role": "",
                         })
                     drc_tl = await ha_qb.resource_device_timeline(
-                        "Site_FGT-DRC", gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
+                        "Site_FGT-DRC", gte_ms=gte_ms, lte_ms=lte_ms, interval=_auto_interval_str(gte_ms, lte_ms)
                     )
                     # Tag DRC timeline entries with device name for chart series
                     for pt in drc_tl.get("cpu", []):
@@ -889,7 +911,7 @@ async def build_report_context(
                             "ha_role": "",
                         })
                     office_tl = await ha_qb.resource_device_timeline(
-                        "Site_FGT_Office", gte_ms=gte_ms, lte_ms=lte_ms, interval="15m"
+                        "Site_FGT_Office", gte_ms=gte_ms, lte_ms=lte_ms, interval=_auto_interval_str(gte_ms, lte_ms)
                     )
                     for pt in office_tl.get("cpu", []):
                         pt["device"] = "F121G-Office"
@@ -1003,11 +1025,11 @@ async def build_report_context(
                     ssl_counts_raw = await sslvpn_qb.all_sslvpn_users_count_timeline(
                         gte_ms=gte_ms, lte_ms=lte_ms,
                         site_names=[sslvpn_name],
-                        interval="1h",
+                        interval=_auto_interval_str(gte_ms, lte_ms),
                     )
                 if has_ipsec:
                     ipsec_counts_raw = await ipsec_qb.active_ipsec_users_count_timeline(
-                        gte_ms=gte_ms, lte_ms=lte_ms, interval="1h",
+                        gte_ms=gte_ms, lte_ms=lte_ms, interval=_auto_interval_str(gte_ms, lte_ms),
                     )
                 # Merge timelines
                 all_ts = set(ssl_counts_raw.keys()) | set(ipsec_counts_raw.keys())
@@ -1080,7 +1102,7 @@ async def build_report_context(
                         gte_ms=gte_ms, lte_ms=lte_ms,
                         username=first_user,
                         site_names=[sslvpn_name] if sslvpn_name else None,
-                        interval="5m",
+                        interval=_auto_interval_str(gte_ms, lte_ms),
                     )
                     if user_bandwidth:
                         charts["bandwidth_detail"] = await _run_chart(
@@ -1139,7 +1161,7 @@ async def build_report_context(
                     try:
                         tl = await sdwan_qb.sla_timeline(
                             gte_ms=gte_ms, lte_ms=lte_ms,
-                            site_name=site, metric=metric, interval="5m",
+                            site_name=site, metric=metric, interval=_auto_interval_str(gte_ms, lte_ms),
                         )
                         if tl:
                             chart_key = f"sla_{metric}_{site}"
@@ -1261,7 +1283,7 @@ async def build_report_context(
             # for an aggregate line chart showing combined inbound traffic.
             try:
                 site = site_list[0] if site_list else DEFAULT_SITES[0]
-                bucket_seconds = _interval_to_seconds("15m")
+                bucket_seconds = _auto_bucket_seconds(gte_ms, lte_ms)
                 chart_res = await ti_qb.flow_chart(
                     gte_ms=gte_ms, lte_ms=lte_ms,
                     site_name=site, bucket_seconds=bucket_seconds,
@@ -1400,7 +1422,7 @@ async def build_report_context(
 
             # ── Per-site throughput timeline charts (R-08 only) ──
             if report_type == "R-08" and inbound_sites:
-                bucket_sec = _interval_to_seconds("15m")
+                bucket_sec = _auto_bucket_seconds(gte_ms, lte_ms)
                 for site in site_list:
                     sl = _site_label(site)
                     sdict = inbound_sites.get(sl)
@@ -1449,7 +1471,7 @@ async def build_report_context(
             from app.opensearch import traffic_internal as tint_qb
 
             # Per-path Throughput Timelines — inter-site and intra-lan separately
-            bucket_seconds = _interval_to_seconds("15m")
+            bucket_seconds = _auto_bucket_seconds(gte_ms, lte_ms)
             for path, label in [("inter-site", "Inter-Site"), ("intra-lan", "Intra-LAN")]:
                 try:
                     site = site_list[0] if site_list else DEFAULT_SITES[0]
@@ -1581,7 +1603,7 @@ async def build_report_context(
 
             # ── Per-site throughput timeline charts (R-08 only) ──
             if report_type == "R-08" and internal_sites:
-                bucket_sec = _interval_to_seconds("15m")
+                bucket_sec = _auto_bucket_seconds(gte_ms, lte_ms)
                 for site in site_list:
                     sl = _site_label(site)
                     sdict = internal_sites.get(sl)
