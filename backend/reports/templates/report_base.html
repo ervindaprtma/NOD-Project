@@ -1445,7 +1445,7 @@ body {
 <div class="card">
     <h3>Combined Throughput Over Time</h3>
     {% if data.throughput_timeline %}
-    {{ line_chart_inline(data.throughput_timeline, ylabel='Mbps', height=180) | safe }}
+    {{ chart_img(data.throughput_timeline, 'Combined throughput timeline') }}
     {% else %}
     <p class="no-data">No throughput timeline data available.</p>
     {% endif %}
