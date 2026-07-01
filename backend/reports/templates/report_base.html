@@ -729,12 +729,12 @@ body {
 {% if has_content %}
 
 <div class="page-break"></div>
-<h2 class="section-title">Traffic Flow Analysis <span class="timeframe-badge">{{ time_range }}</span></h2>
+<h2 class="section-title">Traffic Internet Analysis <span class="timeframe-badge">{{ time_range }}</span></h2>
 
 {% if data.total_throughput_bytes is defined %}
 <div class="kpi-grid">
     {{ kpi_card('Total Throughput', bytes_human(data.total_throughput_bytes), 'info', 'All sites combined') }}
-    {% if data.per_site_summary %}
+    {% if data.per_site_summary and report_type != 'R-08' %}
     {% for ps in data.per_site_summary %}
         {{ kpi_card(ps.site, bytes_human(ps.total_bytes), 'info', 'Top: ' + (ps.top_app | default('—'))) }}
     {% endfor %}
@@ -777,7 +777,7 @@ body {
 </div>
 {% endif %}
 
-{% if data.per_site_summary %}
+{% if data.per_site_summary and report_type != 'R-08' %}
 <div class="table-card">
     <h3 style="padding:10px 14px 4px;font-size:10pt;font-weight:600;">Per-Site Traffic Summary</h3>
     <table>
