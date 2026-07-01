@@ -60,7 +60,8 @@ class Settings(BaseSettings):
     OPENSEARCH_USERNAME: str = ""
     OPENSEARCH_PASSWORD: str = ""
     OPENSEARCH_POOL_SIZE: int = 10
-    OPENSEARCH_REQUEST_TIMEOUT: int = 10
+    OPENSEARCH_REQUEST_TIMEOUT: int = 30
+    OPENSEARCH_QUERY_TIMEOUT: int = 60  # per-query timeout for aggregations
 
     # ── Site configuration (Q-06 compliance) ───────────────────
     TELEGRAF_SDWAN_SITES: str = "Site_FGT-DC,Site_FGT-DRC,Site_FGT_Office"

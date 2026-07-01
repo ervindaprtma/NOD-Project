@@ -460,7 +460,7 @@ async def top_dst_as_orgs(
                     "order": {"total_bytes": "desc"},
                 },
                 "aggs": {
-                    "total_bytes": {"sum": {"script": {"source": "doc['flow.bytes'].value", "lang": "painless"}}}
+                    "total_bytes": {"sum": {"field": "flow.bytes"}}
                 },
             }
         },
