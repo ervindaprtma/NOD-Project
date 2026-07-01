@@ -2,7 +2,6 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-
 WORKDIR /app
 
 # Install system dependencies for WeasyPrint and other native libs
@@ -31,5 +30,6 @@ RUN mkdir -p /app/logs
 # Expose backend port (internal only)
 EXPOSE 8000
 
-# Run with Uvicorn
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Run migrations then start server
+# Note: Uses /app/alembic.ini which is created by copying .
+CMD ["sh", "-c", "alembic -c /app/alembic.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"]
