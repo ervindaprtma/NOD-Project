@@ -110,7 +110,7 @@ async def get_overview(
     fortigate_device_count = dc_device_count + 2  # DRC + Office
 
     # P01-G: Top 10 Traffic Applications
-    top_apps_raw = await appid_qb.top_applications(gte_ms=gte_ms, lte_ms=lte_ms, size=10)
+    top_apps_raw = await tf_qb.top_applications(gte_ms=gte_ms, lte_ms=lte_ms, size=10)
     top_apps = [
         TopApplication(
             application=a["application"],
@@ -148,7 +148,7 @@ async def get_overview(
     ]
 
     # P01-I: Total Throughput
-    total_bytes = await appid_qb.total_throughput(gte_ms=gte_ms, lte_ms=lte_ms)
+    total_bytes = await tf_qb.total_throughput(gte_ms=gte_ms, lte_ms=lte_ms)
 
     # HA Status (DC only)
     ha_status = None

@@ -471,3 +471,53 @@ async def top_dst_as_orgs(
         {"as_org": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
         for b in buckets
     ]
+
+
+async def top_applications(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    size: int = 10,
+    site_name: str = "Site_FGT-DC",
+) -> list[dict]:
+    """Q-02: terms agg with explicit size, sum sub-agg on byte fields."""
+    if client is None:
+        client = _get_client(site_name)
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": [_time_range(gte_ms, lte_ms), _site_filter(site_name)]}},
+        "aggs": {
+            "top_apps": {
+                "terms": {
+                    "field": "flow.application.name",
+                    "size": min(size, 500),
+                    "order": {"total_bytes": "desc"},
+                },
+                "aggs": {"total_bytes": {"sum": {"field": "flow.bytes"}}},
+            }
+        },
+    }
+    resp = await client.search(index=FLOW_INDEX, body=body)
+    buckets = resp["aggregations"]["top_apps"]["buckets"]
+    return [
+        {"application": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
+        for b in buckets
+    ]
+
+
+async def total_throughput(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    site_name: str = "Site_FGT-DC",
+) -> int:
+    """Return total bytes for the time range."""
+    if client is None:
+        client = _get_client(site_name)
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": [_time_range(gte_ms, lte_ms), _site_filter(site_name)]}},
+        "aggs": {"total_bytes": {"sum": {"field": "flow.bytes"}}},
+    }
+    resp = await client.search(index=FLOW_INDEX, body=body)
+    return int(resp["aggregations"]["total_bytes"]["value"] or 0)
