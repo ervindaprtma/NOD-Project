@@ -14,10 +14,10 @@ logger = logging.getLogger("nod.api")
 
 
 async def safe_query(
-    fn: Callable[..., Awaitable[dict]],
+    fn,
     fn_name: str = "",
     **kwargs,
-) -> Tuple[Optional[dict], Optional[str]]:
+) -> Tuple[Optional[Any], Optional[str]]:
     """
     Run an async OpenSearch query function with error handling.
 
