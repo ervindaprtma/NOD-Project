@@ -56,8 +56,10 @@ def create_refresh_token(
 ) -> tuple[str, str, datetime]:
     """Create a JWT refresh token. Returns (token, jti, expires_at).
 
-    Default expiry is REFRESH_TOKEN_EXPIRE_MINUTES (15 min) — session is invalidated
+    Default expiry is REFRESH_TOKEN_EXPIRE_MINUTES (60 min) — session is invalidated
     after this idle window unless the client actively refreshes via /auth/refresh.
+    Active users (with auto-refresh running) get a continuously extended session.
+    Idle users (no auto-refresh for 1 hour) are logged out.
     """
     if expires_delta is None:
         expires_delta = timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)

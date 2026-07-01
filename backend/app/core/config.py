@@ -39,8 +39,8 @@ class Settings(BaseSettings):
 
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    REFRESH_TOKEN_EXPIRE_MINUTES: int = 15
-    SESSION_INACTIVITY_TIMEOUT_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour idle window — session invalidated if no auto-refresh for 1h
+    SESSION_INACTIVITY_TIMEOUT_MINUTES: int = 60  # matches REFRESH_TOKEN_EXPIRE_MINUTES
     ALLOWED_ORIGINS: str = "http://localhost:80"
 
     @property
@@ -107,7 +107,7 @@ class Settings(BaseSettings):
 
     # ── Timeframe defaults ─────────────────────────────────────
     DEFAULT_REFRESH_INTERVAL_SECONDS: int = 60
-    SESSION_INACTIVITY_TIMEOUT_MINUTES: int = 30  # max active session with auto-refresh
+    # SESSION_INACTIVITY_TIMEOUT_MINUTES: defined above alongside JWT settings
 
     # ── Rate limiting (P0 security) ──────────────────────────
     RATE_LIMIT_DEFAULT_REQUESTS: int = 120
