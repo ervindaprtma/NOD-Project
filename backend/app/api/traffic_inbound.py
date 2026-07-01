@@ -69,8 +69,9 @@ async def traffic_inbound_summary(
     meta = Meta(query_took_ms=elapsed)
     if data is None:
         empty = {
-            "top_services": [], "top_clients": [], "top_servers": [],
-            "ingress_breakdown": [], "egress_breakdown": [], "protocol_dist": [],
+            "top_services": [], "top_src_as_org": [], "top_src_as_country": [],
+            "top_clients": [], "top_servers": [],
+            "protocol_dist": [], "egress_breakdown": [],
         }
         logger.warning(f"traffic-inbound summary empty for {site_name} ({elapsed}ms): {err}")
         return APIResponse.ok(data=TrafficInboundSummaryResponse(**empty), meta=meta)

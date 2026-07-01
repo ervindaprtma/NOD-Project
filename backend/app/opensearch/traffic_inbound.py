@@ -12,6 +12,7 @@ from typing import Optional
 from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_dc_client, get_drc_client
+from app.opensearch.query import safe_search
 from app.port_service_map import PORT_SERVICE_MAP
 
 # ── Index & site config ──────────────────────────────────────────
@@ -135,7 +136,7 @@ async def flow_summary(
         },
     }
 
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     aggs = resp["aggregations"]
 
     def _buckets(agg_name: str) -> list[dict]:
@@ -224,7 +225,7 @@ async def flow_chart(
         },
     }
 
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     result = resp["aggregations"]["per_minute"]
 
     service_set: set[str] = set()
@@ -295,7 +296,7 @@ async def sankey_data(
         },
     }
 
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     buckets = resp["aggregations"]["sankey_flow"]["buckets"]
 
     rows: list[dict] = []
@@ -404,7 +405,7 @@ async def flow_table(
         },
     }
 
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     result = resp["aggregations"]["flow_table"]
 
     records = []

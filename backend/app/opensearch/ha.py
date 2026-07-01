@@ -359,7 +359,7 @@ async def ha_cluster_status(site_name: str = "Site_FGT-DC") -> dict:
 # Site → (client_factory, measurement_name)
 SITE_RESOURCE_MAP: dict[str, tuple] = {
     "Site_FGT-DRC": (get_drc_client, "Resource_FGT-DRC"),
-    "Site_FGT_Office": (get_dc_client, "Resource_FGT-Office"),
+    "Site_FGT_Office": (get_drc_client, "Resource_FGT-Office"),
 }
 
 

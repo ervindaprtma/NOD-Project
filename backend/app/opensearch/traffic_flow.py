@@ -12,6 +12,7 @@ from typing import Optional
 from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_dc_client, get_drc_client
+from app.opensearch.query import safe_search
 
 # ── Index & site config ──────────────────────────────────────────
 
@@ -140,7 +141,7 @@ async def flow_summary(
         },
     }
 
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     aggs = resp["aggregations"]
 
     def _buckets(agg_name: str) -> list[dict]:
@@ -238,7 +239,7 @@ async def flow_chart(
         },
     }
 
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     result = resp["aggregations"]["per_minute"]
 
     app_totals: dict[str, int] = {}
@@ -312,7 +313,7 @@ async def sankey_data(
         },
     }
 
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     buckets = resp["aggregations"]["sankey_flow"]["buckets"]
 
     rows: list[dict] = []
@@ -421,7 +422,7 @@ async def flow_table(
         },
     }
 
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     result = resp["aggregations"]["flow_table"]
 
     records = []
@@ -465,7 +466,7 @@ async def top_dst_as_orgs(
             }
         },
     }
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     buckets = resp["aggregations"]["top_as_orgs"]["buckets"]
     return [
         {"as_org": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
@@ -497,7 +498,7 @@ async def top_applications(
             }
         },
     }
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     buckets = resp["aggregations"]["top_apps"]["buckets"]
     return [
         {"application": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
@@ -519,5 +520,5 @@ async def total_throughput(
         "query": {"bool": {"filter": [_time_range(gte_ms, lte_ms), _site_filter(site_name)]}},
         "aggs": {"total_bytes": {"sum": {"field": "flow.bytes"}}},
     }
-    resp = await client.search(index=FLOW_INDEX, body=body)
+    resp = await safe_search(client, FLOW_INDEX, body)
     return int(resp["aggregations"]["total_bytes"]["value"] or 0)

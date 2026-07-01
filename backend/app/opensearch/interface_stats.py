@@ -13,6 +13,7 @@ from typing import Optional
 from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_dc_client, get_drc_client
+from app.opensearch.query import safe_search
 
 # ── Site-to-source-IP mapping ────────────────────────────────────
 SITE_SOURCE_MAP: dict[str, str] = {
@@ -199,5 +200,5 @@ async def interface_stats_timeline(
         },
     }
 
-    resp = await client.search(index=INDEX_PATTERN, body=body)
+    resp = await safe_search(client, INDEX_PATTERN, body)
     return {"aggregations": resp["aggregations"], "interval_seconds": interval_seconds}
