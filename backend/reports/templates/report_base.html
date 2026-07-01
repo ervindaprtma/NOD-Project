@@ -902,7 +902,7 @@ body {
     </table>
 </div>
 {% endif %}
-{{ kpi_card('Active VPN', data.active_vpn_sessions | default(0), 'success', 'SSL + IPsec') }}
+{% if report_type != 'R-08' %}{{ kpi_card('Active VPN', data.active_vpn_sessions | default(0), 'success', 'SSL + IPsec') }}{% endif %}
 
 {% if data.devices %}
 <div class="table-card">
