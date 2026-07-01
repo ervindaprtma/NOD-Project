@@ -1616,16 +1616,20 @@ async def build_report_context(
                     if r["total_traffic"] > 0 else 0, axis=1
                 )
 
-                # Totals row
+                # Totals row — compute real volume distribution
+                tot_net = int(df["internet"].sum())
+                tot_inb = int(df["inbound"].sum())
+                tot_int = int(df["internal"].sum())
+                tot_all = tot_net + tot_inb + tot_int
                 totals = {
                     "site": "TOTAL",
-                    "internet": int(df["internet"].sum()),
-                    "inbound": int(df["inbound"].sum()),
-                    "internal": int(df["internal"].sum()),
-                    "total_traffic": int(df["total_traffic"].sum()),
-                    "internet_pct": 100.0,
-                    "inbound_pct": 100.0,
-                    "internal_pct": 100.0,
+                    "internet": tot_net,
+                    "inbound": tot_inb,
+                    "internal": tot_int,
+                    "total_traffic": tot_all,
+                    "internet_pct": round(tot_net / tot_all * 100, 1) if tot_all > 0 else 0,
+                    "inbound_pct": round(tot_inb / tot_all * 100, 1) if tot_all > 0 else 0,
+                    "internal_pct": round(tot_int / tot_all * 100, 1) if tot_all > 0 else 0,
                     "vpn": None,
                     "sdwan": None,
                 }
