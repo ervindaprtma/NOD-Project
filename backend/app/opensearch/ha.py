@@ -11,6 +11,7 @@ from typing import Optional
 from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_dc_client, get_drc_client
+from app.opensearch.query import safe_search
 
 
 def _ha_filters(gte_ms: int, lte_ms: int) -> list[dict]:
@@ -76,7 +77,7 @@ async def resource_timeline(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
+    resp = await safe_search(client, "telegraf-index*", body)
     buckets = resp["aggregations"]["by_device"]["buckets"]
 
     cpu: list[dict] = []
@@ -145,7 +146,7 @@ async def current_device_status(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
+    resp = await safe_search(client, "telegraf-index*", body)
     buckets = resp["aggregations"]["by_device"]["buckets"]
 
     results = []
@@ -215,7 +216,7 @@ async def session_sparkline(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
+    resp = await safe_search(client, "telegraf-index*", body)
     result: list[dict] = []
     for bucket in resp["aggregations"]["by_device"]["buckets"]:
         hostname = bucket["key"]
@@ -285,7 +286,7 @@ async def ha_cluster_status(site_name: str = "Site_FGT-DC") -> dict:
         "sort": [{"@timestamp": {"order": "desc"}}],
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
+    resp = await safe_search(client, "telegraf-index*", body)
     hits = resp["hits"]["hits"]
 
     # Separate cluster config doc from per-member docs
@@ -413,7 +414,7 @@ async def resource_device_status(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
+    resp = await safe_search(client, "telegraf-index*", body)
     hits = resp["hits"]["hits"]
     if not hits:
         return None
@@ -471,7 +472,7 @@ async def resource_device_timeline(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
+    resp = await safe_search(client, "telegraf-index*", body)
     buckets = resp["aggregations"]["timeline"]["buckets"]
 
     cpu: list[dict] = []
