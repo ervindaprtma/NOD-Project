@@ -123,7 +123,11 @@ async def download_report(
     if not os.path.exists(job.file_path):
         if not job.file_deleted:
             job.file_deleted = True
-            job.status = "expired"
+            # Only mark "expired" if TTL actually passed; otherwise keep
+            # status="completed" so frontend can distinguish "file lost"
+            # from "report expired by TTL".
+            if job.expires_at and job.expires_at < datetime.now(timezone.utc):
+                job.status = "expired"
             await db.commit()
         raise HTTPException(status_code=404, detail="Report file expired or not found.")
 
@@ -169,7 +173,8 @@ async def preview_report(
     if not os.path.exists(job.file_path):
         if not job.file_deleted:
             job.file_deleted = True
-            job.status = "expired"
+            if job.expires_at and job.expires_at < datetime.now(timezone.utc):
+                job.status = "expired"
             await db.commit()
         raise HTTPException(status_code=404, detail="Report file expired or not found.")
 

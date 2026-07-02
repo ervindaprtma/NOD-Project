@@ -148,10 +148,15 @@ function statusBadge(s: string) {
 }
 
 function isExpired(job: ReportJob): boolean {
-  if (job.file_deleted) return true;
+  // Truly expired: TTL has passed
   if (job.status === "expired") return true;
   if (job.expires_at && new Date(job.expires_at) < new Date()) return true;
   return false;
+}
+
+function isFileLost(job: ReportJob): boolean {
+  // File missing but TTL not yet passed — lost due to restart/cleanup
+  return !!job.file_deleted && !isExpired(job);
 }
 
 // ── Main Page ─────────────────────────────────────────────────
@@ -548,6 +553,11 @@ export default function ReportsPage() {
                             {job.expires_at && (
                               <span className="text-[10px] text-muted-foreground">since {formatDate(job.expires_at)}</span>
                             )}
+                          </div>
+                        ) : isFileLost(job) ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-xs text-yellow-500 font-medium">File Unavailable</span>
+                            <span className="text-[10px] text-muted-foreground">expires {formatDate(job.expires_at)}</span>
                           </div>
                         ) : job.status === "completed" && canGenerateReports ? (
                           <>
