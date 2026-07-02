@@ -41,8 +41,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     # 24h idle timeout — session invalidates after this if no auto-refresh
     # Active users (auto-refresh running) get continuously extended session
-    REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
-    SESSION_INACTIVITY_TIMEOUT_MINUTES: int = 1440  # 24 hours (mirrors refresh token)
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours — idle timeout (no code references SESSION_INACTIVITY_TIMEOUT)
     ALLOWED_ORIGINS: str = "http://localhost:80"
 
     @property
@@ -109,7 +108,6 @@ class Settings(BaseSettings):
 
     # ── Timeframe defaults ─────────────────────────────────────
     DEFAULT_REFRESH_INTERVAL_SECONDS: int = 60
-    # SESSION_INACTIVITY_TIMEOUT_MINUTES: defined above alongside JWT settings
 
     # ── Rate limiting (P0 security) ──────────────────────────
     RATE_LIMIT_DEFAULT_REQUESTS: int = 120
