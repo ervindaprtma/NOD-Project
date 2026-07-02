@@ -39,10 +39,10 @@ class Settings(BaseSettings):
 
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    # Default 60 min (1h idle) — session invalidates after this if no auto-refresh
+    # 24h idle timeout — session invalidates after this if no auto-refresh
     # Active users (auto-refresh running) get continuously extended session
-    REFRESH_TOKEN_EXPIRE_MINUTES: int = 60
-    SESSION_INACTIVITY_TIMEOUT_MINUTES: int = 60
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
+    SESSION_INACTIVITY_TIMEOUT_MINUTES: int = 1440  # 24 hours (mirrors refresh token)
     ALLOWED_ORIGINS: str = "http://localhost:80"
 
     @property
