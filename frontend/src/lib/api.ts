@@ -95,10 +95,23 @@ export function signalAuthBoot(): void {
  */
 export async function ensureValidToken(): Promise<string | null> {
   const token = getAccessToken();
-  if (!token) return null;
+  if (!token) {
+    // No token at all — redirect to login
+    if (typeof window !== "undefined") {
+      window.location.href = "/login?expired=1";
+    }
+    return null;
+  }
   if (!isTokenExpired(token)) return token;
   // Token expired or about to expire — refresh now
   const newToken = await refreshAccessToken();
+  if (!newToken) {
+    // Refresh failed — session is dead
+    clearAccessToken();
+    if (typeof window !== "undefined") {
+      window.location.href = "/login?expired=1";
+    }
+  }
   return newToken;
 }
 /**
@@ -154,6 +167,13 @@ export async function apiFetch<T = unknown>(
     if (newToken) {
       headers["Authorization"] = `Bearer ${newToken}`;
       resp = await fetch(url, { ...fetchOpts, headers, credentials: "include" });
+    } else {
+      // Refresh failed — session is dead, redirect to login
+      clearAccessToken();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login?expired=1";
+      }
+      throw new ApiError(401, "SESSION_EXPIRED", "Session expired. Please log in again.");
     }
   }
 
