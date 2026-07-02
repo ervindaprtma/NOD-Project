@@ -5,6 +5,8 @@ Also defines FastAPI dependencies for JWT validation and role-based access contr
 from __future__ import annotations
 
 import asyncio
+import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -44,6 +46,36 @@ _ROLE_HIERARCHY = {
 
 COOKIE_REFRESH_TOKEN = "__Host-nod_refresh_token"
 
+# ── Per-account lockout (B-05) ───────────────────────────────
+_LOCKOUT_THRESHOLD = 5       # failed attempts before lockout
+_LOCKOUT_DURATION = 900      # 15 minutes
+_failed_attempts: dict[str, list[float]] = defaultdict(list)
+
+
+def _record_failed_login(username: str) -> tuple[bool, int]:
+    """Record failed attempt. Returns (is_locked, remaining_attempts)."""
+    now = time.monotonic()
+    attempts = _failed_attempts[username]
+    # purge entries older than lockout duration
+    _failed_attempts[username] = [t for t in attempts if now - t < _LOCKOUT_DURATION]
+    _failed_attempts[username].append(now)
+    count = len(_failed_attempts[username])
+    return count >= _LOCKOUT_THRESHOLD, max(0, _LOCKOUT_THRESHOLD - count)
+
+
+def _is_locked_out(username: str) -> bool:
+    """Check if account is currently locked out."""
+    attempts = _failed_attempts.get(username, [])
+    now = time.monotonic()
+    recent = [t for t in attempts if now - t < _LOCKOUT_DURATION]
+    _failed_attempts[username] = recent
+    return len(recent) >= _LOCKOUT_THRESHOLD
+
+
+def _clear_failed_logins(username: str) -> None:
+    """Clear failed attempts on successful login."""
+    _failed_attempts.pop(username, None)
+
 
 # ─────────────────────────────────────────────────────────────────
 # Endpoints
@@ -58,14 +90,30 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     """Authenticate user, return access token and set refresh token cookie."""
+    # B-05: Per-account lockout check
+    if _is_locked_out(body.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Account temporarily locked due to too many failed attempts. Try again in 15 minutes.",
+        )
+
     result = await db.execute(select(User).where(User.username == body.username))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(body.password, user.hashed_password):
+        is_locked, remaining = _record_failed_login(body.username)
+        detail = "Invalid username or password."
+        if is_locked:
+            detail = "Too many failed attempts. Account locked for 15 minutes."
+        elif remaining <= 2:
+            detail = f"Invalid username or password. {remaining} attempt(s) remaining."
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password.",
+            detail=detail,
         )
+
+    # Successful auth — clear failed attempts
+    _clear_failed_logins(body.username)
 
     if not user.is_active:
         raise HTTPException(

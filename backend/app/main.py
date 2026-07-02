@@ -18,7 +18,7 @@ from app.db.session import AsyncSessionLocal
 from app.db.models import User
 import asyncio
 from sqlalchemy import select
-from jose import JWTError, jwt
+import jwt
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -279,7 +279,8 @@ async def ws_alerts(websocket: WebSocket):
     user_id = await _authenticate_ws_user(websocket)
     if not user_id:
         return
-    await alert_ws_manager.connect(websocket, user_id)
+    if not await alert_ws_manager.connect(websocket, user_id):
+        return
     try:
         while True:
             try:
@@ -290,9 +291,9 @@ async def ws_alerts(websocket: WebSocket):
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
-        await alert_ws_manager.disconnect(user_id)
+        await alert_ws_manager.disconnect(user_id, websocket)
     except Exception:
-        await alert_ws_manager.disconnect(user_id)
+        await alert_ws_manager.disconnect(user_id, websocket)
 
 
 # ─────────────────────────────────────────────────────────────────

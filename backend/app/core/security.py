@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 
 from app.core.config import get_settings
@@ -80,6 +80,10 @@ def create_refresh_token(
     return token, jti, expires_at
 
 
+class JWTError(jwt.PyJWTError):
+    """Compat shim for code that catches jose.JWTError."""
+
+
 def decode_token(token: str) -> dict[str, Any]:
     """
     Decode and validate a JWT token.
@@ -93,8 +97,8 @@ def decode_token(token: str) -> dict[str, Any]:
             options={"require": ["sub", "exp", "jti", "type"]},
         )
         return payload
-    except JWTError:
-        raise
+    except jwt.PyJWTError as e:
+        raise JWTError(str(e)) from e
 
 
 def decode_token_optional(token: str) -> Optional[dict[str, Any]]:

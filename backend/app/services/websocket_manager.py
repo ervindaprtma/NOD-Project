@@ -23,25 +23,33 @@ class AlertWebSocketManager:
     """
 
     def __init__(self) -> None:
-        self._connections: dict[str, WebSocket] = {}  # user_id -> websocket
+        self._connections: dict[str, list[WebSocket]] = {}  # user_id -> websockets
         self._max_per_user: int = settings.RATE_LIMIT_WEBSOCKET_CONNECTIONS
 
-    async def connect(self, ws: WebSocket, user_id: str) -> None:
-        # Enforce per-user connection limit (P0 security)
-        if user_id in self._connections:
-            # Already connected — close duplicate gracefully
+    async def connect(self, ws: WebSocket, user_id: str) -> bool:
+        """Accept new connection if under per-user limit. Returns False if rejected."""
+        conns = self._connections.setdefault(user_id, [])
+        if len(conns) >= self._max_per_user:
             try:
-                await self._connections[user_id].close(code=4001, reason="Replaced by new connection")
+                await ws.close(code=4001, reason=f"Max {self._max_per_user} WebSocket connections exceeded")
             except Exception:
                 pass
-            self._connections.pop(user_id, None)
-        # Note: ws.accept() is called in _authenticate_ws_user before reaching here
-        self._connections[user_id] = ws
-        logger.info("WebSocket connected", extra={"user_id": user_id, "total_connections": len(self._connections)})
+            logger.warning("WebSocket rejected — per-user limit reached", extra={"user_id": user_id, "connections": len(conns)})
+            return False
+        conns.append(ws)
+        logger.info("WebSocket connected", extra={"user_id": user_id, "total_connections": sum(len(v) for v in self._connections.values())})
+        return True
 
-    async def disconnect(self, user_id: str) -> None:
-        self._connections.pop(user_id, None)
-        logger.info("WebSocket disconnected", extra={"user_id": user_id, "total_connections": len(self._connections)})
+    async def disconnect(self, user_id: str, ws: WebSocket | None = None) -> None:
+        if ws is not None:
+            conns = self._connections.get(user_id, [])
+            if ws in conns:
+                conns.remove(ws)
+            if not conns:
+                self._connections.pop(user_id, None)
+        else:
+            self._connections.pop(user_id, None)
+        logger.info("WebSocket disconnected", extra={"user_id": user_id, "total_connections": sum(len(v) for v in self._connections.values())})
 
     async def broadcast(self, message: dict[str, Any], user_id: str | None = None) -> None:
         """
@@ -52,25 +60,32 @@ class AlertWebSocketManager:
             user_id: If set, only send to this specific user
         """
         payload = json.dumps(message)
-        dead: list[str] = []
+        dead: list[tuple[str, WebSocket]] = []
 
-        targets = {user_id: self._connections[user_id]} if user_id and user_id in self._connections else self._connections
+        if user_id and user_id in self._connections:
+            targets: list[tuple[str, WebSocket]] = [
+                (user_id, ws) for ws in self._connections[user_id]
+            ]
+        else:
+            targets = [
+                (uid, ws) for uid, conns in self._connections.items() for ws in conns
+            ]
 
-        for uid, ws in targets.items():
+        for uid, ws in targets:
             try:
                 await ws.send_text(payload)
             except Exception:
-                dead.append(uid)
+                dead.append((uid, ws))
 
-        for uid in dead:
-            await self.disconnect(uid)
+        for uid, ws in dead:
+            await self.disconnect(uid, ws)
 
     @property
     def active_connections(self) -> int:
-        return len(self._connections)
+        return sum(len(v) for v in self._connections.values())
 
     def is_connected(self, user_id: str) -> bool:
-        return user_id in self._connections
+        return user_id in self._connections and len(self._connections[user_id]) > 0
 
 
 # Singleton instance
