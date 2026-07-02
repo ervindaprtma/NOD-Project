@@ -59,7 +59,7 @@ async def _check_and_run_schedules():
 async def _run_schedule(session, schedule: ReportSchedule, now: datetime):
     """Execute a single scheduled report."""
     from app.services.report_generator import generate_report
-    from app.services.report_generator import _distribute_report_background
+    from app.api.reports import _distribute_report_background
 
     logger.info(f"Running scheduled report: {schedule.id} type={schedule.report_type}")
 
@@ -91,7 +91,7 @@ async def _run_schedule(session, schedule: ReportSchedule, now: datetime):
         from pathlib import Path
         job.file_size_bytes = Path(output_path).stat().st_size
         job.completed_at = datetime.now(timezone.utc)
-        job.expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        job.expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
         await session.commit()
 
         # Auto-distribute if channels configured
@@ -150,7 +150,7 @@ def _calculate_next_run(cron_expr: str, now: datetime) -> datetime:
 
 
 def start_report_scheduler():
-    """Start the report schedule checker."""
+    """Start the report schedule checker + hourly expired-file cleanup."""
     scheduler.add_job(
         _check_and_run_schedules,
         "interval",
@@ -158,5 +158,23 @@ def start_report_scheduler():
         id="report_schedule_checker",
         replace_existing=True,
     )
+    # Hourly cleanup of expired report files
+    from app.api.reports import _cleanup_expired_reports
+    from app.db.session import AsyncSessionLocal
+
+    async def _periodic_cleanup():
+        try:
+            async with AsyncSessionLocal() as session:
+                await _cleanup_expired_reports(session)
+        except Exception as e:
+            logger.error(f"Periodic report cleanup failed: {e}", exc_info=True)
+
+    scheduler.add_job(
+        _periodic_cleanup,
+        "interval",
+        hours=1,
+        id="report_cleanup",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info(f"Report scheduler started (interval={CHECK_INTERVAL_SECONDS}s)")
+    logger.info(f"Report scheduler started (interval={CHECK_INTERVAL_SECONDS}s, cleanup=1h)")

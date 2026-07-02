@@ -123,6 +123,7 @@ async def download_report(
     if not os.path.exists(job.file_path):
         if not job.file_deleted:
             job.file_deleted = True
+            job.status = "expired"
             await db.commit()
         raise HTTPException(status_code=404, detail="Report file expired or not found.")
 
@@ -168,6 +169,7 @@ async def preview_report(
     if not os.path.exists(job.file_path):
         if not job.file_deleted:
             job.file_deleted = True
+            job.status = "expired"
             await db.commit()
         raise HTTPException(status_code=404, detail="Report file expired or not found.")
 
@@ -461,7 +463,8 @@ async def delete_schedule(
 
 
 async def _cleanup_expired_reports(db: AsyncSession) -> int:
-    """Internal: mark expired reports, delete files, keep DB records."""
+    """Internal: mark expired reports, delete files, keep DB records.
+    Commits per job so one failure doesn't roll back all deletions."""
     import logging
     logger = logging.getLogger(__name__)
     now = datetime.now(timezone.utc)
@@ -479,10 +482,11 @@ async def _cleanup_expired_reports(db: AsyncSession) -> int:
                 os.remove(job.file_path)
             job.file_deleted = True
             job.status = "expired"
+            await db.commit()
             count += 1
         except Exception as e:
+            await db.rollback()
             logger.error(f"Cleanup error job {job.id}: {e}")
-    await db.commit()
     if count:
         logger.info(f"Cleaned up {count} expired reports")
     return count
