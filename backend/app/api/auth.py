@@ -115,6 +115,21 @@ async def login(
     # Successful auth — clear failed attempts
     _clear_failed_logins(body.username)
 
+    # B-09: Enforce max concurrent sessions — revoke oldest if over limit
+    active_tokens = await db.execute(
+        select(RefreshTokenModel)
+        .where(RefreshTokenModel.user_id == user.id)
+        .where(RefreshTokenModel.is_revoked == False)
+        .where(RefreshTokenModel.expires_at > datetime.now(timezone.utc))
+        .order_by(RefreshTokenModel.created_at.asc())
+    )
+    existing = active_tokens.scalars().all()
+    if len(existing) >= settings.MAX_SESSIONS_PER_USER:
+        # Revoke oldest sessions to make room
+        for tok in existing[:len(existing) - settings.MAX_SESSIONS_PER_USER + 1]:
+            tok.is_revoked = True
+        await db.flush()
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

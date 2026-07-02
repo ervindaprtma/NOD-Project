@@ -1006,7 +1006,9 @@ async def build_report_context(
             "Site_FGT-DRC": "Site_FGT-DRC_SSLVPN",
         }.get(current_site, None) if current_site else None
         has_sslvpn = (sslvpn_name is not None)
-        has_ipsec = (current_site == "Site_FGT-DRC")
+        # ponytail: ipsec has its own index/client, not site-scoped
+        # R-08 always queries ipsec; R-03 only when DRC selected
+        has_ipsec = (report_type in ("R-07", "R-08") or current_site == "Site_FGT-DRC")
 
         try:
             from app.opensearch import sslvpn as sslvpn_qb

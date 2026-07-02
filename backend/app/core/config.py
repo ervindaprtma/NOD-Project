@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     # 24h idle timeout — session invalidates after this if no auto-refresh
     # Active users (auto-refresh running) get continuously extended session
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours — idle timeout (no code references SESSION_INACTIVITY_TIMEOUT)
+    MAX_SESSIONS_PER_USER: int = 5  # max concurrent active refresh tokens
     ALLOWED_ORIGINS: str = "http://localhost:80"
 
     @property
@@ -63,6 +64,8 @@ class Settings(BaseSettings):
     OPENSEARCH_POOL_SIZE: int = 10
     OPENSEARCH_REQUEST_TIMEOUT: int = 30
     OPENSEARCH_QUERY_TIMEOUT: int = 120  # per-query timeout for aggregations (120s for 24h+ ranges)
+    OPENSEARCH_VERIFY_CERTS: bool = False  # set True + mount CA cert for production
+    OPENSEARCH_CA_CERT_PATH: str = ""  # path to CA cert inside container when verify=True
 
     # ── Site configuration (Q-06 compliance) ───────────────────
     TELEGRAF_SDWAN_SITES: str = "Site_FGT-DC,Site_FGT-DRC,Site_FGT_Office"
@@ -118,7 +121,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_REFRESH_WINDOW: str = "minute"
     RATE_LIMIT_WEBSOCKET_CONNECTIONS: int = 5
 
-    # ── Optional features ──────────────────────────────────────
+    # ── App config ──────────────────────────────────────────────
+    ENVIRONMENT: str = "production"  # set "development" to enable /api/docs
     METRICS_ENABLED: bool = False
 
 

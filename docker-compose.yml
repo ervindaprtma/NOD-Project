@@ -31,6 +31,11 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
     networks:
       - nod_net
 
@@ -46,6 +51,11 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${BACKEND_PORT:-8000}/health')"]
       interval: 30s
@@ -68,6 +78,11 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-nod_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nod_user} -d ${POSTGRES_DB:-nod_db}"]
       interval: 10s

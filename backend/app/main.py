@@ -114,8 +114,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="NOD — Network Observability Dashboard",
     version="1.0.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
+    docs_url="/api/docs" if settings.ENVIRONMENT == "development" else None,
+    redoc_url="/api/redoc" if settings.ENVIRONMENT == "development" else None,
+    openapi_url="/api/openapi.json" if settings.ENVIRONMENT == "development" else None,
     lifespan=lifespan,
 )
 

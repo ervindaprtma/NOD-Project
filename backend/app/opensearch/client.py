@@ -21,9 +21,7 @@ settings = get_settings()
 
 def _build_client(hosts: str) -> AsyncOpenSearch:
     """Create an AsyncOpenSearch client for a given endpoint."""
-    # Auto-detect HTTPS from URL scheme
     use_ssl = hosts.startswith("https://")
-
     kwargs: dict = {
         "hosts": [hosts],
         "timeout": settings.OPENSEARCH_REQUEST_TIMEOUT,
@@ -31,14 +29,16 @@ def _build_client(hosts: str) -> AsyncOpenSearch:
         "retry_on_timeout": True,
         "max_retries": 2,
         "use_ssl": use_ssl,
-        "verify_certs": False,  # skip TLS verify for internal/self-signed certs
-        # ⚠️ WARNING: TLS cert verification disabled — not suitable for production
-        "ssl_show_warn": False,
+        "verify_certs": settings.OPENSEARCH_VERIFY_CERTS if use_ssl else False,
+        "ssl_show_warn": not settings.OPENSEARCH_VERIFY_CERTS,
     }
+    if use_ssl and settings.OPENSEARCH_VERIFY_CERTS and settings.OPENSEARCH_CA_CERT_PATH:
+        kwargs["ca_certs"] = settings.OPENSEARCH_CA_CERT_PATH
     if settings.OPENSEARCH_USERNAME and settings.OPENSEARCH_PASSWORD:
         kwargs["http_auth"] = (settings.OPENSEARCH_USERNAME, settings.OPENSEARCH_PASSWORD)
-    logger = logging.getLogger("nod.opensearch")
-    logger.warning("OpenSearch TLS cert verification disabled — not suitable for production")
+    if use_ssl and not settings.OPENSEARCH_VERIFY_CERTS:
+        logger = logging.getLogger("nod.opensearch")
+        logger.warning("OpenSearch TLS cert verification disabled — set OPENSEARCH_VERIFY_CERTS=true for production")
     return AsyncOpenSearch(**kwargs)
 
 
