@@ -16,10 +16,22 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
+
+def _get_client_ip(request: Request) -> str:
+    """Extract real client IP from X-Forwarded-For (set by Nginx).
+    Falls back to direct connection IP if no proxy header present."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        # X-Forwarded-For: client, proxy1, proxy2 — take first (client)
+        return forwarded.split(",")[0].strip()
+    return get_remote_address(request)
+
+
 # ── Global limiter instance ────────────────────────────────────
-# Uses client IP by default. Override key_func per-endpoint when needed.
+# Uses X-Forwarded-For (set by Nginx) so rate limiting applies to real client
+# IP, not the Docker bridge IP. Without this, all clients share one limit.
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=_get_client_ip,
     default_limits=[
         f"{settings.RATE_LIMIT_DEFAULT_REQUESTS}/{settings.RATE_LIMIT_DEFAULT_WINDOW}",
     ],
