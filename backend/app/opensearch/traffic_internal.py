@@ -261,33 +261,46 @@ async def sankey_data(
     app_filter: str = "", client_ip: str = "", server_ip: str = "",
     protocol: str = "", dst_port: int | None = None, traffic_path: str = "all",
 ) -> dict:
-    """Sankey: Ingress → Service → Egress (3 levels, no direction needed for internal)."""
+    """Sankey: Ingress → Service → Egress (3 levels, no direction needed for internal).
+    Paginates composite to collect all unique combinations, then filters to top-10 per level."""
     if client is None:
         client = _get_client(site_name)
 
-    body = {
-        "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)}},
-        "aggs": {
-            "sankey_flow": {
-                "composite": {
-                    "size": 1000,
-                    "sources": [
-                        {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
-                        {"service": {"terms": {"field": "flow.server.l4.port.id"}}},
-                        {"egress": {"terms": {"field": "flow.out.netif.name"}}},
-                    ],
-                },
-                "aggs": _bytes_sum(),
-            }
-        },
-    }
+    filters = _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)
+    composite_sources = [
+        {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+        {"service": {"terms": {"field": "flow.server.l4.port.id"}}},
+        {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+    ]
 
-    resp = await safe_search(client, FLOW_INDEX, body)
-    buckets = resp["aggregations"]["sankey_flow"]["buckets"]
+    # Paginate composite to get all unique (ingress, service, egress) combinations.
+    # Ponytail: max 5 pages × 2000 = 10,000 combos; covers DC's 10K+ with headroom.
+    all_buckets: list[dict] = []
+    after_key = None
+    for _ in range(5):
+        body = {
+            "size": 0,
+            "query": {"bool": {"filter": filters}},
+            "aggs": {
+                "sankey_flow": {
+                    "composite": {
+                        "size": 2000,
+                        "sources": composite_sources,
+                        **({"after": after_key} if after_key else {}),
+                    },
+                    "aggs": _bytes_sum(),
+                }
+            },
+        }
+        resp = await safe_search(client, FLOW_INDEX, body)
+        agg = resp["aggregations"]["sankey_flow"]
+        all_buckets.extend(agg["buckets"])
+        after_key = agg.get("after_key")
+        if not after_key:
+            break
 
     rows: list[dict] = []
-    for bucket in buckets:
+    for bucket in all_buckets:
         key = bucket["key"]
         port_key = key.get("service", "")
         if port_key == "0" or port_key == 0:
