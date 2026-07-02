@@ -68,6 +68,10 @@ async def lifespan(app: FastAPI):
     from app.services.alert_engine import start_alert_scheduler
     start_alert_scheduler()
 
+    # Start token cleanup (hourly, deletes expired/revoked tokens older than 24h)
+    from app.services.token_cleanup import start_token_cleanup_scheduler
+    start_token_cleanup_scheduler()
+
     # Start report schedule checker (P8)
     from app.services.report_scheduler import start_report_scheduler
     start_report_scheduler()
