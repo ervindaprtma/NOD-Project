@@ -17,14 +17,25 @@ from app.core.config import get_settings
 settings = get_settings()
 
 
-def _get_client_ip(request: Request) -> str:
+def get_real_client_ip(request: Request) -> str:
     """Extract real client IP from X-Forwarded-For (set by Nginx).
-    Falls back to direct connection IP if no proxy header present."""
+    Falls back to X-Real-IP, then direct connection IP if no proxy header present.
+
+    Use this instead of request.client.host — behind nginx, request.client.host
+    returns the Docker bridge IP (e.g. 172.18.0.5), not the user's real IP.
+    """
     forwarded = request.headers.get("X-Forwarded-For", "")
     if forwarded:
         # X-Forwarded-For: client, proxy1, proxy2 — take first (client)
         return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("X-Real-IP", "")
+    if real_ip:
+        return real_ip.strip()
     return get_remote_address(request)
+
+
+# Backward-compatible alias for existing limiter key_func
+_get_client_ip = get_real_client_ip
 
 
 # ── Global limiter instance ────────────────────────────────────

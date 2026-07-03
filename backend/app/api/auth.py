@@ -34,7 +34,7 @@ settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 # Rate limiter — import from core module
-from app.core.limiter import limiter
+from app.core.limiter import limiter, get_real_client_ip
 
 # Role hierarchy for RBAC
 _ROLE_HIERARCHY = {
@@ -145,7 +145,7 @@ async def login(
         log_activity(
             user_id=user.id,
             action="login",
-            source_ip=request.client.host if request.client else None,
+            source_ip=get_real_client_ip(request),
         )
     )
 
@@ -162,7 +162,7 @@ async def login(
             user_id=user.id,
             jti=jti,
             expires_at=expires_at,
-            source_ip=request.client.host if request.client else None,
+            source_ip=get_real_client_ip(request),
         )
     )
     await db.flush()
@@ -211,7 +211,7 @@ async def logout(
             await log_activity(
                 user_id=user_id,
                 action="logout",
-                source_ip=request.client.host if request.client else None,
+                source_ip=get_real_client_ip(request),
             )
 
     resp = Response(
@@ -276,7 +276,7 @@ async def refresh(
             user_id=user.id,
             jti=new_jti,
             expires_at=new_expires_at,
-            source_ip=request.client.host if request.client else None,
+            source_ip=get_real_client_ip(request),
         )
     )
 

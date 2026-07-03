@@ -43,7 +43,7 @@ from app.api import (
 )
 from app.core.config import get_settings
 from app.core.logging import setup_logging
-from app.core.limiter import limiter
+from app.core.limiter import limiter, get_real_client_ip
 from app.db.session import engine, AsyncSessionLocal
 from app.db.models import User
 from app.opensearch.client import check_all_clusters
@@ -167,7 +167,7 @@ async def trace_and_log_middleware(request: Request, call_next: Callable):
             "path": request.url.path,
             "status": response.status_code,
             "elapsed_ms": elapsed_ms,
-            "client_ip": request.client.host if request.client else "unknown",
+            "client_ip": get_real_client_ip(request),
         },
     )
 
