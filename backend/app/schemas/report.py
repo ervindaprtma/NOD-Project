@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 
 class ReportGenerateRequest(BaseModel):
-    report_type: str = Field(..., pattern=r"^(R-01|R-02|R-03|R-04|R-05|R-06|R-07|R-08)$")
+    report_type: str = Field(..., pattern=r"^(R-01|R-02|R-03|R-04|R-05|R-06|R-07|R-08|R-09)$")
     output_format: str = Field(default="pdf", pattern=r"^(pdf|html|docx)$")
     time_range_start: int  # UTC epoch ms
     time_range_end: int  # UTC epoch ms
@@ -21,6 +21,11 @@ class ReportGenerateRequest(BaseModel):
     sections: Optional[list[str]] = Field(
         default=None,
         description="List of report sections to include; empty/None = all sections",
+    )
+    table_interval: Optional[str] = Field(
+        default=None,
+        pattern=r"^(15m|30m|1h|2h|4h|6h|12h|24h)$",
+        description="R-09 only: interval for detail table rows",
     )
 
 

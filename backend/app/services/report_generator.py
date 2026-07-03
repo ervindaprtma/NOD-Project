@@ -19,7 +19,7 @@ import functools
 import io
 import logging
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Optional
@@ -109,6 +109,11 @@ FRONTEND_TO_BACKEND_SECTION = {
         "top_services": "traffic_internal",
         "top_clients": "traffic_internal",
         "top_servers": "traffic_internal",
+    },
+    "R-09": {
+        "summary": "interface_bandwidth",
+        "timeline": "interface_bandwidth",
+        "detail_table": "interface_bandwidth",
     },
 }
 
@@ -525,6 +530,7 @@ async def build_report_context(
     lte_ms: int,
     sites: list[str] | None = None,
     sections: list[str] | None = None,
+    table_interval: str | None = None,
 ) -> dict[str, Any]:
     """
     Fetch all required data from OpenSearch and build the full
@@ -1854,6 +1860,142 @@ async def build_report_context(
 
         context["report_data"]["executive_summary"] = summary
 
+    # ── R-09: Interface Bandwidth ───────────────────────────────────
+    # Q-07: 2 queries per site (table interval + chart interval), not per-interface.
+    # Total: 3 sites × 2 = 6 queries. Single query returns all 4 interfaces via terms agg.
+    if report_type == "R-09" and (not sections or "interface_bandwidth" in sections):
+        ibw: dict[str, Any] = {}
+        try:
+            from app.opensearch import interface_stats as iface_qb
+            from app.api.interface_stats import _compute_throughput_timeline
+
+            tbl_interval = table_interval or "1h"
+            tbl_interval_seconds = _interval_to_seconds(tbl_interval)
+            chart_interval = _auto_interval_str(gte_ms, lte_ms)
+            chart_interval_seconds = _interval_to_seconds(chart_interval)
+
+            summary_rows: list[dict] = []
+            detail_rows: list[dict] = []
+            iface_charts: dict[str, str] = {}
+
+            for site in site_list:
+                site_label = _site_label(site)
+                iface_labels = iface_qb.SITE_IFINDEX_MAP.get(site, {})
+                sort_order = iface_qb.SITE_IFACE_SORT_ORDER.get(site, {})
+
+                # Query 1: table interval (for summary + detail table)
+                tbl_result = await iface_qb.interface_stats_timeline(
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                    site_name=site, interval=tbl_interval,
+                )
+                tbl_aggs = tbl_result.get("aggregations", {})
+
+                # Query 2: chart interval (finer, for timeline charts)
+                chart_result = await iface_qb.interface_stats_timeline(
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                    site_name=site, interval=chart_interval,
+                )
+                chart_aggs = chart_result.get("aggregations", {})
+                chart_iface_buckets = {
+                    cb["key"]: cb for cb in chart_aggs.get("by_interface", {}).get("buckets", [])
+                }
+
+                iface_buckets = sorted(
+                    tbl_aggs.get("by_interface", {}).get("buckets", []),
+                    key=lambda b: sort_order.get(b["key"], 99),
+                )
+
+                for iface_bucket in iface_buckets:
+                    if_index = iface_bucket["key"]
+                    label = iface_labels.get(if_index, f"Interface {if_index}")
+                    time_buckets = iface_bucket.get("by_time", {}).get("buckets", [])
+
+                    # Throughput at table interval for summary + detail
+                    timeline = _compute_throughput_timeline(time_buckets, interval_seconds=tbl_interval_seconds)
+
+                    # Speed and oper_status from latest non-null bucket
+                    speed_mbps = None
+                    oper_status = None
+                    for bucket in reversed(time_buckets):
+                        sv = bucket.get("speed_mbps", {}).get("value")
+                        ov = bucket.get("oper_status", {}).get("value")
+                        if sv is not None:
+                            speed_mbps = int(sv)
+                        if ov is not None:
+                            oper_status = int(ov)
+                        if speed_mbps is not None or oper_status is not None:
+                            break
+
+                    # Summary: avg/peak from timeline
+                    in_vals = [pt.in_mbps for pt in timeline if pt.in_mbps is not None]
+                    out_vals = [pt.out_mbps for pt in timeline if pt.out_mbps is not None]
+                    avg_in = round(sum(in_vals) / len(in_vals), 2) if in_vals else 0.0
+                    avg_out = round(sum(out_vals) / len(out_vals), 2) if out_vals else 0.0
+                    peak_in = round(max(in_vals), 2) if in_vals else 0.0
+                    peak_out = round(max(out_vals), 2) if out_vals else 0.0
+
+                    summary_rows.append({
+                        "site": site_label,
+                        "interface": label,
+                        "speed_mbps": speed_mbps,
+                        "status": "UP" if oper_status == 1 else "DOWN" if oper_status else "—",
+                        "avg_in_mbps": avg_in,
+                        "avg_out_mbps": avg_out,
+                        "peak_in_mbps": peak_in,
+                        "peak_out_mbps": peak_out,
+                    })
+
+                    # Detail table: one row per interval bucket
+                    for pt in timeline:
+                        if pt.in_mbps is None and pt.out_mbps is None:
+                            continue
+                        # Format as range: "DD MMM HH:mm — HH:mm"
+                        tz = ZoneInfo("Asia/Jakarta")
+                        start_dt = datetime.fromtimestamp(pt.timestamp / 1000, tz=timezone.utc).astimezone(tz)
+                        end_dt = start_dt + timedelta(seconds=tbl_interval_seconds)
+                        if start_dt.date() == end_dt.date():
+                            ts_str = f"{start_dt:%d %b %H:%M} — {end_dt:%H:%M}"
+                        else:
+                            ts_str = f"{start_dt:%d %b %H:%M} — {end_dt:%d %b %H:%M}"
+                        detail_rows.append({
+                            "time_range": ts_str,
+                            "site": site_label,
+                            "interface": label,
+                            "avg_in_mbps": round(pt.in_mbps or 0, 2),
+                            "avg_out_mbps": round(pt.out_mbps or 0, 2),
+                        })
+
+                    # Chart: use chart-interval data for this interface (already fetched)
+                    cb = chart_iface_buckets.get(if_index)
+                    if cb:
+                        ctb = cb.get("by_time", {}).get("buckets", [])
+                        c_timeline = _compute_throughput_timeline(ctb, interval_seconds=chart_interval_seconds)
+                        chart_data = []
+                        for pt in c_timeline:
+                            if pt.in_mbps is not None:
+                                chart_data.append({"timestamp": pt.timestamp, "protocol": "In", "value": pt.in_mbps})
+                            if pt.out_mbps is not None:
+                                chart_data.append({"timestamp": pt.timestamp, "protocol": "Out", "value": pt.out_mbps})
+                        if chart_data:
+                            chart_key = f"iface_{site_label}_{label}"
+                            iface_charts[chart_key] = await _run_chart(
+                                render_timeseries_chart, chart_data,
+                                title=f"{site_label} — {label} Bandwidth",
+                                ylabel="Mbps", series_key="protocol",
+                                width=800, height=300,
+                                tz=ZoneInfo("Asia/Jakarta"),
+                            )
+
+            ibw["summary"] = summary_rows
+            ibw["detail_table"] = detail_rows
+            ibw["charts"] = iface_charts
+            ibw["table_interval"] = tbl_interval
+
+        except Exception as exc:
+            logger.error("R-09 interface bandwidth fetch failed: %s", exc, exc_info=True)
+
+        context["report_data"]["interface_bandwidth"] = ibw
+
     # ── Attach all charts ───────────────────────────────────────────
     context["charts"] = {
         k: base64.b64encode(v).decode() if isinstance(v, bytes) else v
@@ -1901,6 +2043,16 @@ def _inject_charts(context: dict[str, Any]) -> None:
         vu["bandwidth_detail"] = chart_map.pop("bandwidth_detail", None)
     if vu:
         rd["vpn_users"] = vu
+
+    # R-09: interface bandwidth charts are stored directly in report_data
+    ibw = rd.get("interface_bandwidth", {})
+    if ibw.get("charts"):
+        ibw["charts"] = {
+            k: base64.b64encode(v).decode() if isinstance(v, bytes) else v
+            for k, v in ibw["charts"].items()
+        }
+    if ibw:
+        rd["interface_bandwidth"] = ibw
 
     context["charts"] = chart_map
 
@@ -1999,6 +2151,7 @@ def _report_title(report_type: str) -> str:
         "R-06": "Traffic Internal Report",
         "R-07": "Executive Summary Report",
         "R-08": "All-in-One Network Observability Report",
+        "R-09": "Interface Bandwidth Usage Report",
     }
     return mapping.get(report_type, "NOD Report")
 
@@ -2020,6 +2173,7 @@ async def _generate_multi_site_report(job, sites_ordered: list[str], gte_ms: int
             lte_ms=lte_ms,
             sites=[site],
             sections=job.sections,
+            table_interval=getattr(job, "table_interval", None),
         )
 
         # Metadata
@@ -2111,6 +2265,7 @@ async def generate_report(job) -> str:
                     gte_ms=gte_ms,
                     lte_ms=lte_ms,
                     sites=sites_ordered,
+                    table_interval=getattr(job, "table_interval", None),
                     sections=job.sections,
                 )
                 _apply_metadata(context, job)
@@ -2127,6 +2282,7 @@ async def generate_report(job) -> str:
         lte_ms=lte_ms,
         sites=sites_ordered,
         sections=job.sections,
+        table_interval=getattr(job, "table_interval", None),
     )
 
     _apply_metadata(context, job)

@@ -12,6 +12,7 @@
   ║    R-03 VPN Users           R-04 SD-WAN SLA                         ║
   ║    R-05 Traffic Inbound     R-06 Traffic Internal                   ║
   ║    R-07 Executive Summary   R-08 All-in-One (R-01 through R-07)     ║
+  ║    R-09 Interface Bandwidth                                    ║
   ║                                                                      ║
   ║  Jinja2 Context:                                                    ║
   ║    report_title, generated_at, generated_by, job_id                 ║
@@ -21,7 +22,7 @@
   ║    report_data — nested dict matching each section macro            ║
   ║      .traffic_overview, .resource_usage, .vpn_users,               ║
   ║      .sdwan_sla, .traffic_inbound, .traffic_internal,              ║
-  ║      .executive_summary                                             ║
+  ║      .executive_summary, .interface_bandwidth                     ║
   ╚══════════════════════════════════════════════════════════════════════╝
 -->
 <!DOCTYPE html>
@@ -1583,6 +1584,94 @@ body {
 {% endif %}
 {% endmacro %}
 
+{# ── 5. Interface Bandwidth (R-09) ─────────────────────────────────────────────── #}
+{% macro section_interface_bandwidth(data) %}
+{% set has_content = data.summary or data.detail_table or data.charts %}
+{% if has_content %}
+<h2 class="section-title" style="margin-bottom:16px;">Interface Bandwidth Usage <span class="timeframe-badge">{{ data.table_interval | default('1h') }} intervals</span></h2>
+
+{# ── Summary Table ── #}
+{% if data.summary %}
+<div class="table-card" style="margin-bottom:16px;">
+    <h3 style="padding:8px 12px;margin:0;font-size:9pt;border-bottom:1px solid hsl(var(--border));">Summary — Avg/Peak Throughput</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Site</th>
+                <th>Interface</th>
+                <th class="num-col">Speed</th>
+                <th class="num-col">Status</th>
+                <th class="num-col">Avg In</th>
+                <th class="num-col">Avg Out</th>
+                <th class="num-col">Peak In</th>
+                <th class="num-col">Peak Out</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in data.summary %}
+            <tr>
+                <td><strong>{{ row.site }}</strong></td>
+                <td>{{ row.interface }}</td>
+                <td class="num-col">{% if row.speed_mbps %}{{ row.speed_mbps }} Mbps{% else %}—{% endif %}</td>
+                <td class="num-col"><span class="badge badge-{{ 'success' if row.status == 'UP' else 'danger' }}">{{ row.status }}</span></td>
+                <td class="num-col">{{ '%.2f' | format(row.avg_in_mbps) }} Mbps</td>
+                <td class="num-col">{{ '%.2f' | format(row.avg_out_mbps) }} Mbps</td>
+                <td class="num-col">{{ '%.2f' | format(row.peak_in_mbps) }} Mbps</td>
+                <td class="num-col">{{ '%.2f' | format(row.peak_out_mbps) }} Mbps</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{# ── Timeline Charts ── #}
+{% if data.charts %}
+<div style="display:flex;flex-wrap:wrap;gap:16px;">
+{% for chart_key, chart_b64 in data.charts.items() %}
+    <div class="chart-card" style="flex:1 1 350px;min-width:320px;">
+        <h3 style="font-size:9.5pt;margin:0 0 8px 0;">{{ chart_key.split('_', 2)[-1] }}</h3>
+        <img src="data:image/png;base64,{{ chart_b64 }}" alt="{{ chart_key }} chart" />
+    </div>
+{% endfor %}
+</div>
+{% endif %}
+
+{# ── Detail Table ── #}
+{% if data.detail_table %}
+<div class="table-card" style="margin-top:16px;">
+    <h3 style="padding:8px 12px;margin:0;font-size:9pt;border-bottom:1px solid hsl(var(--border));">Detail Table ({{ data.table_interval | default('1h') }} intervals)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Time Range</th>
+                <th>Site</th>
+                <th>Interface</th>
+                <th class="num-col">Avg In (Mbps)</th>
+                <th class="num-col">Avg Out (Mbps)</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in data.detail_table %}
+            <tr>
+                <td>{{ row.time_range }}</td>
+                <td><strong>{{ row.site }}</strong></td>
+                <td>{{ row.interface }}</td>
+                <td class="num-col">{{ '%.2f' | format(row.avg_in_mbps) }}</td>
+                <td class="num-col">{{ '%.2f' | format(row.avg_out_mbps) }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% else %}
+<div class="card">
+    <p class="no-data">Interface bandwidth data is not available for the selected timeframe.</p>
+</div>
+{% endif %}
+{% endmacro %}
+
 
 {## ════════════════════════════════════════════════════════════════════════
     SECTION: R-08 — ALL-IN-ONE
@@ -1664,6 +1753,11 @@ body {
     {# R-08: All-in-One #}
     {% if report_type == 'R-08' %}
         {{ section_all_in_one(report_data) }}
+    {% endif %}
+
+    {# R-09: Interface Bandwidth #}
+    {% if report_type == 'R-09' %}
+        {{ section_interface_bandwidth(report_data.interface_bandwidth | default({})) }}
     {% endif %}
 
 {% else %}

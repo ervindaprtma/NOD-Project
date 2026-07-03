@@ -66,6 +66,7 @@ async def generate_report(
         time_range_end=time_end,
         sites=body.sites if body.sites else ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"],
         sections=body.sections,
+        table_interval=body.table_interval,
     )
     db.add(job)
     await db.commit()

@@ -47,6 +47,7 @@ const REPORT_TYPES = [
   { id: "R-06", title: "Traffic Internal", desc: "Intra-LAN, inter-site flow, top services" },
   { id: "R-07", title: "Executive Summary", desc: "KPI dashboard, 1-page overview" },
   { id: "R-08", title: "All-in-One", desc: "Combined report: all sections" },
+  { id: "R-09", title: "Interface Bandwidth", desc: "WAN/MPLS per-interface throughput, avg In/Out, time-range table" },
 ];
 
 const SITES = [
@@ -94,6 +95,11 @@ const SECTIONS: Record<string, { id: string; label: string }[]> = {
     { id: "top_clients", label: "Top Client IPs" },
     { id: "top_servers", label: "Top Server IPs" },
   ],
+  "R-09": [
+    { id: "summary", label: "Summary" },
+    { id: "timeline", label: "Bandwidth Timeline" },
+    { id: "detail_table", label: "Detail Table" },
+  ],
 };
 
 const FORMATS = [
@@ -104,11 +110,24 @@ const FORMATS = [
 
 const TIME_PRESETS = [
   { label: "15m", seconds: 900 },
+  { label: "30m", seconds: 1800 },
   { label: "1h", seconds: 3600 },
   { label: "2h", seconds: 7200 },
   { label: "4h", seconds: 14400 },
+  { label: "6h", seconds: 21600 },
   { label: "12h", seconds: 43200 },
   { label: "24h", seconds: 86400 },
+];
+
+const TABLE_INTERVALS = [
+  { label: "15m", value: "15m" },
+  { label: "30m", value: "30m" },
+  { label: "1h", value: "1h" },
+  { label: "2h", value: "2h" },
+  { label: "4h", value: "4h" },
+  { label: "6h", value: "6h" },
+  { label: "12h", value: "12h" },
+  { label: "24h", value: "24h" },
 ];
 
 const CHANNELS = [
@@ -169,6 +188,7 @@ export default function ReportsPage() {
   const [customGte, setCustomGte] = useState("");
   const [customLte, setCustomLte] = useState("");
   const [useCustom, setUseCustom] = useState(false);
+  const [tableInterval, setTableInterval] = useState("1h");
   const canGenerateReports = hasMinRole("operator");
   const [generating, setGenerating] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -260,6 +280,7 @@ export default function ReportsPage() {
           time_range_end: lte,
           sites: selectedSites,
           sections: selectedSections.length > 0 ? selectedSections : undefined,
+          table_interval: reportType === "R-09" ? tableInterval : undefined,
         }),
         },
       );
@@ -487,6 +508,29 @@ export default function ReportsPage() {
             )}
           </div>
         </div>
+
+        {/* Table Interval (R-09 only) */}
+        {reportType === "R-09" && (
+          <div>
+            <label className="text-sm font-medium mb-2 block">Table Interval</label>
+            <div className="flex flex-wrap gap-1 bg-muted rounded-md p-1">
+              {TABLE_INTERVALS.map((ti) => (
+                <button
+                  key={ti.value}
+                  onClick={() => setTableInterval(ti.value)}
+                  className={cn(
+                    "px-2.5 py-1 text-xs rounded-sm transition-colors",
+                    tableInterval === ti.value
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {ti.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Generate Button */}
         <button

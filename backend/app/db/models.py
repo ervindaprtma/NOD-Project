@@ -311,6 +311,10 @@ class ReportJob(Base):
         JSONB, nullable=True,
         comment="List of report sections to include; None = all"
     )
+    table_interval: Mapped[Optional[str]] = mapped_column(
+        String(10), nullable=True,
+        comment="R-09 only: interval for detail table rows (15m/30m/1h/2h/4h/6h/12h/24h)"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
