@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatPercent, formatNumber, getDefaultTimeRange, TAB_TRIGGER_CLASS } from "@/lib/constants";
+import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatPercent, formatNumber, getDefaultTimeRange, TAB_TRIGGER_CLASS, formatBucketLabelWIB } from "@/lib/constants";
 import type { ResourceData, HAStatusData, InterfaceStatsData, InterfaceStatsItem } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { AreaChart } from "@/components/charts/AreaChart";
@@ -626,14 +626,14 @@ export default function ResourcesPage() {
 function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
   const isUp = iface.oper_status === 1;
 
-  const chartData = (iface.timeline || []).map((pt) => ({
-    timestamp: new Date(pt.timestamp).toLocaleTimeString("en-US", {
-      hour: "2-digit", minute: "2-digit", second: "2-digit",
-      hour12: false, timeZone: "Asia/Jakarta",
-    }),
-    In: pt.in_mbps ?? 0,
-    Out: pt.out_mbps ?? 0,
-  }));
+  const chartData = (iface.timeline || []).map((pt, idx) => {
+    const ms = pt.timestamp ? new Date(pt.timestamp).getTime() : 0;
+    return {
+      timestamp: ms ? formatBucketLabelWIB(ms, idx > 0 ? new Date(iface.timeline![idx - 1].timestamp).getTime() : null) : pt.timestamp,
+      In: pt.in_mbps ?? 0,
+      Out: pt.out_mbps ?? 0,
+    };
+  });
 
   const hasTimeline = chartData.length > 1;
 
@@ -757,13 +757,13 @@ function ResourceAreaCard({
     );
   }
 
-  const chartData = data.map((d) => ({
-    timestamp: new Date(d.timestamp).toLocaleTimeString("en-US", {
-      hour: "2-digit", minute: "2-digit", second: "2-digit",
-      hour12: false, timeZone: "Asia/Jakarta",
-    }),
-    value: d.value,
-  }));
+  const chartData = data.map((d, idx) => {
+    const ms = d.timestamp ? new Date(d.timestamp).getTime() : 0;
+    return {
+      timestamp: ms ? formatBucketLabelWIB(ms, idx > 0 ? new Date(data[idx - 1].timestamp).getTime() : null) : d.timestamp,
+      value: d.value,
+    };
+  });
 
   return (
     <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg p-3 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20">
