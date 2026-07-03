@@ -52,6 +52,7 @@ async def traffic_inbound_summary(
     server_ip: str = Query("", description="Filter: server IP address"),
     protocol: str = Query("", description="Filter: protocol name"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port number"),
+    src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
     current_user=Depends(get_current_user),
 ):
     """Returns all traffic inbound widget data (service/port-based)."""
@@ -63,7 +64,7 @@ async def traffic_inbound_summary(
         "traffic_inbound.flow_summary",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter="inbound-vip",
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port,
+        protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = Meta(query_took_ms=elapsed)
@@ -94,6 +95,7 @@ async def traffic_inbound_chart(
     server_ip: str = Query("", description="Filter: server IP address"),
     protocol: str = Query("", description="Filter: protocol name"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port number"),
+    src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
     current_user=Depends(get_current_user),
 ):
     """Returns stacked bar chart for service throughput (port-based)."""
@@ -106,7 +108,7 @@ async def traffic_inbound_chart(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         path_filter="inbound-vip", bucket_seconds=bucket_seconds,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port,
+        protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = Meta(query_took_ms=elapsed)
@@ -135,6 +137,7 @@ async def traffic_inbound_table(
     server_ip: str = Query("", description="Filter: server IP address"),
     protocol: str = Query("", description="Filter: protocol name"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port number"),
+    src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
     current_user=Depends(get_current_user),
 ):
     """Returns paginated inbound flow records with composite aggregation."""
@@ -153,7 +156,7 @@ async def traffic_inbound_table(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         after=after_key, path_filter="inbound-vip",
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port,
+        protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = Meta(query_took_ms=elapsed)
@@ -182,6 +185,7 @@ async def traffic_inbound_sankey(
     server_ip: str = Query("", description="Filter: server IP address"),
     protocol: str = Query("", description="Filter: protocol name"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port number"),
+    src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
     current_user=Depends(get_current_user),
 ):
     """Returns Sankey diagram nodes+links. direction='' for unfiltered, 'upload' or 'download' for zone-based direction."""
@@ -194,7 +198,7 @@ async def traffic_inbound_sankey(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter="inbound-vip",
         direction=direction,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port,
+        protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = Meta(query_took_ms=elapsed)

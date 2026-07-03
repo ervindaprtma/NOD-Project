@@ -24,6 +24,7 @@ import type {
 import TimeRangePicker, {
   type CustomTimeRange,
 } from "@/components/panels/TimeRangePicker";
+import { TagFilterField } from "@/components/TagFilterField";
 
 import { AreaChart } from "@/components/charts/AreaChart";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
@@ -40,31 +41,34 @@ const SITE_LABELS: Record<string, string> = {
 // ── Filter types ──────────────────────────────────────────────────
 
 interface FilterState {
-  application: string;
-  category: string;
-  client_ip: string;
-  server_ip: string;
-  protocol: string;
-  dst_port: string;
+  application: string[];
+  category: string[];
+  client_ip: string[];
+  server_ip: string[];
+  protocol: string[];
+  dst_port: string[];
+  dst_as_org: string[];
 }
 
 const defaultFilters: FilterState = {
-  application: "",
-  category: "",
-  client_ip: "",
-  server_ip: "",
-  protocol: "",
-  dst_port: "",
+  application: [],
+  category: [],
+  client_ip: [],
+  server_ip: [],
+  protocol: [],
+  dst_port: [],
+  dst_as_org: [],
 };
 
 function countActiveFilters(f: FilterState): number {
   let n = 0;
-  if (f.application) n++;
-  if (f.category) n++;
-  if (f.client_ip) n++;
-  if (f.server_ip) n++;
-  if (f.protocol) n++;
-  if (f.dst_port) n++;
+  if (f.application.length > 0) n++;
+  if (f.category.length > 0) n++;
+  if (f.client_ip.length > 0) n++;
+  if (f.server_ip.length > 0) n++;
+  if (f.protocol.length > 0) n++;
+  if (f.dst_port.length > 0) n++;
+  if (f.dst_as_org.length > 0) n++;
   return n;
 }
 
@@ -123,12 +127,13 @@ export default function TrafficPage() {
   // ── Build filter query string ──
   const filterQS = useMemo(() => {
     const parts: string[] = [];
-    if (filters.application) parts.push(`app_filter=${encodeURIComponent(filters.application)}`);
-    if (filters.category) parts.push(`category_filter=${encodeURIComponent(filters.category)}`);
-    if (filters.client_ip) parts.push(`client_ip=${encodeURIComponent(filters.client_ip)}`);
-    if (filters.server_ip) parts.push(`server_ip=${encodeURIComponent(filters.server_ip)}`);
-    if (filters.protocol) parts.push(`protocol=${encodeURIComponent(filters.protocol)}`);
-    if (filters.dst_port) parts.push(`dst_port=${filters.dst_port}`);
+    if (filters.application.length > 0) parts.push(`app_filter=${encodeURIComponent(filters.application.join(","))}`);
+    if (filters.category.length > 0) parts.push(`category_filter=${encodeURIComponent(filters.category.join(","))}`);
+    if (filters.client_ip.length > 0) parts.push(`client_ip=${encodeURIComponent(filters.client_ip.join(","))}`);
+    if (filters.server_ip.length > 0) parts.push(`server_ip=${encodeURIComponent(filters.server_ip.join(","))}`);
+    if (filters.protocol.length > 0) parts.push(`protocol=${encodeURIComponent(filters.protocol.join(","))}`);
+    if (filters.dst_port.length > 0) parts.push(`dst_port=${encodeURIComponent(filters.dst_port.join(","))}`);
+    if (filters.dst_as_org.length > 0) parts.push(`dst_as_org=${encodeURIComponent(filters.dst_as_org.join(","))}`);
     return parts.length > 0 ? "&" + parts.join("&") : "";
   }, [filters]);
 
@@ -381,18 +386,20 @@ export default function TrafficPage() {
         {showFilters && (
           <div className="px-4 pb-4 pt-1 border-t border-muted/40">
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-              <FilterField label="Application" value={draftFilters.application}
+              <TagFilterField label="Application" values={draftFilters.application}
                 onChange={(v) => setDraftFilters({ ...draftFilters, application: v })} />
-              <FilterField label="Category" value={draftFilters.category}
+              <TagFilterField label="Category" values={draftFilters.category}
                 onChange={(v) => setDraftFilters({ ...draftFilters, category: v })} />
-              <FilterField label="Client IP" value={draftFilters.client_ip}
+              <TagFilterField label="Client IP" values={draftFilters.client_ip}
                 onChange={(v) => setDraftFilters({ ...draftFilters, client_ip: v })} mono />
-              <FilterField label="Server IP" value={draftFilters.server_ip}
+              <TagFilterField label="Server IP" values={draftFilters.server_ip}
                 onChange={(v) => setDraftFilters({ ...draftFilters, server_ip: v })} mono />
-              <FilterField label="Protocol" value={draftFilters.protocol}
-                onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v.toUpperCase() })} />
-              <FilterField label="Dst Port" value={draftFilters.dst_port}
+              <TagFilterField label="Protocol" values={draftFilters.protocol}
+                onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })} />
+              <TagFilterField label="Dst Port" values={draftFilters.dst_port}
                 onChange={(v) => setDraftFilters({ ...draftFilters, dst_port: v })} />
+              <TagFilterField label="Destination AS" values={draftFilters.dst_as_org}
+                onChange={(v) => setDraftFilters({ ...draftFilters, dst_as_org: v })} />
             </div>
             <div className="flex items-center gap-2 mt-3">
               <button onClick={applyFilters}
@@ -581,31 +588,6 @@ export default function TrafficPage() {
         onCancel={() => setShowCustomPicker(false)}
         initialGteMs={gteMs}
         initialLteMs={lteMs}
-      />
-    </div>
-  );
-}
-
-// ── Filter Field Sub-component ────────────────────────────────────
-
-function FilterField({ label, value, onChange, mono }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <label className="text-[10px] text-muted-foreground uppercase font-medium">{label}</label>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="..."
-        className={cn(
-          "px-2 py-1.5 text-xs rounded border border-border/60 dark:border-border/40 bg-background focus:outline-none focus:ring-1 focus:ring-primary/30",
-          mono && "font-mono text-[11px]"
-        )}
       />
     </div>
   );

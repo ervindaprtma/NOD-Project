@@ -42,11 +42,36 @@ def _site_filter(site_name: str) -> dict:
     return {"term": {"flow.export.ip.addr": source_ip}}
 
 
+def _split_multi(value: str) -> list[str]:
+    """Split comma-separated filter string to list of stripped non-empty values."""
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def _multi_term(field: str, value: str) -> dict | None:
+    """Build a term/terms filter from a comma-separated value string."""
+    vals = _split_multi(value)
+    if not vals:
+        return None
+    if len(vals) == 1:
+        return {"term": {field: vals[0]}}
+    return {"terms": {field: vals}}
+
+
+def _multi_wildcard(field: str, value: str) -> dict | None:
+    """Build a wildcard or bool/should of wildcards from comma-separated value."""
+    vals = _split_multi(value)
+    if not vals:
+        return None
+    if len(vals) == 1:
+        return {"wildcard": {field: f"*{vals[0]}*"}}
+    return {"bool": {"should": [{"wildcard": {field: f"*{v}*"}} for v in vals], "minimum_should_match": 1}}
+
+
 def _base_filters(
     gte_ms: int, lte_ms: int, site_name: str, path_filter: str = "internet",
     direction: str = "", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None,
+    dst_port: int | None = None, dst_as_org: str = "",
 ) -> list[dict]:
     filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
     if path_filter:
@@ -57,18 +82,20 @@ def _base_filters(
     elif direction == "download":
         filters.append({"term": {"flow.in.netif.sec.zone.name": "internet"}})
         filters.append({"term": {"flow.out.netif.sec.zone.name": "internal"}})
-    if app_filter:
-        filters.append({"wildcard": {"flow.application.name": f"*{app_filter}*"}})
-    if category_filter:
-        filters.append({"wildcard": {"flow.application.category": f"*{category_filter}*"}})
-    if client_ip:
-        filters.append({"term": {"flow.client.ip.addr": client_ip}})
-    if server_ip:
-        filters.append({"term": {"flow.server.ip.addr": server_ip}})
-    if protocol:
-        filters.append({"term": {"l4.proto.name": protocol}})
+    f = _multi_wildcard("flow.application.name", app_filter)
+    if f: filters.append(f)
+    f = _multi_wildcard("flow.application.category", category_filter)
+    if f: filters.append(f)
+    f = _multi_term("flow.client.ip.addr", client_ip)
+    if f: filters.append(f)
+    f = _multi_term("flow.server.ip.addr", server_ip)
+    if f: filters.append(f)
+    f = _multi_term("l4.proto.name", protocol)
+    if f: filters.append(f)
     if dst_port is not None:
         filters.append({"term": {"flow.dst.l4.port.id": dst_port}})
+    f = _multi_wildcard("flow.dst.as.org", dst_as_org)
+    if f: filters.append(f)
     return filters
 
 
@@ -86,14 +113,14 @@ async def flow_summary(
     site_name: str = "Site_FGT-DC", path_filter: str = "internet",
     app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None,
+    dst_port: int | None = None, dst_as_org: str = "",
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
         "aggs": {
             "grand_total_bytes": {"sum": {"field": "flow.bytes"}},
             "top_apps": {
@@ -217,7 +244,7 @@ async def flow_chart(
     site_name: str = "Site_FGT-DC", top_n: int = 50, path_filter: str = "internet",
     bucket_seconds: int = 60, app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None,
+    dst_port: int | None = None, dst_as_org: str = "",
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
@@ -225,7 +252,7 @@ async def flow_chart(
     interval_str = f"{bucket_seconds}s"
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
         "aggs": {
             "per_minute": {
                 "date_histogram": {"field": "@timestamp", "fixed_interval": interval_str, "min_doc_count": 1},
@@ -268,7 +295,7 @@ async def sankey_data(
     site_name: str = "Site_FGT-DC", path_filter: str = "internet",
     direction: str = "", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None,
+    dst_port: int | None = None, dst_as_org: str = "",
 ) -> dict:
     """Sankey for Internet traffic flow.
 
@@ -301,7 +328,7 @@ async def sankey_data(
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, direction, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, direction, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
         "aggs": {
             "sankey_flow": {
                 "composite": {
@@ -391,7 +418,7 @@ async def flow_table(
     site_name: str = "Site_FGT-DC", after: Optional[dict] = None, page_size: int = 100,
     path_filter: str = "internet", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None,
+    dst_port: int | None = None, dst_as_org: str = "",
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
@@ -409,7 +436,7 @@ async def flow_table(
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
         "aggs": {
             "flow_table": {
                 "composite": composite_body,

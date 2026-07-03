@@ -77,6 +77,31 @@ def _internal_path_filter(traffic_path: str = "all") -> dict:
     }
 
 
+def _split_multi(value: str) -> list[str]:
+    """Split comma-separated filter string to list of stripped non-empty values."""
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def _multi_term(field: str, value: str) -> dict | None:
+    """Build a term/terms filter from a comma-separated value string."""
+    vals = _split_multi(value)
+    if not vals:
+        return None
+    if len(vals) == 1:
+        return {"term": {field: vals[0]}}
+    return {"terms": {field: vals}}
+
+
+def _multi_wildcard(field: str, value: str) -> dict | None:
+    """Build a wildcard or bool/should of wildcards from comma-separated value."""
+    vals = _split_multi(value)
+    if not vals:
+        return None
+    if len(vals) == 1:
+        return {"wildcard": {field: f"*{vals[0]}*"}}
+    return {"bool": {"should": [{"wildcard": {field: f"*{v}*"}} for v in vals], "minimum_should_match": 1}}
+
+
 def _base_filters(
     gte_ms: int, lte_ms: int, site_name: str,
     service_filter: str = "", client_ip: str = "", server_ip: str = "",
@@ -85,18 +110,19 @@ def _base_filters(
 ) -> list[dict]:
     filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name), _internal_path_filter(traffic_path)]
     if service_filter:
+        # ponytail: service_filter uses port resolution, keep as-is for multi
         resolved_ports = _resolve_service_filter(service_filter)
         if resolved_ports is not None:
             if len(resolved_ports) == 1:
                 filters.append({"term": {"flow.server.l4.port.id": resolved_ports[0]}})
             else:
                 filters.append({"terms": {"flow.server.l4.port.id": resolved_ports}})
-    if client_ip:
-        filters.append({"term": {"flow.client.ip.addr": client_ip}})
-    if server_ip:
-        filters.append({"term": {"flow.server.ip.addr": server_ip}})
-    if protocol:
-        filters.append({"term": {"l4.proto.name": protocol}})
+    f = _multi_term("flow.client.ip.addr", client_ip)
+    if f: filters.append(f)
+    f = _multi_term("flow.server.ip.addr", server_ip)
+    if f: filters.append(f)
+    f = _multi_term("l4.proto.name", protocol)
+    if f: filters.append(f)
     if dst_port is not None:
         filters.append({"term": {"flow.dst.l4.port.id": dst_port}})
     return filters

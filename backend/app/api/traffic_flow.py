@@ -54,6 +54,7 @@ async def traffic_flow_summary(
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
@@ -61,7 +62,7 @@ async def traffic_flow_summary(
         "flow_summary",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
-        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port,
+        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = Meta(query_took_ms=elapsed)
@@ -91,6 +92,7 @@ async def traffic_flow_chart(
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
@@ -99,7 +101,7 @@ async def traffic_flow_chart(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         bucket_seconds=bucket_seconds,
         app_filter=app_filter, category_filter=category_filter,
-        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port,
+        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = Meta(query_took_ms=elapsed)
@@ -125,6 +127,7 @@ async def traffic_flow_table(
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
@@ -136,7 +139,7 @@ async def traffic_flow_table(
         "flow_table",
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, after=after_key, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
-        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port,
+        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = Meta(query_took_ms=elapsed)
@@ -162,6 +165,7 @@ async def traffic_flow_sankey(
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
@@ -170,7 +174,7 @@ async def traffic_flow_sankey(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         direction=direction,
         app_filter=app_filter, category_filter=category_filter,
-        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port,
+        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = Meta(query_took_ms=elapsed)
