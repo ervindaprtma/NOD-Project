@@ -214,6 +214,51 @@ async def active_sslvpn_users(
     return results
 
 
+async def sslvpn_session_history(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    site_name: str = "Site_FGT-DC_SSLVPN",
+) -> list[dict]:
+    """Q-05: terms agg + min/max @timestamp per user for session history.
+    Returns list of {username, session_started, last_seen, status}.
+    ponytail: status = 'active' if last_seen within 60s of window end.
+    """
+    if client is None:
+        client = get_dc_client()
+
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": _sslvpn_filters(gte_ms, lte_ms, site_name)}},
+        "aggs": {
+            "by_user": {
+                "terms": {"field": "tag.username.keyword", "size": 500},
+                "aggs": {
+                    "session_started": {"min": {"field": "@timestamp"}},
+                    "last_seen": {"max": {"field": "@timestamp"}},
+                    "bytes_in": {"max": {"field": f"{site_name}.bytes_in"}},
+                    "bytes_out": {"max": {"field": f"{site_name}.bytes_out"}},
+                },
+            }
+        },
+    }
+
+    resp = await client.search(index="telegraf-index*", body=body)
+    active_cutoff = lte_ms - 60_000
+    return [
+        {
+            "username": bucket["key"],
+            "session_started": int(bucket["session_started"]["value"]),
+            "last_seen": int(bucket["last_seen"]["value"]),
+            "bytes_in": int(bucket["bytes_in"]["value"] or 0),
+            "bytes_out": int(bucket["bytes_out"]["value"] or 0),
+            "status": "active" if int(bucket["last_seen"]["value"]) >= active_cutoff else "ended",
+        }
+        for bucket in resp["aggregations"]["by_user"]["buckets"]
+        if bucket["doc_count"] > 0
+    ]
+
+
 async def user_bandwidth_timeline(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,

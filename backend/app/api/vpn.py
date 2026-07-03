@@ -3,6 +3,7 @@ VPN Sessions API (FR-01 panels P01-A, P01-B and dedicated VPN view).
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 from fastapi import APIRouter, Depends, Query
@@ -12,7 +13,7 @@ from app.core.config import get_settings
 from app.opensearch import ipsec as ipsec_qb
 from app.opensearch import sslvpn as sslvpn_qb
 from app.schemas.common import APIResponse
-from app.schemas.sdwan_resource_vpn import IPsecVPNUser, SSLVPNUser, VPNSessionsResponse
+from app.schemas.sdwan_resource_vpn import IPsecVPNUser, SSLVPNUser, VPNSessionHistoryItem, VPNSessionsResponse
 
 settings = get_settings()
 router = APIRouter(prefix="/api/v1/vpn", tags=["VPN"])
@@ -103,3 +104,51 @@ async def get_ipsec_sessions(
         for u in users
     ]
     return APIResponse.ok(data=result, meta={"query_took_ms": elapsed})
+
+
+@router.get("/sessions-history", response_model=APIResponse[list[VPNSessionHistoryItem]])
+async def get_vpn_sessions_history(
+    gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
+    lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
+    site_name: str = Query(default="Site_FGT-DC_SSLVPN", description="SSL VPN measurement_name"),
+    current_user=Depends(get_current_user),
+):
+    """VPN session history across full window — no 60s clamp.
+    Returns merged SSL + IPsec list sorted by session_started desc.
+    """
+    t0 = time.monotonic()
+
+    ssl_hist, ipsec_hist = await asyncio.gather(
+        sslvpn_qb.sslvpn_session_history(gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name),
+        ipsec_qb.ipsec_session_history(gte_ms=gte_ms, lte_ms=lte_ms),
+    )
+
+    merged = [
+        VPNSessionHistoryItem(
+            username=h["username"],
+            protocol="SSL VPN",
+            site=site_name,
+            session_started=h["session_started"],
+            last_seen=h["last_seen"],
+            bytes_in=h["bytes_in"],
+            bytes_out=h["bytes_out"],
+            status=h["status"],
+        )
+        for h in ssl_hist
+    ] + [
+        VPNSessionHistoryItem(
+            username=h["username"],
+            protocol="IPsec VPN",
+            site="",
+            session_started=h["session_started"],
+            last_seen=h["last_seen"],
+            bytes_in=h["bytes_in"],
+            bytes_out=h["bytes_out"],
+            status=h["status"],
+        )
+        for h in ipsec_hist
+    ]
+
+    merged.sort(key=lambda x: x.session_started, reverse=True)
+    elapsed = int((time.monotonic() - t0) * 1000)
+    return APIResponse.ok(data=merged, meta={"query_took_ms": elapsed})

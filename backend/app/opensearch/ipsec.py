@@ -147,3 +147,44 @@ async def active_ipsec_users_detail(
         })
 
     return results
+
+
+async def ipsec_session_history(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+) -> list[dict]:
+    """Q-05: terms agg + min/max @timestamp per user for IPsec session history."""
+    if client is None:
+        client = get_ipsec_client()
+
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms)}},
+        "aggs": {
+            "by_user": {
+                "terms": {"field": "tag.username.keyword", "size": 500},
+                "aggs": {
+                    "session_started": {"min": {"field": "@timestamp"}},
+                    "last_seen": {"max": {"field": "@timestamp"}},
+                    "bytes_in": {"max": {"field": "ipsec_normalized.bytes_in"}},
+                    "bytes_out": {"max": {"field": "ipsec_normalized.bytes_out"}},
+                },
+            }
+        },
+    }
+
+    resp = await client.search(index="ipsec-*", body=body)
+    active_cutoff = lte_ms - 60_000
+    return [
+        {
+            "username": bucket["key"],
+            "session_started": int(bucket["session_started"]["value"]),
+            "last_seen": int(bucket["last_seen"]["value"]),
+            "bytes_in": int(bucket["bytes_in"]["value"] or 0),
+            "bytes_out": int(bucket["bytes_out"]["value"] or 0),
+            "status": "active" if int(bucket["last_seen"]["value"]) >= active_cutoff else "ended",
+        }
+        for bucket in resp["aggregations"]["by_user"]["buckets"]
+        if bucket["doc_count"] > 0
+    ]

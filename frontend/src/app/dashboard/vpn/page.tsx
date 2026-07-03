@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -17,7 +17,28 @@ interface IPsecUser {
   bytes_in: number; bytes_out: number; tunnel_lifetime_sec: number; device: string;
 }
 
+interface VPNSessionHistoryItem {
+  username: string;
+  protocol: string;
+  site: string;
+  session_started: number;
+  last_seen: number;
+  bytes_in: number;
+  bytes_out: number;
+  status: string;
+}
+
 type SectionId = "ssl" | "ipsec";
+
+function fmtTs(ts: number): string {
+  const d = new Date(ts);
+  const now = Date.now();
+  // within 24h → time only; older → date + time
+  if (now - ts < 86_400_000) {
+    return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
 
 export default function VPNPage() {
   const defaultRange = getDefaultTimeRange();
@@ -58,6 +79,9 @@ export default function VPNPage() {
   const ipsecKey = token
     ? `/api/v1/vpn/ipsec?gte_ms=${currentGteMs}&lte_ms=${currentLteMs}`
     : null;
+  const historyKey = token
+    ? `/api/v1/vpn/sessions-history?gte_ms=${currentGteMs}&lte_ms=${currentLteMs}`
+    : null;
 
   const { data: sslData, error: sslErr, isLoading: sslLoading } = useSWR<{ data: SSLVPNUser[] }>(
     sslKey, swrFetcher, { refreshInterval: 0 }
@@ -65,9 +89,13 @@ export default function VPNPage() {
   const { data: ipsecData, error: ipsecErr, isLoading: ipsecLoading } = useSWR<{ data: IPsecUser[] }>(
     ipsecKey, swrFetcher, { refreshInterval: 0 }
   );
+  const { data: historyData, error: historyErr, isLoading: historyLoading } = useSWR<{ data: VPNSessionHistoryItem[] }>(
+    historyKey, swrFetcher, { refreshInterval: 0 }
+  );
 
   const sslUsers = sslData?.data || [];
   const ipsecUsers = ipsecData?.data || [];
+  const history = historyData?.data || null;
 
   function handlePreset(seconds: number, label: string) {
     const now = Date.now();
@@ -247,6 +275,26 @@ export default function VPNPage() {
         </div>
       </div>
 
+      {/* Session History Section */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Session History</h2>
+          <span className="text-[11px] text-muted-foreground">
+            Full window — {history ? `${history.length} session${history.length !== 1 ? "s" : ""}` : ""}
+          </span>
+        </div>
+
+        {historyErr && (
+          <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-xs">
+            Failed to load session history.
+          </div>
+        )}
+
+        <div className="bg-card border rounded-lg overflow-hidden">
+          <SessionHistoryTable items={history} loading={historyLoading} error={!!historyErr} />
+        </div>
+      </div>
+
       <TimeRangePicker
         isOpen={showCustomPicker}
         onApply={handleCustomApply}
@@ -311,6 +359,83 @@ function VPNTable({
                 <td className={`${cell} text-right font-mono`}>{formatBytes(u.bytes_in)}</td>
                 <td className={`${cell} text-right font-mono`}>{formatBytes(u.bytes_out)}</td>
                 <td className={`${cell} font-mono text-[11px]`}>{u.device}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SessionHistoryTable({
+  items, loading, error,
+}: {
+  items: VPNSessionHistoryItem[] | null; loading: boolean; error: boolean;
+}) {
+  const cell = "py-2 px-3";
+
+  if (error) {
+    return <p className="text-sm text-destructive text-center py-6">Failed to load session history</p>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b bg-muted/50 text-muted-foreground">
+            <th className={`text-left ${cell}`}>Username</th>
+            <th className={`text-left ${cell}`}>Type</th>
+            <th className={`text-left ${cell}`}>Session Started</th>
+            <th className={`text-left ${cell}`}>Last Seen</th>
+            <th className={`text-right ${cell}`}>Bytes In</th>
+            <th className={`text-right ${cell}`}>Bytes Out</th>
+            <th className={`text-left ${cell}`}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {loading ? (
+            Array.from({ length: 4 }).map((_, i) => (
+              <tr key={i} className="border-b animate-pulse">
+                {[1, 2, 3, 4, 5, 6, 7].map((j) => (
+                  <td key={j} className={cell}><div className="h-3 bg-muted rounded" /></td>
+                ))}
+              </tr>
+            ))
+          ) : !items || items.length === 0 ? (
+            <tr>
+              <td colSpan={7} className="py-10 text-center text-muted-foreground">
+                No session history in this time window
+              </td>
+            </tr>
+          ) : (
+            items.map((h, i) => (
+              <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+                <td className={`${cell} font-medium font-mono`}>{h.username}</td>
+                <td className={`${cell}`}>
+                  <span className={cn(
+                    "inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold",
+                    h.protocol === "SSL VPN"
+                      ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+                      : "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400"
+                  )}>
+                    {h.protocol === "SSL VPN" ? "SSL" : "IPsec"}
+                  </span>
+                </td>
+                <td className={`${cell} font-mono text-[11px]`}>{fmtTs(h.session_started)}</td>
+                <td className={`${cell} font-mono text-[11px]`}>{fmtTs(h.last_seen)}</td>
+                <td className={`${cell} text-right font-mono`}>{formatBytes(h.bytes_in)}</td>
+                <td className={`${cell} text-right font-mono`}>{formatBytes(h.bytes_out)}</td>
+                <td className={`${cell}`}>
+                  {h.status === "active" ? (
+                    <span className="inline-flex items-center gap-1 text-green-600 dark:text-green-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                      Active
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">Ended</span>
+                  )}
+                </td>
               </tr>
             ))
           )}

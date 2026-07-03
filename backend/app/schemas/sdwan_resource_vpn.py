@@ -157,6 +157,17 @@ class VPNSessionsResponse(BaseModel):
     ipsec_vpn: list[IPsecVPNUser]
 
 
+class VPNSessionHistoryItem(BaseModel):
+    username: str
+    protocol: str  # "SSL VPN" | "IPsec VPN"
+    site: str = ""
+    session_started: int  # epoch ms
+    last_seen: int  # epoch ms
+    bytes_in: int = 0
+    bytes_out: int = 0
+    status: str  # "active" | "ended"
+
+
 # ── HA Cluster Status ───────────────────────────────────────────
 
 class HAMember(BaseModel):
