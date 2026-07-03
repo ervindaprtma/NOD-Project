@@ -29,6 +29,16 @@ def _fmt(n: int) -> str:
         return f"{n / 1024**3:.2f} GB"
 
 
+def _active_window(gte_ms: int, lte_ms: int) -> tuple[int, int]:
+    """Clamp query window to last 60 seconds for 'currently active' VPN users.
+
+    ponytail: If a user's latest document is older than 60s, they're
+    considered disconnected. Data stores every 30s (Telegraf), so 60s
+    = 2x scrape interval — catches at least one fresh document reliably.
+    """
+    return (max(gte_ms, lte_ms - 60_000), lte_ms)
+
+
 @router.get("/ssl", response_model=APIResponse[list[SSLVPNUser]])
 async def get_sslvpn_sessions(
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
@@ -44,8 +54,9 @@ async def get_sslvpn_sessions(
         )
 
     t0 = time.monotonic()
+    ag, al = _active_window(gte_ms, lte_ms)
     users = await sslvpn_qb.active_sslvpn_users(
-        gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name
+        gte_ms=ag, lte_ms=al, site_name=site_name
     )
     elapsed = int((time.monotonic() - t0) * 1000)
 
@@ -73,7 +84,8 @@ async def get_ipsec_sessions(
 ):
     """FR-01 P01-B detail: Active IPsec VPN user sessions."""
     t0 = time.monotonic()
-    users = await ipsec_qb.active_ipsec_users_detail(gte_ms=gte_ms, lte_ms=lte_ms)
+    ag, al = _active_window(gte_ms, lte_ms)
+    users = await ipsec_qb.active_ipsec_users_detail(gte_ms=ag, lte_ms=al)
     elapsed = int((time.monotonic() - t0) * 1000)
 
     result = [

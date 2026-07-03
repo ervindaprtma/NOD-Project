@@ -86,13 +86,15 @@ async def get_overview(
     errors: list[str] = []
 
     # Run all independent sub-queries in parallel for speed
+    # ponytail: VPN count queries use last 60s only — "currently active" users.
+    _vpn_gte, _vpn_lte = max(gte_ms, lte_ms - 60_000), lte_ms
     ssl_task = safe_query(
         sslvpn_qb.all_sslvpn_users_count, "overview.sslvpn_users_count",
-        gte_ms=gte_ms, lte_ms=lte_ms, site_names=settings.sslvpn_sites_list,
+        gte_ms=_vpn_gte, lte_ms=_vpn_lte, site_names=settings.sslvpn_sites_list,
     )
     ipsec_task = safe_query(
         ipsec_qb.active_ipsec_users_count, "overview.active_ipsec_users_count",
-        gte_ms=gte_ms, lte_ms=lte_ms,
+        gte_ms=_vpn_gte, lte_ms=_vpn_lte,
     )
     devices_task = safe_query(
         ha_qb.current_device_status, "overview.current_device_status",
