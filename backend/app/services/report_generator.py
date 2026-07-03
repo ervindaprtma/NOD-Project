@@ -1860,15 +1860,17 @@ async def build_report_context(
 
         context["report_data"]["executive_summary"] = summary
 
-    # ── R-09: Interface Bandwidth ───────────────────────────────────
-    # Q-07: 2 queries per site (table interval + chart interval), not per-interface.
-    # Total: 3 sites × 2 = 6 queries. Single query returns all 4 interfaces via terms agg.
-    if report_type == "R-09" and (not sections or "interface_bandwidth" in sections):
+    # ── R-09 / R-08: Interface Bandwidth ─────────────────────────────
+    # R-09: summary + charts + detail table (2 queries/site: table + chart interval)
+    # R-08: summary + charts only, no detail table (1 query/site: chart interval)
+    # Q-07: single query per interval returns all 4 interfaces via terms agg.
+    if report_type in ("R-09", "R-08") and (not sections or "interface_bandwidth" in sections or report_type == "R-08"):
         ibw: dict[str, Any] = {}
         try:
             from app.opensearch import interface_stats as iface_qb
             from app.api.interface_stats import _compute_throughput_timeline
 
+            is_r09 = report_type == "R-09"
             tbl_interval = table_interval or "1h"
             tbl_interval_seconds = _interval_to_seconds(tbl_interval)
             chart_interval = _auto_interval_str(gte_ms, lte_ms)
@@ -1883,25 +1885,37 @@ async def build_report_context(
                 iface_labels = iface_qb.SITE_IFINDEX_MAP.get(site, {})
                 sort_order = iface_qb.SITE_IFACE_SORT_ORDER.get(site, {})
 
-                # Query 1: table interval (for summary + detail table)
-                tbl_result = await iface_qb.interface_stats_timeline(
-                    gte_ms=gte_ms, lte_ms=lte_ms,
-                    site_name=site, interval=tbl_interval,
-                )
-                tbl_aggs = tbl_result.get("aggregations", {})
+                # R-09: 2 queries (table + chart). R-08: 1 query (chart only, reused for summary).
+                if is_r09:
+                    tbl_result = await iface_qb.interface_stats_timeline(
+                        gte_ms=gte_ms, lte_ms=lte_ms,
+                        site_name=site, interval=tbl_interval,
+                    )
+                    tbl_aggs = tbl_result.get("aggregations", {})
+                    chart_result = await iface_qb.interface_stats_timeline(
+                        gte_ms=gte_ms, lte_ms=lte_ms,
+                        site_name=site, interval=chart_interval,
+                    )
+                    chart_aggs = chart_result.get("aggregations", {})
+                    summary_interval_seconds = tbl_interval_seconds
+                    summary_buckets = tbl_aggs
+                else:
+                    # R-08: single query at chart interval, used for both summary and charts
+                    chart_result = await iface_qb.interface_stats_timeline(
+                        gte_ms=gte_ms, lte_ms=lte_ms,
+                        site_name=site, interval=chart_interval,
+                    )
+                    chart_aggs = chart_result.get("aggregations", {})
+                    tbl_aggs = chart_aggs
+                    summary_interval_seconds = chart_interval_seconds
+                    summary_buckets = chart_aggs
 
-                # Query 2: chart interval (finer, for timeline charts)
-                chart_result = await iface_qb.interface_stats_timeline(
-                    gte_ms=gte_ms, lte_ms=lte_ms,
-                    site_name=site, interval=chart_interval,
-                )
-                chart_aggs = chart_result.get("aggregations", {})
                 chart_iface_buckets = {
                     cb["key"]: cb for cb in chart_aggs.get("by_interface", {}).get("buckets", [])
                 }
 
                 iface_buckets = sorted(
-                    tbl_aggs.get("by_interface", {}).get("buckets", []),
+                    summary_buckets.get("by_interface", {}).get("buckets", []),
                     key=lambda b: sort_order.get(b["key"], 99),
                 )
 
@@ -1910,8 +1924,8 @@ async def build_report_context(
                     label = iface_labels.get(if_index, f"Interface {if_index}")
                     time_buckets = iface_bucket.get("by_time", {}).get("buckets", [])
 
-                    # Throughput at table interval for summary + detail
-                    timeline = _compute_throughput_timeline(time_buckets, interval_seconds=tbl_interval_seconds)
+                    # Throughput at summary interval
+                    timeline = _compute_throughput_timeline(time_buckets, interval_seconds=summary_interval_seconds)
 
                     # Speed and oper_status from latest non-null bucket
                     speed_mbps = None
@@ -1945,25 +1959,25 @@ async def build_report_context(
                         "peak_out_mbps": peak_out,
                     })
 
-                    # Detail table: one row per interval bucket
-                    for pt in timeline:
-                        if pt.in_mbps is None and pt.out_mbps is None:
-                            continue
-                        # Format as range: "DD MMM HH:mm — HH:mm"
-                        tz = ZoneInfo("Asia/Jakarta")
-                        start_dt = datetime.fromtimestamp(pt.timestamp / 1000, tz=timezone.utc).astimezone(tz)
-                        end_dt = start_dt + timedelta(seconds=tbl_interval_seconds)
-                        if start_dt.date() == end_dt.date():
-                            ts_str = f"{start_dt:%d %b %H:%M} — {end_dt:%H:%M}"
-                        else:
-                            ts_str = f"{start_dt:%d %b %H:%M} — {end_dt:%d %b %H:%M}"
-                        detail_rows.append({
-                            "time_range": ts_str,
-                            "site": site_label,
-                            "interface": label,
-                            "avg_in_mbps": round(pt.in_mbps or 0, 2),
-                            "avg_out_mbps": round(pt.out_mbps or 0, 2),
-                        })
+                    # Detail table: R-09 only, one row per interval bucket
+                    if is_r09:
+                        for pt in timeline:
+                            if pt.in_mbps is None and pt.out_mbps is None:
+                                continue
+                            tz = ZoneInfo("Asia/Jakarta")
+                            start_dt = datetime.fromtimestamp(pt.timestamp / 1000, tz=timezone.utc).astimezone(tz)
+                            end_dt = start_dt + timedelta(seconds=tbl_interval_seconds)
+                            if start_dt.date() == end_dt.date():
+                                ts_str = f"{start_dt:%d %b %H:%M} — {end_dt:%H:%M}"
+                            else:
+                                ts_str = f"{start_dt:%d %b %H:%M} — {end_dt:%d %b %H:%M}"
+                            detail_rows.append({
+                                "time_range": ts_str,
+                                "site": site_label,
+                                "interface": label,
+                                "avg_in_mbps": round(pt.in_mbps or 0, 2),
+                                "avg_out_mbps": round(pt.out_mbps or 0, 2),
+                            })
 
                     # Chart: use chart-interval data for this interface (already fetched)
                     cb = chart_iface_buckets.get(if_index)
@@ -1987,9 +2001,10 @@ async def build_report_context(
                             )
 
             ibw["summary"] = summary_rows
-            ibw["detail_table"] = detail_rows
+            if is_r09:
+                ibw["detail_table"] = detail_rows
+                ibw["table_interval"] = tbl_interval
             ibw["charts"] = iface_charts
-            ibw["table_interval"] = tbl_interval
 
         except Exception as exc:
             logger.error("R-09 interface bandwidth fetch failed: %s", exc, exc_info=True)

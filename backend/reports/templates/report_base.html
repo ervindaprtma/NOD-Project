@@ -1681,7 +1681,7 @@ body {
   ════════════════════════════════════════════════════════════════════════ #}
 {% macro section_all_in_one(data) %}
 <h2 class="section-title" style="margin-bottom:16px;">Complete Network Observability Report <span class="timeframe-badge">{{ time_range }}</span></h2>
-<p style="font-size:9pt;color:hsl(var(--muted-foreground));margin-bottom:14px;">R-01 through R-07 combined. Sites: {{ site_name }}.</p>
+<p style="font-size:9pt;color:hsl(var(--muted-foreground));margin-bottom:14px;">R-01 through R-09 combined. Sites: {{ site_name }}.</p>
 {% if not active_sections or 'executive_summary' in active_sections %}{{ section_executive_summary(data.executive_summary) }}{% endif %}
 {% if not active_sections or 'traffic_overview' in active_sections %}{{ section_traffic_overview(data.traffic_overview) }}{% endif %}
 {% if not active_sections or 'resource_usage' in active_sections %}{{ section_resource_usage(data.resource_usage) }}{% endif %}
@@ -1689,6 +1689,7 @@ body {
 {% if not active_sections or 'sdwan_sla' in active_sections %}{{ section_sdwan_sla(data.sdwan_sla) }}{% endif %}
 {% if not active_sections or 'traffic_inbound' in active_sections %}{{ section_traffic_inbound(data.traffic_inbound) }}{% endif %}
 {% if not active_sections or 'traffic_internal' in active_sections %}{{ section_traffic_internal(data.traffic_internal) }}{% endif %}
+{% if not active_sections or 'interface_bandwidth' in active_sections %}{{ section_interface_bandwidth(data.interface_bandwidth) }}{% endif %}
 {% endmacro %}
 
 
