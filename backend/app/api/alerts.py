@@ -181,8 +181,15 @@ async def create_rule_from_template(
         rule_data["notify_channels"] = notify_channels
 
     # Build the AlertRule
+    kind = template.underlying_kind or "single"
+    operator_lookup = {"AND": "all", "OR": "any"}
+    notify_when = operator_lookup.get(rule_data.get("operator", ""), "any")
+
     new_rule = AlertRule(
         name=body.name,
+        kind=kind,
+        notify_when=notify_when,
+        clauses=rule_data.get("clauses", []),
         template_id=template_id,
         severity=rule_data.get("severity", "WARNING"),
         data_source=rule_data.get("data_source", ""),

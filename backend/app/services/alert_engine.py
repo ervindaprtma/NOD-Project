@@ -211,11 +211,180 @@ async def _evaluate_single_rule(rule: AlertRule, group_override: float | list | 
     return _extract_per_rule_value(rule, result)
 
 
+async def _advance_state_machine(
+    rule: AlertRule,
+    metric_value: float,
+    condition_met: bool,
+    db: AsyncSession,
+) -> None:
+    """Shared state machine for single and composite rules (P5)."""
+    state_result = await db.execute(
+        select(AlertState).where(AlertState.rule_id == rule.id)
+    )
+    state = state_result.scalar_one_or_none()
+    if not state:
+        state = AlertState(rule_id=rule.id, state="INACTIVE")
+        db.add(state)
+
+    now = datetime.now(timezone.utc)
+
+    if condition_met:
+        if state.state == "INACTIVE":
+            state.state = "PENDING"
+            state.pending_since = now
+            await db.flush()
+
+        elif state.state == "PENDING":
+            sustained_duration = (now - state.pending_since).total_seconds() / 60
+            if sustained_duration >= rule.sustained_for_minutes:
+                state.state = "FIRING"
+                state.last_fired_at = now
+                state.last_notified_at = now
+                await db.flush()
+
+                db.add(AlertLog(
+                    rule_id=rule.id,
+                    rule_name=rule.name,
+                    severity=rule.severity,
+                    metric_value_at_firing=metric_value,
+                    notified_channels=rule.notify_channels,
+                    fired_at=now,
+                    rule_snapshot={
+                        "name": rule.name,
+                        "metric_field": rule.metric_field,
+                        "aggregation": rule.aggregation,
+                        "condition": rule.condition,
+                        "threshold_value": rule.threshold_value,
+                    },
+                ))
+                await db.flush()
+                await _notify(rule, metric_value)
+                await sse_broadcast("alert",
+                    rule_id=rule.id,
+                    rule_name=rule.name,
+                    severity=rule.severity,
+                    metric_value=metric_value,
+                    fired_at=now.isoformat(),
+                )
+
+        elif state.state == "FIRING":
+            if state.last_notified_at:
+                renotify_seconds = settings.ALERT_RENOTIFY_INTERVAL_MINUTES * 60
+                elapsed = (now - state.last_notified_at).total_seconds()
+                if elapsed >= renotify_seconds:
+                    state.last_notified_at = now
+                    await db.flush()
+                    await _notify(rule, metric_value)
+                    await sse_broadcast("alert",
+                        rule_id=rule.id,
+                        rule_name=rule.name,
+                        severity=rule.severity,
+                        metric_value=metric_value,
+                        fired_at=now.isoformat(),
+                    )
+
+    else:
+        if state.state in ("FIRING", "PENDING"):
+            state.state = "RESOLVED"
+            state.pending_since = None
+            await db.flush()
+
+            log_result = await db.execute(
+                select(AlertLog)
+                .where(AlertLog.rule_id == rule.id)
+                .order_by(AlertLog.fired_at.desc())
+                .limit(1)
+            )
+            alert_log = log_result.scalar_one_or_none()
+            if alert_log and not alert_log.resolved_at:
+                alert_log.resolved_at = now
+                await db.flush()
+
+            await sse_broadcast("resolved",
+                rule_id=rule.id,
+                rule_name=rule.name,
+                severity=rule.severity,
+                resolved_at=now.isoformat(),
+            )
+
+    await db.commit()
+
+
+async def _evaluate_composite_rule(rule: AlertRule) -> tuple[float | None, bool]:
+    """Evaluate a composite rule's clauses and combine with AND/OR.
+
+    Returns (max_metric_value, condition_met).
+    Returns (None, False) if no clauses could be evaluated.
+    """
+    if not rule.clauses:
+        return None, False
+
+    clause_metrics: list[float] = []
+    clause_breaches: list[bool] = []
+
+    for clause in rule.clauses:
+        ds = clause.get("data_source")
+        mf = clause.get("metric_field")
+        agg = clause.get("aggregation", "avg")
+        cond = clause.get("condition", ">")
+        thresh = clause.get("threshold_value", 0.0)
+        window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
+
+        group_result = await _run_group_query(ds, rule.site_name, window)
+        if group_result is None:
+            break  # one clause failed → whole rule fails
+
+        val = _extract_per_rule_value_flat(ds, mf, group_result)
+        if val is None:
+            break
+
+        clause_metrics.append(val)
+        clause_breaches.append(_check_condition(val, cond, thresh))
+
+    if len(clause_metrics) != len(rule.clauses):
+        return None, False  # incomplete evaluation
+
+    # Combine with AND/OR
+    notify_when = rule.notify_when or "any"
+    condition_met = all(clause_breaches) if notify_when == "all" else any(clause_breaches)
+
+    # Report the max metric value across breaching clauses (or all clauses if none breach)
+    metric_value = max(clause_metrics)
+    return metric_value, condition_met
+
+
+# ponytail: _extract_per_rule_value but takes flat data_source/metric_field instead of a rule object
+def _extract_per_rule_value_flat(
+    data_source: str, metric_field: str, group_result: float | list | dict | None
+) -> float | None:
+    """Same logic as _extract_per_rule_value but accepts flat params (P5 composite)."""
+    if group_result is None:
+        return None
+    try:
+        if data_source == "ha_resource":
+            if isinstance(group_result, list) and group_result and metric_field.startswith("ha_member."):
+                field_name = metric_field.split(".", 1)[1]
+                return float(group_result[0].get(field_name, 0) or 0)
+            return 0.0
+        if data_source in ("appid_flow", "vpn_ssl", "vpn_ipsec"):
+            return float(group_result)
+        if data_source == "sdwan_sla":
+            if isinstance(group_result, dict):
+                base_key, link_idx = _parse_sdwan_metric_field(metric_field)
+                vals = group_result.get(base_key, [0.0])
+                if isinstance(vals, list):
+                    return float(vals[link_idx] if link_idx < len(vals) else vals[0])
+                return float(vals or 0.0)
+            return 0.0
+        return None
+    except (TypeError, ValueError, IndexError):
+        return None
 async def evaluate_all_rules():
     """
     Main alert evaluation job.  P1 batched: enabled rules are grouped by
     (data_source, site_name, evaluation_window) so N rules sharing the same
-    OS profile make one query instead of N.
+    OS profile make one query instead of N.  P5: composite rules are evaluated
+    separately clause-by-clause.
 
     Executed by APScheduler on ALERT_POLL_INTERVAL_SECONDS.
     Complies with FR-08 state machine.
@@ -232,139 +401,45 @@ async def evaluate_all_rules():
                 logger.debug("No enabled alert rules to evaluate")
                 return
 
-            # ── 1. Group rules by (data_source, site, window) ──
+            # Split single vs composite
+            single_rules = [r for r in rules if r.kind != "composite"]
+            composite_rules = [r for r in rules if r.kind == "composite"]
+
+            # ── 1. Single rules (P1 batched) ──
             groups: dict[tuple, list[AlertRule]] = defaultdict(list)
-            for rule in rules:
+            for rule in single_rules:
                 key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)
                 groups[key].append(rule)
 
-            # ── 2. Run one OpenSearch query per group ──
             group_cache: dict[tuple, float | list | dict | None] = {}
             for key in groups:
                 ds, site, window = key
                 group_cache[key] = await _run_group_query(ds, site, window)
 
-            # ── 3. Per-rule extract + state machine ──
-            for rule in rules:
+            for rule in single_rules:
                 try:
                     key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)
                     group_result = group_cache.get(key)
                     metric_value = _extract_per_rule_value(rule, group_result)
                     if metric_value is None:
-                        continue  # skip on evaluation failure
-
+                        continue
                     condition_met = _check_condition(
                         metric_value, rule.condition, rule.threshold_value
                     )
-
-                    # Load or create alert state
-                    state_result = await db.execute(
-                        select(AlertState).where(AlertState.rule_id == rule.id)
-                    )
-                    state = state_result.scalar_one_or_none()
-                    if not state:
-                        state = AlertState(rule_id=rule.id, state="INACTIVE")
-                        db.add(state)
-
-                    now = datetime.now(timezone.utc)
-
-                    if condition_met:
-                        if state.state == "INACTIVE":
-                            # Transition to PENDING
-                            state.state = "PENDING"
-                            state.pending_since = now
-                            await db.flush()
-
-                        elif state.state == "PENDING":
-                            # Check if sustained window elapsed
-                            sustained_duration = (now - state.pending_since).total_seconds() / 60
-                            if sustained_duration >= rule.sustained_for_minutes:
-                                # Transition to FIRING
-                                state.state = "FIRING"
-                                state.last_fired_at = now
-                                state.last_notified_at = now
-                                await db.flush()
-
-                                # Create alert log
-                                db.add(AlertLog(
-                                    rule_id=rule.id,
-                                    rule_name=rule.name,
-                                    severity=rule.severity,
-                                    metric_value_at_firing=metric_value,
-                                    notified_channels=rule.notify_channels,
-                                    fired_at=now,
-                                    rule_snapshot={
-                                        "name": rule.name,
-                                        "metric_field": rule.metric_field,
-                                        "aggregation": rule.aggregation,
-                                        "condition": rule.condition,
-                                        "threshold_value": rule.threshold_value,
-                                    },
-                                ))
-                                await db.flush()
-
-                                # Dispatch notification
-                                await _notify(rule, metric_value)
-
-                                # SSE broadcast: FIRING alert
-                                await sse_broadcast("alert",
-                                    rule_id=rule.id,
-                                    rule_name=rule.name,
-                                    severity=rule.severity,
-                                    metric_value=metric_value,
-                                    fired_at=now.isoformat(),
-                                )
-
-                        elif state.state == "FIRING":
-                            # Re-notify after interval
-                            if state.last_notified_at:
-                                renotify_seconds = settings.ALERT_RENOTIFY_INTERVAL_MINUTES * 60
-                                elapsed = (now - state.last_notified_at).total_seconds()
-                                if elapsed >= renotify_seconds:
-                                    state.last_notified_at = now
-                                    await db.flush()
-                                    await _notify(rule, metric_value)
-                                    # SSE re-broadcast for sustained alert
-                                    await sse_broadcast("alert",
-                                        rule_id=rule.id,
-                                        rule_name=rule.name,
-                                        severity=rule.severity,
-                                        metric_value=metric_value,
-                                        fired_at=now.isoformat(),
-                                    )
-
-                    else:
-                        # Condition NOT met
-                        if state.state in ("FIRING", "PENDING"):
-                            # Transition to RESOLVED
-                            state.state = "RESOLVED"
-                            state.pending_since = None
-                            await db.flush()
-
-                            # Update alert log with resolution time
-                            log_result = await db.execute(
-                                select(AlertLog)
-                                .where(AlertLog.rule_id == rule.id)
-                                .order_by(AlertLog.fired_at.desc())
-                                .limit(1)
-                            )
-                            alert_log = log_result.scalar_one_or_none()
-                            if alert_log and not alert_log.resolved_at:
-                                alert_log.resolved_at = now
-                                await db.flush()
-
-                            # SSE broadcast: RESOLVED alert
-                            await sse_broadcast("resolved",
-                                rule_id=rule.id,
-                                rule_name=rule.name,
-                                severity=rule.severity,
-                                resolved_at=now.isoformat(),
-                            )
-
-                    await db.commit()
-
+                    await _advance_state_machine(rule, metric_value, condition_met, db)
                 except Exception as e:
                     logger.error("Error evaluating rule %s (%s): %s", rule.id, rule.name, e)
+                    await db.rollback()
+
+            # ── 2. Composite rules (per-rule evaluation) ──
+            for rule in composite_rules:
+                try:
+                    metric_value, condition_met = await _evaluate_composite_rule(rule)
+                    if metric_value is None:
+                        continue
+                    await _advance_state_machine(rule, metric_value, condition_met, db)
+                except Exception as e:
+                    logger.error("Error evaluating composite rule %s (%s): %s", rule.id, rule.name, e)
                     await db.rollback()
 
         except Exception as e:

@@ -115,6 +115,12 @@ class AlertRule(Base):
     severity: Mapped[str] = mapped_column(
         String(20), nullable=False
     )  # INFO, WARNING, CRITICAL
+    kind: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="single", server_default=text("'single'")
+    )  # single | composite (P5)
+    notify_when: Mapped[str] = mapped_column(
+        String(4), nullable=False, default="any", server_default=text("'any'")
+    )  # any | all (composite rule combination logic, P5)
     data_source: Mapped[str] = mapped_column(
         String(20), nullable=False
     )  # appid_flow, sdwan_sla, ha_resource, vpn_ssl, vpn_ipsec
@@ -129,6 +135,10 @@ class AlertRule(Base):
     evaluation_window_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     sustained_for_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     notify_channels: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    clauses: Mapped[list[dict]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment="Composite rule clauses (P5). List of {\"data_source\", \"metric_field\", ...} dicts.",
+    )
     template_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), ForeignKey("alert_templates.id", ondelete="SET NULL"), nullable=True
     )
