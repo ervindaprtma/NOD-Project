@@ -62,9 +62,13 @@ async def _evaluate_single_rule(rule: AlertRule) -> float | None:
             summary = await sdwan_qb.sla_summary(
                 gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
             )
-            # Extract the requested metric field from the summary
-            # e.g. metric_field = "avg_latency_link1"
-            return float(summary.get(rule.metric_field, [0.0])[0] if isinstance(summary.get(rule.metric_field), list) else summary.get(rule.metric_field, 0.0) or 0.0)
+            # metric_field e.g. "avg_latency_link1" → base="avg_latency", idx=0
+            import re
+            m = re.match(r'^(\w+)_link(\d+)$', rule.metric_field)
+            base_key = m.group(1) if m else rule.metric_field
+            link_idx = (int(m.group(2)) - 1) if m else 0
+            vals = summary.get(base_key, [0.0])
+            return float(vals[link_idx] if link_idx < len(vals) else (vals[0] if isinstance(vals, list) else vals or 0.0))
 
         elif rule.data_source == "vpn_ssl":
             site = rule.site_name or "Site_FGT-DC_SSLVPN"

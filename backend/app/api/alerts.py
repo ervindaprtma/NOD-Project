@@ -163,25 +163,49 @@ async def test_alert_rule(
     try:
         from app.opensearch import appid as appid_qb
         from app.opensearch import ha as ha_qb
-        # Simplified test: map data_source to appropriate query
-        # In production, a more sophisticated dispatch would be used
+        from app.opensearch import sdwan as sdwan_qb
+        from app.opensearch import sslvpn as sslvpn_qb
+        from app.opensearch import ipsec as ipsec_qb
+        import time as _t
+        now_ms = int(_t.time() * 1000)
+        window_ms = rule.evaluation_window_minutes * 60 * 1000
+        gte_ms = now_ms - window_ms
+        lte_ms = now_ms
+
         if rule.data_source == "ha_resource":
-            import time as _t
-            now_ms = int(_t.time() * 1000)
-            window_ms = rule.evaluation_window_minutes * 60 * 1000
             devices = await ha_qb.current_device_status(
-                gte_ms=now_ms - window_ms, lte_ms=now_ms
+                gte_ms=gte_ms, lte_ms=lte_ms
             )
-            if devices:
-                metric_value = float(devices[0].get(rule.metric_field.split(".")[-1], 0) or 0)
+            if devices and rule.metric_field.startswith("ha_member."):
+                field_name = rule.metric_field.split(".", 1)[1]
+                metric_value = float(devices[0].get(field_name, 0) or 0)
         elif rule.data_source == "appid_flow":
-            import time as _t
-            now_ms = int(_t.time() * 1000)
-            window_ms = rule.evaluation_window_minutes * 60 * 1000
             total = await appid_qb.total_throughput(
-                gte_ms=now_ms - window_ms, lte_ms=now_ms
+                gte_ms=gte_ms, lte_ms=lte_ms
             )
             metric_value = float(total)
+        elif rule.data_source == "sdwan_sla":
+            site = rule.site_name or "Site_FGT-DC"
+            summary = await sdwan_qb.sla_summary(
+                gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+            )
+            import re
+            m = re.match(r'^(\w+)_link(\d+)$', rule.metric_field)
+            base_key = m.group(1) if m else rule.metric_field
+            link_idx = (int(m.group(2)) - 1) if m else 0
+            vals = summary.get(base_key, [0.0])
+            metric_value = float(vals[link_idx] if link_idx < len(vals) else (vals[0] if isinstance(vals, list) else vals or 0.0))
+        elif rule.data_source == "vpn_ssl":
+            site = rule.site_name or "Site_FGT-DC_SSLVPN"
+            count = await sslvpn_qb.active_sslvpn_users_count(
+                gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
+            )
+            metric_value = float(count)
+        elif rule.data_source == "vpn_ipsec":
+            count = await ipsec_qb.active_ipsec_users_count(
+                gte_ms=gte_ms, lte_ms=lte_ms,
+            )
+            metric_value = float(count)
     except Exception as e:
         return APIResponse.fail(
             code="QUERY_ERROR",
