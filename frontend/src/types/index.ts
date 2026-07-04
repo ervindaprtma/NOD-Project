@@ -413,6 +413,21 @@ export interface SankeyNode { id: number; label: string; level: number; }
 export interface SankeyLink { source: number; target: number; value: number; }
 export interface SankeyResponse { nodes: SankeyNode[]; links: SankeyLink[]; }
 
+/** Sankey node with layout-computed properties (after sankey.layout()). */
+export interface SankeyNodeExt extends SankeyNode {
+  x0?: number; x1?: number; y0?: number; y1?: number;
+  value?: number; index?: number; depth?: number; height?: number;
+  sourceLinks?: Array<SankeyLinkExt>;
+  targetLinks?: Array<SankeyLinkExt>;
+}
+
+/** Sankey link with layout-computed properties (after sankey.layout()). */
+export interface SankeyLinkExt extends Omit<SankeyLink, "source" | "target"> {
+  width?: number; y0?: number; y1?: number; index?: number;
+  source: SankeyNodeExt | number;
+  target: SankeyNodeExt | number;
+}
+
 // ── Traffic Inbound v2.0 ──────────────────────────────────────────
 
 export interface TrafficInboundServiceItem { service_name: string; service_port: number | string; total_bytes: number; speed_mbps: number; percentage: number; }

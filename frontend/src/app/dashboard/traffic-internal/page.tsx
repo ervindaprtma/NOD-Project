@@ -6,7 +6,7 @@ import * as d3Sankey from "d3-sankey";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, getDefaultTimeRange, TAB_TRIGGER_CLASS, formatBucketLabelWIB } from "@/lib/constants";
-import type { TrafficInternalSummary, TrafficInternalChartData, TrafficInboundTableData, TrafficInboundTableRecord, SankeyResponse } from "@/types";
+import type { TrafficInternalSummary, TrafficInternalChartData, TrafficInboundTableData, TrafficInboundTableRecord, SankeyResponse, SankeyNodeExt, SankeyLinkExt } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { TagFilterField } from "@/components/TagFilterField";
 import { AreaChart } from "@/components/charts/AreaChart";
@@ -262,20 +262,18 @@ function SankeyView({ data, loading, error }: { data: SankeyResponse | undefined
     const rawLinks = data.links.filter((l) => l.value > 0);
     if (rawNodes.length === 0) return;
     const nodeById = new Map<number, number>(); rawNodes.forEach((n, i) => { nodeById.set(n.id, i); });
-    interface SN { id: number; label: string; level: number; x0?: number; x1?: number; y0?: number; y1?: number; value?: number; }
-    interface SL { source: number; target: number; value: number; width?: number; y0?: number; y1?: number; }
-    const nodes: SN[] = rawNodes.map((n) => ({ ...n }));
-    const links: SL[] = rawLinks.map((l) => ({ source: nodeById.get(l.source) ?? 0, target: nodeById.get(l.target) ?? 0, value: l.value }));
+            const nodes: SankeyNodeExt[] = rawNodes.map((n) => ({ ...n }));
+    const links: SankeyLinkExt[] = rawLinks.map((l) => ({ source: nodeById.get(l.source) ?? 0, target: nodeById.get(l.target) ?? 0, value: l.value }));
     const W = 800, H = 400;
-    const sankey = (d3Sankey as any).sankey().nodeWidth(20).nodePadding(16).extent([[8, 8], [W - 8, H - 8]]).nodeSort((a: any, b: any) => { if (a.level !== b.level) return a.level - b.level; return (b.value ?? 0) - (a.value ?? 0); });
+    const sankey = d3Sankey.sankey<any, SankeyNodeExt, SankeyLinkExt>().nodeWidth(20).nodePadding(16).extent([[8, 8], [W - 8, H - 8]]).nodeSort((a: any, b: any) => { if (a.level !== b.level) return a.level - b.level; return (b.value ?? 0) - (a.value ?? 0); });
     const scaleMB = (v: number) => v / (1024 * 1024);
-    const graph = sankey({ nodes: nodes.map(n => ({ ...n, value: Math.max(0.1, scaleMB(n.value ?? 0)) })), links: links.map(l => ({ ...l, value: Math.max(0.1, scaleMB(l.value)) })) }) as { nodes: SN[]; links: SL[] };
+    const graph = sankey({ nodes: nodes.map(n => ({ ...n, value: Math.max(0.1, scaleMB(n.value ?? 0)) })), links: links.map(l => ({ ...l, value: Math.max(0.1, scaleMB(l.value)) })) }) as { nodes: SankeyNodeExt[]; links: SankeyLinkExt[] };
     const svgEl = svgRef.current; svgEl.innerHTML = "";
     const NS = "http://www.w3.org/2000/svg";
     const ce = (t: string, a: Record<string, any> = {}) => { const e = document.createElementNS(NS, t); for (const [k, v] of Object.entries(a)) if (v != null) e.setAttribute(k, String(v)); return e; };
     const linkPath = d3Sankey.sankeyLinkHorizontal();
     for (const link of graph.links) {
-      const src = (link as any).source as SN, tgt = (link as any).target as SN;
+      const src = (link as any).source as SankeyNodeExt, tgt = (link as any).target as SankeyNodeExt;
       if (!src || !tgt) continue;
       const g = ce("g");
       const p = ce("path", { d: linkPath(link as any), fill: "none", stroke: LEVEL_COLORS[src.level] || "#6b7280", "stroke-opacity": "0.4", "stroke-width": Math.max(1, (link as any).width ?? 1) });
