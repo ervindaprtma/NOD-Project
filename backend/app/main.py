@@ -46,8 +46,7 @@ from app.api.config.notifications import router as config_notifications_router
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.core.limiter import limiter, get_real_client_ip
-from app.db.session import engine, AsyncSessionLocal
-from app.db.models import User
+from app.db.session import engine
 
 logger = logging.getLogger(__name__)
 settings = get_settings()

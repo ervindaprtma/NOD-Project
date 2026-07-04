@@ -21,6 +21,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.db.models import AlertLog, AlertRule, AlertState, MaintenanceWindow
 from app.db.session import AsyncSessionLocal
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.sse import sse_broadcast
 
 logger = logging.getLogger(__name__)
@@ -339,7 +340,6 @@ async def _evaluate_composite_rule(rule: AlertRule) -> tuple[float | None, bool]
     for clause in rule.clauses:
         ds = clause.get("data_source")
         mf = clause.get("metric_field")
-        agg = clause.get("aggregation", "avg")
         cond = clause.get("condition", ">")
         thresh = clause.get("threshold_value", 0.0)
         window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)

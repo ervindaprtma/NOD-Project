@@ -311,14 +311,12 @@ async def _distribute_report_background(
     Background task: distribute report to all requested channels.
     """
     import logging
-    from pathlib import Path
     from app.services.notifiers.email import send_email_with_attachment
     from app.services.notifiers.telegram import send_telegram_document
     from app.services.notifiers.discord import send_discord_file
     from app.services.notifiers.whatsapp import send_whatsapp_document
 
     logger = logging.getLogger(__name__)
-    fname = Path(file_path).name
     caption = f"NOD Report — {job_id[:8]} ({output_format.upper()})"
 
     results = {}

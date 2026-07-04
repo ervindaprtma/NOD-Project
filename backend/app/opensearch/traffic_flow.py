@@ -314,7 +314,6 @@ async def sankey_data(
             {"egress": {"terms": {"field": "flow.out.netif.name"}}},
         ]
         level_names = ["src_as", "ingress", "app", "egress"]
-        level_labels = {0: "Src AS Org", 1: "Ingress", 2: "Apps", 3: "Egress"}
     else:
         # Upload: Ingress → Apps → Egress → Dst AS Org
         sources = [
@@ -324,7 +323,6 @@ async def sankey_data(
             {"as_org": {"terms": {"field": "flow.dst.as.org"}}},
         ]
         level_names = ["ingress", "app", "egress", "as_org"]
-        level_labels = {0: "Ingress", 1: "Apps", 2: "Egress", 3: "Dst AS Org"}
 
     body = {
         "size": 0,

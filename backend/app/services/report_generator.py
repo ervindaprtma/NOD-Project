@@ -1868,7 +1868,7 @@ async def build_report_context(
         ibw: dict[str, Any] = {}
         try:
             from app.opensearch import interface_stats as iface_qb
-            from app.api.interface_stats import _compute_throughput_timeline
+            from app.api.interface_stats import _compute_throughput_timeline as _iface_throughput_timeline
 
             is_r09 = report_type == "R-09"
             tbl_interval = table_interval or "1h"
@@ -1925,7 +1925,7 @@ async def build_report_context(
                     time_buckets = iface_bucket.get("by_time", {}).get("buckets", [])
 
                     # Throughput at summary interval
-                    timeline = _compute_throughput_timeline(time_buckets, interval_seconds=summary_interval_seconds)
+                    timeline = _iface_throughput_timeline(time_buckets, interval_seconds=summary_interval_seconds)
 
                     # Speed and oper_status from latest non-null bucket
                     speed_mbps = None
@@ -1983,7 +1983,7 @@ async def build_report_context(
                     cb = chart_iface_buckets.get(if_index)
                     if cb:
                         ctb = cb.get("by_time", {}).get("buckets", [])
-                        c_timeline = _compute_throughput_timeline(ctb, interval_seconds=chart_interval_seconds)
+                        c_timeline = _iface_throughput_timeline(ctb, interval_seconds=chart_interval_seconds)
                         chart_data = []
                         for pt in c_timeline:
                             if pt.in_mbps is not None:

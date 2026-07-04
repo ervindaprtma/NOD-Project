@@ -501,7 +501,6 @@ def _build_title_page(doc: Document, context: dict) -> None:
     """
     report_meta = context.get("report_meta", {})
     title = report_meta.get("title", "NOD Report")
-    report_type = report_meta.get("report_type", "R-XX")
     generated_at = report_meta.get("generated_at", "")
     generated_by = report_meta.get("generated_by", "")
     job_id = report_meta.get("job_id", "")

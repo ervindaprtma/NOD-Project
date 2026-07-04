@@ -36,7 +36,6 @@ def _format_x_axis(ax, data: list[dict], x_key: str):
         return
     sample = data[0].get(x_key, 0)
     if isinstance(sample, (int, float)) and sample > 1e12:
-        xs = [datetime.fromtimestamp(p[x_key] / 1000, tz=timezone.utc) for p in data]
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         fig = ax.get_figure()

@@ -1,0 +1,11 @@
+# Ruff config — scoped to audit findings (F-rules: unused imports/vars)
+# Style rules (E-rules) deferred to opportunistic cleanup
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["F401", "F841", "F811", "F821", "F823"]
+ignore = []
+
+[lint.per-file-ignores]
+"backend/alembic/versions/*" = ["F401"]
