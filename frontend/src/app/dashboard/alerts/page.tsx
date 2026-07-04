@@ -28,6 +28,7 @@ const CHANNELS = ["telegram", "email"];
 interface RuleForm {
   name: string;
   severity: string;
+  kind: "single" | "composite";
   data_source: string;
   metric_field: string;
   aggregation: string;
@@ -36,12 +37,14 @@ interface RuleForm {
   evaluation_window_minutes: number;
   sustained_for_minutes: number;
   notify_channels: string[];
+  site_name: string;
   enabled: boolean;
 }
 
 const emptyForm: RuleForm = {
   name: "",
   severity: "WARNING",
+  kind: "single",
   data_source: "ha_resource",
   metric_field: "ha_member.cpu_usage",
   aggregation: "avg",
@@ -50,6 +53,7 @@ const emptyForm: RuleForm = {
   evaluation_window_minutes: 5,
   sustained_for_minutes: 2,
   notify_channels: ["telegram"],
+  site_name: "",
   enabled: true,
 };
 
@@ -93,6 +97,7 @@ export default function AlertsPage() {
     setForm({
       name: rule.name,
       severity: rule.severity,
+      kind: rule.kind || "single",
       data_source: rule.data_source,
       metric_field: rule.metric_field,
       aggregation: rule.aggregation,
@@ -101,6 +106,7 @@ export default function AlertsPage() {
       evaluation_window_minutes: rule.evaluation_window_minutes,
       sustained_for_minutes: rule.sustained_for_minutes,
       notify_channels: rule.notify_channels,
+      site_name: rule.site_name || "",
       enabled: rule.enabled,
     });
     setTestResult(null);
@@ -180,7 +186,14 @@ export default function AlertsPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold tracking-tight">Alert Rules</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">Alert Rules</h1>
+          {/* SSE live indicator */}
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            LIVE
+          </span>
+        </div>
         <div className="flex gap-2">
           <button
             onClick={() => setShowHistory(!showHistory)}
@@ -247,20 +260,55 @@ export default function AlertsPage() {
         </div>
       )}
 
+      {/* Template Gallery (v3 §3.12) */}
+      <div className="bg-card border rounded-lg p-3">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold">Templates</h3>
+          <span className="text-[10px] text-muted-foreground">Quick-start from pre-built templates</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            { icon: "📶", name: "SD-WAN SLA Breach", cat: "performance" },
+            { icon: "🔒", name: "VPN Tunnel Down", cat: "availability" },
+            { icon: "🚦", name: "WAN Congestion", cat: "performance" },
+            { icon: "📈", name: "Throughput Spike", cat: "capacity" },
+            { icon: "🔑", name: "SSL VPN Capacity", cat: "capacity" },
+            { icon: "🔗", name: "IPsec Tunnel Status", cat: "availability" },
+          ].map((t) => (
+            <button
+              key={t.name}
+              onClick={() => {
+                if (!canManageAlerts) return;
+                setEditingRule(null);
+                setForm({ ...emptyForm, name: `[Template] ${t.name}` });
+                setShowModal(true);
+              }}
+              disabled={!canManageAlerts}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border bg-background hover:bg-muted transition-colors disabled:opacity-50"
+              title={t.cat}
+            >
+              <span>{t.icon}</span>
+              <span>{t.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Rules Table */}
       <div className="bg-card border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50 text-muted-foreground">
-                <th className="text-left py-2.5 px-3 font-medium">Rule Name</th>
-                <th className="text-left py-2.5 px-3 font-medium">Severity</th>
-                <th className="text-left py-2.5 px-3 font-medium">Source</th>
-                <th className="text-left py-2.5 px-3 font-medium">Metric</th>
-                <th className="text-center py-2.5 px-3 font-medium">Condition</th>
-                <th className="text-center py-2.5 px-3 font-medium">Enabled</th>
-                <th className="text-right py-2.5 px-3 font-medium">Actions</th>
-              </tr>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Name</th>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Site</th>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Severity</th>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Source</th>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Metric</th>
+                    <th className="text-center py-3 px-3 text-xs font-medium">Condition</th>
+                    <th className="text-center py-3 px-3 text-xs font-medium">Status</th>
+                    <th className="text-right py-3 px-3 text-xs font-medium">Actions</th>
+                  </tr>
             </thead>
             <tbody>
               {isLoading ? (
@@ -273,7 +321,7 @@ export default function AlertsPage() {
                 ))
               ) : rules.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-muted-foreground">
+                  <td colSpan={8} className="py-12 text-center text-muted-foreground">
                     No alert rules configured. Create your first rule to get started.
                   </td>
                 </tr>
@@ -281,6 +329,7 @@ export default function AlertsPage() {
                 rules.map((rule) => (
                   <tr key={rule.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
                     <td className="py-2.5 px-3 font-medium">{rule.name}</td>
+                    <td className="py-2.5 px-3 text-xs text-muted-foreground">{rule.site_name || "\u2014"}</td>
                     <td className="py-2.5 px-3">
                       <span className={cn("px-2 py-0.5 rounded-full text-[11px] font-medium border", SEVERITY_COLORS[rule.severity] || "")}>
                         {rule.severity}
@@ -386,20 +435,32 @@ export default function AlertsPage() {
             <div className="p-6 space-y-4">
               <h2 className="text-lg font-bold">{editingRule ? "Edit Rule" : "Create Alert Rule"}</h2>
 
-              {/* Name */}
-              <div>
-                <label className="text-xs font-medium">Rule Name</label>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                  placeholder="e.g. High CPU Alert"
-                />
+              {/* Name + Site */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium">Rule Name</label>
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    placeholder="e.g. High CPU Alert"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium">Site Name</label>
+                  <input
+                    type="text"
+                    value={form.site_name}
+                    onChange={(e) => setForm({ ...form, site_name: e.target.value })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1 font-mono"
+                    placeholder="DC, DRC, Office"
+                  />
+                </div>
               </div>
 
-              {/* Severity + Data Source */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Severity + Kind + Data Source */}
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="text-xs font-medium">Severity</label>
                   <select
@@ -408,6 +469,17 @@ export default function AlertsPage() {
                     className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                   >
                     {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium">Kind</label>
+                  <select
+                    value={form.kind}
+                    onChange={(e) => setForm({ ...form, kind: e.target.value as "single" | "composite" })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  >
+                    <option value="single">Single</option>
+                    <option value="composite">Composite</option>
                   </select>
                 </div>
                 <div>

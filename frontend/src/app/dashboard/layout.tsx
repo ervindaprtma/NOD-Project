@@ -41,6 +41,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/users", label: "Users", Icon: Users, minRole: "superadmin" },
   { href: "/dashboard/activity-logs", label: "Activity Logs", Icon: ClipboardList, minRole: "superadmin" },
   { href: "/dashboard/settings", label: "Settings", Icon: Settings },
+  { href: "/dashboard/configurations", label: "Config", Icon: Settings, minRole: "admin" },
 ];
 
 export default function DashboardLayout({
