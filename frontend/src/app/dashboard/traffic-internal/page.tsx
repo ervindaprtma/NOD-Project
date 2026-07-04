@@ -76,7 +76,7 @@ export default function TrafficInternalPage() {
   const tableKey = token ? `/api/v1/traffic-internal/table?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}${filterQS}` : null;
   const sankeyKey = token ? `/api/v1/traffic-internal/sankey?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}${filterQS}` : null;
 
-  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ success: boolean; data: TrafficInternalSummary; meta: any }>(summaryKey, swrFetcher, { refreshInterval: 0 });
+  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ data: TrafficInternalSummary; meta: { query_took_ms?: number } | null }>(summaryKey, swrFetcher, { refreshInterval: 0 });
   const { data: chartEnv, error: chartError, isLoading: chartLoading } = useSWR<{ data: TrafficInternalChartData }>(chartKey, swrFetcher, { refreshInterval: 0 });
   const { data: tableEnv, error: tableError, isLoading: tableLoading } = useSWR<{ data: TrafficInboundTableData }>(tableKey, swrFetcher, { refreshInterval: 0 });
   const { data: sankeyEnv, error: sankeyError, isLoading: sankeyLoading } = useSWR<{ success: boolean; data: SankeyResponse }>(sankeyKey, swrFetcher, { refreshInterval: 0 });

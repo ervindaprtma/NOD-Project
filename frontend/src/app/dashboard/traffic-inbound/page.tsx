@@ -105,7 +105,7 @@ export default function TrafficInboundPage() {
   const sankeyDownloadKey = token
     ? `/api/v1/traffic-inbound/sankey?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&direction=download${filterQS}` : null;
 
-  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ success: boolean; data: TrafficInboundSummary; meta: any }>(summaryKey, swrFetcher, { refreshInterval: 0 });
+  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ data: TrafficInboundSummary; meta: { query_took_ms?: number } | null }>(summaryKey, swrFetcher, { refreshInterval: 0 });
   const { data: chartEnv, error: chartError, isLoading: chartLoading } = useSWR<{ data: TrafficInboundChartData }>(chartKey, swrFetcher, { refreshInterval: 0 });
   const { data: tableEnv, error: tableError, isLoading: tableLoading } = useSWR<{ data: TrafficInboundTableData }>(tableKey, swrFetcher, { refreshInterval: 0 });
   const { data: sankeyUploadEnv, error: sankeyUploadError, isLoading: sankeyUploadLoading } = useSWR<{ success: boolean; data: SankeyResponse }>(sankeyUploadKey, swrFetcher, { refreshInterval: 0 });

@@ -45,7 +45,7 @@ export default function UsersPage() {
   const token = typeof window !== "undefined" ? getAccessToken() : null;
   const swrKey = token ? "/api/v1/users?limit=100" : null;
 
-  const { data, error, isLoading, mutate } = useSWR<{ data: { users: UserRecord[]; total: number }; meta: any }>(
+  const { data, error, isLoading, mutate } = useSWR<{ data: { users: UserRecord[]; total: number } }>(
     swrKey,
     swrFetcher
   );
