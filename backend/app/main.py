@@ -11,7 +11,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Callable
 
-from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.security import decode_token
@@ -19,7 +19,6 @@ from app.db.session import AsyncSessionLocal
 from app.db.models import User
 import asyncio
 from sqlalchemy import select
-import jwt
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 

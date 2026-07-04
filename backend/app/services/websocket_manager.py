@@ -8,7 +8,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 
 from app.core.config import get_settings
 

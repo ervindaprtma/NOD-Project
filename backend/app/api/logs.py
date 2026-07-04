@@ -7,7 +7,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
 
 from app.api.auth import require_role
 from app.db.models import User, UserActivityLog

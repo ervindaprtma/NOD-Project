@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.opensearch import ipsec as ipsec_qb
 from app.opensearch import sslvpn as sslvpn_qb
 from app.schemas.common import APIResponse
-from app.schemas.sdwan_resource_vpn import IPsecVPNUser, SSLVPNUser, VPNSessionHistoryItem, VPNSessionsResponse
+from app.schemas.sdwan_resource_vpn import IPsecVPNUser, SSLVPNUser, VPNSessionHistoryItem
 
 settings = get_settings()
 router = APIRouter(prefix="/api/v1/vpn", tags=["VPN"])

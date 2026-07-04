@@ -4,7 +4,7 @@ All API endpoints MUST use these wrappers — never return raw data directly.
 """
 from __future__ import annotations
 
-from typing import Any, Generic, Optional, TypeVar
+from typing import Generic, Optional, TypeVar
 
 from pydantic import BaseModel
 

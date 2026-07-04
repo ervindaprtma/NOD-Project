@@ -21,7 +21,6 @@ from app.db.models import NotificationConfig
 from app.db.session import AsyncSessionLocal
 from app.schemas.common import APIResponse
 from app.schemas.notification import (
-    NotificationConfigCreate,
     NotificationConfigRead,
     NotificationConfigUpdate,
 )

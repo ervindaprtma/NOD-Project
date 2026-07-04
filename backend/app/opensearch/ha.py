@@ -5,8 +5,6 @@ Q-01: ALL queries include @timestamp range filter with gte/lte.
 """
 from __future__ import annotations
 
-import time
-from typing import Optional
 
 from opensearchpy import AsyncOpenSearch
 

@@ -46,26 +46,24 @@ import base64
 import json
 import logging
 import sys
-from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # python-docx imports
 # ---------------------------------------------------------------------------
 from docx import Document
 from docx.enum.section import WD_ORIENT
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
-from docx.oxml.ns import qn, nsdecls
+from docx.oxml.ns import qn
 from docx.shared import (
     Cm,
     Inches,
     Pt,
     RGBColor,
-    Emu,
 )
 
 # ---------------------------------------------------------------------------

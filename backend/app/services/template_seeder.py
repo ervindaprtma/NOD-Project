@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.db.models import AlertTemplate
 from app.db.session import AsyncSessionLocal

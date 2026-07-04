@@ -4,13 +4,13 @@ CRUD for alert rules, test rule endpoint, alert logs.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import get_current_user, require_role
+from app.api.auth import require_role
 from app.db.models import AlertLog, AlertRule, AlertState, AlertTemplate
 from app.db.session import get_db
 from app.services.activity_logger import log_activity

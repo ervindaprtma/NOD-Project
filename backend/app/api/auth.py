@@ -18,16 +18,14 @@ from app.core.config import get_settings
 from app.core.security import (
     create_access_token,
     create_refresh_token,
-    decode_token,
     decode_token_optional,
-    hash_password,
     verify_password,
 )
 from app.db.models import RefreshToken as RefreshTokenModel
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.common import APIResponse
-from app.schemas.user import ChangePasswordRequest, LoginRequest, TokenResponse, UserRead
+from app.schemas.user import LoginRequest, TokenResponse
 from app.services.activity_logger import log_activity
 
 settings = get_settings()

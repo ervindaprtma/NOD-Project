@@ -5,7 +5,7 @@ Generates PNG charts for embedding in PDF/HTML/DOCX reports.
 from __future__ import annotations
 
 import io
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
 
@@ -13,7 +13,6 @@ import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import matplotlib.dates as mdates
 
 # WIB timezone offset for chart x-axis labels
