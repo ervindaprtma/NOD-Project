@@ -371,7 +371,7 @@ export default function OverviewPage() {
               if (items.length === 0) return <EmptyText />;
               return (
                 <div className="space-y-1.5">
-                  {items.filter((a: any) => a.app_name !== "app-0").slice(0, 7).map((app: any, i: number) => (
+                  {items.filter((a) => a.app_name !== "app-0").slice(0, 7).map((app, i) => (
                     <BarRow key={app.app_name || i} rank={i + 1} label={app.app_name} bytes={app.total_bytes} bytesHuman={formatBytes(app.total_bytes)}
                       max={items[0]?.total_bytes || 1} color="bg-primary" />
                   ))}
