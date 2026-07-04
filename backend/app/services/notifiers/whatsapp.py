@@ -18,19 +18,24 @@ WHATSAPP_API_BASE = "https://graph.facebook.com/v19.0"
 async def send_whatsapp_message(
     message: str,
     recipient_phone: str | None = None,
+    config: dict | None = None,
 ) -> bool:
     """
     Send a WhatsApp text message via Business Cloud API.
+    config dict overrides settings.* when provided (DB config path).
     """
-    if not all([settings.WHATSAPP_API_TOKEN, settings.WHATSAPP_PHONE_NUMBER_ID]):
+    api_token = (config or {}).get("api_token", settings.WHATSAPP_API_TOKEN)
+    phone_number_id = (config or {}).get("phone_number_id", settings.WHATSAPP_PHONE_NUMBER_ID)
+
+    if not api_token or not phone_number_id:
         logger.warning("WhatsApp not configured — skipping")
         return False
 
-    to_number = recipient_phone or settings.WHATSAPP_PHONE_NUMBER_ID
+    to_number = recipient_phone or phone_number_id
 
-    url = f"{WHATSAPP_API_BASE}/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages"
+    url = f"{WHATSAPP_API_BASE}/{phone_number_id}/messages"
     headers = {
-        "Authorization": f"Bearer {settings.WHATSAPP_API_TOKEN}",
+        "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
     }
     payload = {

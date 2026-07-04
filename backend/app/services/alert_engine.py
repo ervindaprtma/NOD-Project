@@ -160,9 +160,13 @@ def _check_condition(value: float, op: str, threshold: float) -> bool:
 
 
 async def _notify(rule: AlertRule, metric_value: float):
-    """Dispatch notifications via configured channels."""
-    from app.services.notifiers.telegram import send_telegram_alert
-    from app.services.notifiers.email import send_email_alert
+    """Dispatch notifications via configured channels (v3 §3.13).
+
+    Loads enabled channel configs from the notification_configs table,
+    decrypts secrets, and dispatches to the appropriate notifier module.
+    Falls back to env-var config if DB config is empty.
+    """
+    from app.services.notifier_helper import send_alert, load_channel_configs
 
     message = (
         f"🚨 *Alert: {rule.name}*\n"
@@ -172,12 +176,19 @@ async def _notify(rule: AlertRule, metric_value: float):
         f"Fired at: {datetime.now(timezone.utc).isoformat()}"
     )
 
+    # Load DB channel configs once
+    db_configs = await load_channel_configs(min_severity=rule.severity)
+
     for channel in rule.notify_channels:
         try:
-            if channel == "telegram":
-                await send_telegram_alert(message)
-            elif channel == "email":
-                await send_email_alert(rule.name, message)
+            channel_config = db_configs.get(channel, {})
+            await send_alert(
+                channel=channel,
+                config=channel_config,
+                subject=rule.name,
+                body=message,
+                severity=rule.severity,
+            )
         except Exception as e:
             logger.error("Failed to notify channel %s for rule %s: %s", channel, rule.id, e)
 

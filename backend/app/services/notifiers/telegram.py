@@ -15,18 +15,22 @@ logger = logging.getLogger(__name__)
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
 
-async def send_telegram_alert(message: str) -> bool:
+async def send_telegram_alert(message: str, config: dict | None = None) -> bool:
     """
     Send a text alert via Telegram Bot API.
+    config dict overrides settings.* when provided (DB config path).
     Returns True on success, False on failure.
     """
-    if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_CHAT_ID:
+    bot_token = (config or {}).get("bot_token", settings.TELEGRAM_BOT_TOKEN)
+    chat_id = (config or {}).get("chat_id", settings.TELEGRAM_CHAT_ID)
+
+    if not bot_token or not chat_id:
         logger.warning("Telegram not configured — skipping alert dispatch")
         return False
 
-    url = f"{TELEGRAM_API_BASE}/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"{TELEGRAM_API_BASE}/bot{bot_token}/sendMessage"
     payload = {
-        "chat_id": settings.TELEGRAM_CHAT_ID,
+        "chat_id": chat_id,
         "text": message,
         "parse_mode": "Markdown",
     }

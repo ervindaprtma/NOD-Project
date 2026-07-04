@@ -218,6 +218,47 @@ class AlertState(Base):
     )
 
 
+class NotificationConfig(Base):
+    """Configurations → Notifications (v3 §3.13).
+
+    Encrypted credentials for WhatsApp/Telegram/SMTP notification channels.
+    Secrets are encrypted at rest via Fernet (core/security.py).
+    GET returns masked values; only an explicit PUT with new values changes them.
+    """
+    __tablename__ = "notification_configs"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    channel: Mapped[str] = mapped_column(
+        String(20), unique=True, nullable=False, index=True
+    )  # whatsapp, telegram, smtp
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    min_severity: Mapped[str] = mapped_column(
+        String(20), default="CRITICAL", nullable=False
+    )  # INFO, WARNING, CRITICAL
+    config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict,
+        comment="Encrypted credentials + plaintext metadata"
+    )
+    recipients: Mapped[Optional[dict]] = mapped_column(
+        JSONB, nullable=True,
+        comment="Optional per-group routing (e.g. DC alerts → DC group)"
+    )
+    updated_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("now()"),
+        onupdate=_utcnow,
+        nullable=False,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────
 # User Activity & Notifications
 # ─────────────────────────────────────────────────────────────────

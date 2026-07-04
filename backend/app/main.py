@@ -42,6 +42,7 @@ from app.api import (
     users,
     vpn,
 )
+from app.api.config.notifications import router as config_notifications_router
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.core.limiter import limiter, get_real_client_ip
@@ -197,6 +198,7 @@ app.include_router(reports.router)
 app.include_router(users.router)
 app.include_router(logs.router)
 app.include_router(notifications.router)
+app.include_router(config_notifications_router)
 
 
 # ─────────────────────────────────────────────────────────────────

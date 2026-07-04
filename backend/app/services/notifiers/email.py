@@ -22,31 +22,39 @@ async def send_email_alert(
     subject: str,
     body: str,
     recipient: str | None = None,
+    config: dict | None = None,
 ) -> bool:
     """
     Send an alert email via SMTP.
+    config dict overrides settings.* when provided (DB config path).
     Returns True on success.
     """
-    if not all([settings.SMTP_HOST, settings.SMTP_USER, settings.SMTP_PASS]):
+    smtp_host = (config or {}).get("host", settings.SMTP_HOST)
+    smtp_port = (config or {}).get("port", settings.SMTP_PORT)
+    smtp_user = (config or {}).get("user", settings.SMTP_USER)
+    smtp_pass = (config or {}).get("password", settings.SMTP_PASS)
+    from_addr = (config or {}).get("from_address", settings.SMTP_FROM_ADDRESS)
+
+    if not all([smtp_host, smtp_user, smtp_pass]):
         logger.warning("SMTP not configured — skipping email alert")
         return False
 
-    to_addr = recipient or settings.SMTP_FROM_ADDRESS
+    to_addr = recipient or from_addr
 
     message = MIMEMultipart("alternative")
-    message["From"] = settings.SMTP_FROM_ADDRESS
+    message["From"] = from_addr
     message["To"] = to_addr
     message["Subject"] = f"[NOD Alert] {subject}"
     message.attach(MIMEText(body, "plain"))
 
     try:
         async with SMTP(
-            hostname=settings.SMTP_HOST,
-            port=settings.SMTP_PORT,
+            hostname=smtp_host,
+            port=smtp_port or 587,
             use_tls=True,
             timeout=10.0,
         ) as smtp:
-            await smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
+            await smtp.login(smtp_user, smtp_pass)
             await smtp.send_message(message)
             logger.info(f"Email alert sent to {to_addr}")
             return True
