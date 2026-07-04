@@ -468,3 +468,32 @@ class UserPinnedWidget(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
+
+
+class MaintenanceWindow(Base):
+    """Planned maintenance window suppressing alerts for a site (v3 §3.14).
+
+    During the window, alert rules matching the site are NOT evaluated —
+    they're skipped silently (no FIRING, no RESOLVED).
+    """
+    __tablename__ = "maintenance_windows"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    site_name: Mapped[str] = mapped_column(
+        String(128), nullable=False, index=True
+    )
+    starts_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    ends_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )

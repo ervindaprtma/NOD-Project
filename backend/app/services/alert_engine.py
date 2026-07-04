@@ -19,7 +19,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.db.models import AlertLog, AlertRule, AlertState
+from app.db.models import AlertLog, AlertRule, AlertState, MaintenanceWindow
 from app.db.session import AsyncSessionLocal
 from app.services.sse import sse_broadcast
 
@@ -216,8 +216,13 @@ async def _advance_state_machine(
     metric_value: float,
     condition_met: bool,
     db: AsyncSession,
+    notify_queue: list[tuple[AlertRule, float]] | None = None,
 ) -> None:
-    """Shared state machine for single and composite rules (P5)."""
+    """Shared state machine for single and composite rules (P5).
+
+    Notifications are enqueued for batch dispatch (P7 grouping) rather
+    than sent immediately.  SSE broadcasts remain per-rule for real-time.
+    """
     state_result = await db.execute(
         select(AlertState).where(AlertState.rule_id == rule.id)
     )
@@ -258,7 +263,12 @@ async def _advance_state_machine(
                     },
                 ))
                 await db.flush()
-                await _notify(rule, metric_value)
+
+                # Enqueue notification (batch dispatch, P7)
+                if notify_queue is not None:
+                    notify_queue.append((rule, metric_value))
+
+                # SSE stays per-rule (real-time)
                 await sse_broadcast("alert",
                     rule_id=rule.id,
                     rule_name=rule.name,
@@ -274,7 +284,11 @@ async def _advance_state_machine(
                 if elapsed >= renotify_seconds:
                     state.last_notified_at = now
                     await db.flush()
-                    await _notify(rule, metric_value)
+
+                    # Enqueue re-notification (batch)
+                    if notify_queue is not None:
+                        notify_queue.append((rule, metric_value))
+
                     await sse_broadcast("alert",
                         rule_id=rule.id,
                         rule_name=rule.name,
@@ -379,6 +393,45 @@ def _extract_per_rule_value_flat(
         return None
     except (TypeError, ValueError, IndexError):
         return None
+async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> None:
+    """Send batched notifications — one grouped message per channel (P7).
+
+    Instead of one message per rule, aggregates all pending notifications
+    into a single message per notification channel.
+    """
+    if not notify_queue:
+        return
+
+    now_str = datetime.now(timezone.utc).strftime("%d %b %Y %H:%M UTC")
+
+    # Build aggregated message
+    lines = [f"🛑  NOD Alert Summary — {now_str}", "━" * 35]
+    sev_emoji = {"CRITICAL": "🔴", "WARNING": "⚠️", "INFO": "ℹ️"}
+    for rule, mv in notify_queue:
+        sev = sev_emoji.get(rule.severity, "🔔")
+        lines.append(f"{sev} [{rule.severity}] {rule.name} @ {rule.site_name or '—'}: {mv}")
+    body = "\n".join(lines)
+
+    # Load channels and send
+    try:
+        from app.db.session import AsyncSessionLocal
+        from app.db.models import NotificationConfig as NotifCfg
+        from app.services.notifier_helper import send_alert
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(NotifCfg).where(NotifCfg.enabled == True)  # noqa: E712
+            )
+            channels = result.scalars().all()
+            for ch in channels:
+                try:
+                    await send_alert(ch.channel, ch.config, subject="NOD Alert Summary", body=body)
+                except Exception as e:
+                    logger.error("Batch notify failed for %s: %s", ch.channel, e)
+    except Exception as e:
+        logger.error("Batch notify flush error: %s", e)
+
+
 async def evaluate_all_rules():
     """
     Main alert evaluation job.  P1 batched: enabled rules are grouped by
@@ -401,11 +454,27 @@ async def evaluate_all_rules():
                 logger.debug("No enabled alert rules to evaluate")
                 return
 
+            # ── Load active maintenance windows (v3 §3.14) ──
+            now = datetime.now(timezone.utc)
+            mw_result = await db.execute(
+                select(MaintenanceWindow.site_name)
+                .where(MaintenanceWindow.starts_at <= now)
+                .where(MaintenanceWindow.ends_at >= now)
+            )
+            sites_in_maintenance = {row[0] for row in mw_result.all()}
+
+            # Filter out rules in maintenance
+            active_rules = [r for r in rules if r.site_name not in sites_in_maintenance]
+            if len(active_rules) != len(rules):
+                skipped = len(rules) - len(active_rules)
+                logger.info("Maintenance window active — skipping %s rule(s)", skipped)
+
             # Split single vs composite
-            single_rules = [r for r in rules if r.kind != "composite"]
-            composite_rules = [r for r in rules if r.kind == "composite"]
+            single_rules = [r for r in active_rules if r.kind != "composite"]
+            composite_rules = [r for r in active_rules if r.kind == "composite"]
 
             # ── 1. Single rules (P1 batched) ──
+            notify_queue: list[tuple[AlertRule, float]] = []
             groups: dict[tuple, list[AlertRule]] = defaultdict(list)
             for rule in single_rules:
                 key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)
@@ -426,7 +495,7 @@ async def evaluate_all_rules():
                     condition_met = _check_condition(
                         metric_value, rule.condition, rule.threshold_value
                     )
-                    await _advance_state_machine(rule, metric_value, condition_met, db)
+                    await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:
                     logger.error("Error evaluating rule %s (%s): %s", rule.id, rule.name, e)
                     await db.rollback()
@@ -437,10 +506,14 @@ async def evaluate_all_rules():
                     metric_value, condition_met = await _evaluate_composite_rule(rule)
                     if metric_value is None:
                         continue
-                    await _advance_state_machine(rule, metric_value, condition_met, db)
+                    await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:
                     logger.error("Error evaluating composite rule %s (%s): %s", rule.id, rule.name, e)
                     await db.rollback()
+
+            # ── 3. Flush batched notifications (P7 grouping) ──
+            if notify_queue:
+                await _flush_batch_notify(notify_queue)
 
         except Exception as e:
             logger.error("Alert evaluation cycle failed: %s", e)
