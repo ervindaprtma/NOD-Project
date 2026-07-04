@@ -11,7 +11,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user, require_role
-from app.db.models import AlertLog, AlertRule, AlertState
+from app.db.models import AlertLog, AlertRule, AlertState, AlertTemplate
 from app.db.session import get_db
 from app.services.activity_logger import log_activity
 from app.schemas.alert import (
@@ -22,6 +22,7 @@ from app.schemas.alert import (
     AlertTestResult,
 )
 from app.schemas.common import APIResponse
+from app.schemas.template import AlertFromTemplateRequest, AlertTemplateRead
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["Alerts"])
 
@@ -82,6 +83,126 @@ async def alert_stream(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+# ── Template Gallery (v3 §3.12) ─────────────────────────────────
+
+
+@router.get("/templates", response_model=APIResponse[list[AlertTemplateRead]])
+async def list_templates(
+    category: str | None = None,
+    search: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("viewer")),
+):
+    """List all alert templates with optional category and search filters."""
+    query = select(AlertTemplate).order_by(AlertTemplate.sort_order, AlertTemplate.name)
+    if category:
+        query = query.where(AlertTemplate.category == category)
+    if search:
+        query = query.where(AlertTemplate.name.ilike(f"%{search}%"))
+    result = await db.execute(query)
+    templates = result.scalars().all()
+    return APIResponse.ok(data=[AlertTemplateRead.model_validate(t) for t in templates])
+
+
+@router.get("/templates/{template_id}", response_model=APIResponse[AlertTemplateRead])
+async def get_template(
+    template_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("viewer")),
+):
+    """Get one template with full detail (including locked_fields)."""
+    template = await db.get(AlertTemplate, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return APIResponse.ok(data=AlertTemplateRead.model_validate(template))
+
+
+@router.post("/templates/{template_id}/preview", response_model=APIResponse[AlertTemplateRead])
+async def preview_template_rule(
+    template_id: str,
+    body: AlertFromTemplateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("operator")),
+):
+    """Preview what a rule created from this template would look like."""
+    template = await db.get(AlertTemplate, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    locked = template.locked_fields
+
+    # Combine locked fields with user input
+    merged = dict(locked)
+    if body.threshold_value is not None and "threshold_value" in template.exposed_fields:
+        merged["threshold_value"] = body.threshold_value
+    if body.sustained_minutes is not None and "sustained_minutes" in template.exposed_fields:
+        merged["sustained_for_minutes"] = body.sustained_minutes
+    if body.site_name and "site_name" in template.exposed_fields:
+        merged["site_name"] = body.site_name
+
+    return APIResponse.ok(data=AlertTemplateRead.model_validate(template))
+
+
+@router.post("/rules/from-template/{template_id}")
+async def create_rule_from_template(
+    template_id: str,
+    body: AlertFromTemplateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role("operator")),
+):
+    """Create a new alert rule from a template.
+
+    The template's locked_fields are pre-filled and cannot be overridden.
+    The user provides only the exposed fields (name, threshold_value, site_name, etc.).
+    """
+    template = await db.get(AlertTemplate, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    locked = template.locked_fields
+
+    # Build the rule from template locked_fields + user exposed_fields
+    rule_data = dict(locked)
+
+    # Apply user-provided values for exposed fields
+    if body.threshold_value is not None and "threshold_value" in template.exposed_fields:
+        rule_data["threshold_value"] = body.threshold_value
+    if body.sustained_minutes is not None and "sustained_minutes" in template.exposed_fields:
+        rule_data["sustained_for_minutes"] = body.sustained_minutes
+    if body.site_name and "site_name" in template.exposed_fields:
+        rule_data["site_name"] = body.site_name
+
+    # Ensure notified_channels
+    notify_channels = body.notify_channels or []
+    if "notify_channels" in template.exposed_fields:
+        rule_data["notify_channels"] = notify_channels
+
+    # Build the AlertRule
+    new_rule = AlertRule(
+        name=body.name,
+        template_id=template_id,
+        severity=rule_data.get("severity", "WARNING"),
+        data_source=rule_data.get("data_source", ""),
+        metric_field=rule_data.get("metric_field", ""),
+        aggregation=rule_data.get("aggregation", "avg"),
+        condition=rule_data.get("condition", ">"),
+        threshold_value=rule_data.get("threshold_value", 0.0),
+        evaluation_window_minutes=rule_data.get("evaluation_window_minutes", 5),
+        sustained_for_minutes=rule_data.get("sustained_for_minutes", 3),
+        notify_channels=notify_channels,
+        site_name=rule_data.get("site_name"),
+        enabled=True,
+        created_by=current_user.id,
+    )
+    db.add(new_rule)
+    await db.commit()
+    await db.refresh(new_rule)
+
+    return APIResponse.ok(
+        data={"rule_id": new_rule.id, "rule_name": new_rule.name},
     )
 
 

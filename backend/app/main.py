@@ -96,6 +96,12 @@ async def lifespan(app: FastAPI):
         if cleaned:
             logger.info(f"Cleaned up {cleaned} expired reports on startup")
 
+    # Seed initial 6 alert templates (v3 §3.12)
+    from app.services.template_seeder import seed_alert_templates
+    seeded = await seed_alert_templates()
+    if seeded:
+        logger.info(f"Seeded {seeded} alert templates")
+
     # DB connection pool is lazily initialized by SQLAlchemy
     yield
     # Shutdown

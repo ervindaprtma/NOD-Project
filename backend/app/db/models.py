@@ -151,15 +151,41 @@ class AlertRule(Base):
 
 
 class AlertTemplate(Base):
+    """Pre-built rule templates for non-technical users (v3 §3.12).
+
+    A template hardcodes locked_fields (data_source, threshold, etc.) and
+    exposes only a few fields (e.g. threshold_value) via exposed_fields.
+    This allows non-technical users to create rules by picking a template
+    and filling in a few values, without needing to understand data sources
+    or aggregation functions.
+    """
     __tablename__ = "alert_templates"
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=_new_uuid
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    subject_template: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="performance", index=True
+    )  # availability, performance, security, capacity
+    icon: Mapped[str] = mapped_column(String(4), nullable=False, default="📊")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    subject_template: Mapped[str] = mapped_column(Text, nullable=False, default="Alert: {{ name }}")
     body_template: Mapped[str] = mapped_column(Text, nullable=False)
+    underlying_kind: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="single"
+    )  # single | composite
+    locked_fields: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict,
+        comment="Fields hardcoded by this template (data_source, metric_field, etc.)"
+    )
+    exposed_fields: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment="Fields the user can set (e.g. ['threshold_value', 'site_name'])"
+    )
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_user_created: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
