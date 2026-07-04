@@ -11,7 +11,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import require_role
-from app.db.models import AlertLog, AlertRule, AlertState, AlertTemplate
+from app.db.models import AlertLog, AlertRule, AlertState, AlertTemplate, User
 from app.db.session import get_db
 from app.services.activity_logger import log_activity
 from app.schemas.alert import (
@@ -37,8 +37,8 @@ from app.core.security import create_access_token, decode_token_optional
 
 @router.post("/stream-token")
 async def create_stream_token(
-    current_user=Depends(require_role("admin")),
-):
+    current_user: User = Depends(require_role("admin")),
+) -> APIResponse[dict]:
     """Issue a short-lived token for SSE EventSource auth.
 
     EventSource cannot set custom headers, so the frontend calls this
@@ -57,7 +57,7 @@ async def create_stream_token(
 async def alert_stream(
     request: Request,
     token: str | None = None,
-):
+) -> StreamingResponse:
     """Server-Sent Events endpoint for real-time alert delivery.
 
     Auth: pass a stream token as ?token= query parameter.
@@ -94,8 +94,8 @@ async def list_templates(
     category: str | None = None,
     search: str | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("viewer")),
-):
+    current_user: User = Depends(require_role("viewer")),
+) -> APIResponse[list[AlertTemplateRead]]:
     """List all alert templates with optional category and search filters."""
     query = select(AlertTemplate).order_by(AlertTemplate.sort_order, AlertTemplate.name)
     if category:
@@ -111,8 +111,8 @@ async def list_templates(
 async def get_template(
     template_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("viewer")),
-):
+    current_user: User = Depends(require_role("viewer")),
+) -> APIResponse[AlertTemplateRead]:
     """Get one template with full detail (including locked_fields)."""
     template = await db.get(AlertTemplate, template_id)
     if not template:
@@ -125,8 +125,8 @@ async def preview_template_rule(
     template_id: str,
     body: AlertFromTemplateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("operator")),
-):
+    current_user: User = Depends(require_role("operator")),
+) -> APIResponse[AlertTemplateRead]:
     """Preview what a rule created from this template would look like."""
     template = await db.get(AlertTemplate, template_id)
     if not template:
@@ -151,8 +151,8 @@ async def create_rule_from_template(
     template_id: str,
     body: AlertFromTemplateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("operator")),
-):
+    current_user: User = Depends(require_role("operator")),
+) -> APIResponse[dict]:
     """Create a new alert rule from a template.
 
     The template's locked_fields are pre-filled and cannot be overridden.
@@ -219,8 +219,8 @@ async def create_rule_from_template(
 @router.get("/rules", response_model=APIResponse[list[AlertRuleRead]])
 async def list_alert_rules(
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("admin")),
-):
+    current_user: User = Depends(require_role("admin")),
+) -> APIResponse[list[AlertRuleRead]]:
     """List all alert rules."""
     result = await db.execute(select(AlertRule).order_by(AlertRule.created_at.desc()))
     rules = result.scalars().all()
@@ -231,8 +231,8 @@ async def list_alert_rules(
 async def create_alert_rule(
     body: AlertRuleCreate,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("admin")),
-):
+    current_user: User = Depends(require_role("admin")),
+) -> APIResponse[AlertRuleRead]:
     """Create a new alert rule."""
     rule = AlertRule(
         name=body.name,
@@ -264,8 +264,8 @@ async def create_alert_rule(
 async def get_alert_rule(
     rule_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("admin")),
-):
+    current_user: User = Depends(require_role("admin")),
+) -> APIResponse[AlertRuleRead]:
     result = await db.execute(select(AlertRule).where(AlertRule.id == rule_id))
     rule = result.scalar_one_or_none()
     if not rule:
@@ -278,8 +278,8 @@ async def update_alert_rule(
     rule_id: str,
     body: AlertRuleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("admin")),
-):
+    current_user: User = Depends(require_role("admin")),
+) -> APIResponse[AlertRuleRead]:
     result = await db.execute(select(AlertRule).where(AlertRule.id == rule_id))
     rule = result.scalar_one_or_none()
     if not rule:
@@ -305,8 +305,8 @@ async def update_alert_rule(
 async def delete_alert_rule(
     rule_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("admin")),
-):
+    current_user: User = Depends(require_role("admin")),
+) -> APIResponse[dict]:
     result = await db.execute(select(AlertRule).where(AlertRule.id == rule_id))
     rule = result.scalar_one_or_none()
     if not rule:
@@ -331,8 +331,8 @@ async def delete_alert_rule(
 async def test_alert_rule(
     rule_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("admin")),
-):
+    current_user: User = Depends(require_role("admin")),
+) -> APIResponse[AlertTestResult]:
     """
     FR-09: Test rule — executes the rule's query against live data.
     Returns current metric value. Does NOT fire notification.
@@ -434,10 +434,10 @@ async def test_alert_rule(
 @router.get("/logs", response_model=APIResponse[list[AlertLogRead]])
 async def get_alert_logs(
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("admin")),
+    current_user: User = Depends(require_role("admin")),
     limit: int = 50,
     offset: int = 0,
-):
+) -> APIResponse[list[AlertLogRead]]:
     """FR-11: Alert firing history."""
     result = await db.execute(
         select(AlertLog)
