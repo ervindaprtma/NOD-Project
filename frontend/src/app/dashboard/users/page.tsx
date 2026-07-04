@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import { swrFetcher, getAccessToken, apiFetch, hasMinRole } from "@/lib/api";
+import { swrFetcher, getAccessToken, apiFetch, hasMinRole, getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const ROLES = ["viewer", "operator", "admin", "superadmin"] as const;
@@ -76,8 +76,8 @@ export default function UsersPage() {
         body: JSON.stringify({ is_active: !user.is_active }),
       });
       mutate();
-    } catch (err: any) {
-      setActionError(err?.message || "Failed to update user.");
+    } catch (err: unknown) {
+      setActionError(getErrorMessage(err, "Failed to update user."));
     }
   }
 
@@ -90,8 +90,8 @@ export default function UsersPage() {
     try {
       await apiFetch(`/api/v1/users/${user.id}`, { method: "DELETE" });
       mutate();
-    } catch (err: any) {
-      setActionError(err?.message || "Failed to delete user.");
+    } catch (err: unknown) {
+      setActionError(getErrorMessage(err, "Failed to delete user."));
     }
   }
 
@@ -116,8 +116,8 @@ export default function UsersPage() {
       setActionSuccess("Session revoked successfully.");
       setTimeout(() => setActionSuccess(""), 3000);
       mutate();
-    } catch (err: any) {
-      setActionError(err?.message || "Failed to revoke session.");
+    } catch (err: unknown) {
+      setActionError(getErrorMessage(err, "Failed to revoke session."));
     }
   }
 
@@ -461,8 +461,8 @@ function UserFormModal({
         });
       }
       onSuccess();
-    } catch (err: any) {
-      setError(err?.message || "Operation failed.");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Operation failed."));
     } finally {
       setLoading(false);
     }

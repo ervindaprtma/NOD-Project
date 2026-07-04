@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import useSWR from "swr";
-import { getAccessToken, apiFetch, hasMinRole, ApiError } from "@/lib/api";
+import { getAccessToken, apiFetch, hasMinRole, ApiError, getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PanelErrorBoundary } from "@/components/PanelErrorBoundary";
 
@@ -352,8 +352,8 @@ export default function ReportsPage() {
       setDistChannels([]);
       setDistEmail("");
       setDistPhone("");
-    } catch (e: any) {
-      const msg = e?.message || "Unknown error";
+    } catch (e: unknown) {
+      const msg = getErrorMessage(e, "Unknown error");
       setDistStatus({ ok: false, msg: `Distribution failed: ${msg}` });
       setDistJobId(null);
       setDistChannels([]);

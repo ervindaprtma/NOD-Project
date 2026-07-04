@@ -212,6 +212,13 @@ export const swrFetcher = <T = unknown>(url: string) => apiFetch<T>(url);
 export { ApiError };
 export default apiFetch;
 
+/** Safely extract a human-readable message from an unknown catch value. */
+export function getErrorMessage(err: unknown, fallback = "Unknown error"): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return fallback;
+}
+
 /** Decode JWT payload to extract user role (without verifying signature — for UI gating only). */
 export function getUserRole(): string | null {
   const token = getAccessToken();

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getErrorMessage } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useTheme } from "next-themes";
 
@@ -89,8 +89,8 @@ function ChangePasswordForm() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-    } catch (err: any) {
-      setError(err?.message || "Failed to change password.");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to change password."));
     } finally {
       setLoading(false);
     }
@@ -173,8 +173,8 @@ function DisplayNameForm() {
         body: JSON.stringify({ full_name: fullName }),
       });
       setSuccess("Display name updated successfully.");
-    } catch (err: any) {
-      setError(err?.message || "Failed to update display name.");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to update display name."));
     } finally {
       setLoading(false);
     }
