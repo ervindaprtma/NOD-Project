@@ -5,6 +5,7 @@ Initializes middleware, routers, scheduler, and structured logging.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -46,8 +47,8 @@ from app.core.logging import setup_logging
 from app.core.limiter import limiter, get_real_client_ip
 from app.db.session import engine, AsyncSessionLocal
 from app.db.models import User
-from app.opensearch.client import check_all_clusters
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -276,7 +277,13 @@ async def _authenticate_ws_user(websocket: WebSocket) -> str | None:
 
 @app.websocket("/ws/alerts")
 async def ws_alerts(websocket: WebSocket):
-    """FR-10: WebSocket for real-time alerts. Message-based auth, admin+ only."""
+    """FR-10: WebSocket for real-time alerts.
+
+    DEPRECATED in v3 — use GET /api/v1/alerts/stream?token=... (SSE) instead.
+    Will be removed after one release cycle.  SSE provides native reconnect
+    with Last-Event-ID replay and works behind enterprise proxies.
+    """
+    logger.warning("DEPRECATED /ws/alerts used — migrate to SSE at /api/v1/alerts/stream")
     user_id = await _authenticate_ws_user(websocket)
     if not user_id:
         return

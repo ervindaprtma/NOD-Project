@@ -4,7 +4,9 @@ CRUD for alert rules, test rule endpoint, alert logs.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +24,65 @@ from app.schemas.alert import (
 from app.schemas.common import APIResponse
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["Alerts"])
+
+
+# ── SSE Stream (v3 §3.10) ──────────────────────────────────────
+
+
+from fastapi.responses import StreamingResponse
+from app.services.sse import sse_event_stream
+from app.core.security import create_access_token, decode_token_optional
+
+
+@router.post("/stream-token")
+async def create_stream_token(
+    current_user=Depends(require_role("admin")),
+):
+    """Issue a short-lived token for SSE EventSource auth.
+
+    EventSource cannot set custom headers, so the frontend calls this
+    endpoint (authenticated via Bearer JWT) to get a ?token= parameter
+    for the SSE URL.
+    """
+    token = create_access_token(
+        subject=current_user.id,
+        extra_claims={"type": "stream"},
+        expires_delta=timedelta(minutes=5),
+    )
+    return APIResponse.ok(data={"token": token, "expires_in_seconds": 300})
+
+
+@router.get("/stream")
+async def alert_stream(
+    request: Request,
+    token: str | None = None,
+):
+    """Server-Sent Events endpoint for real-time alert delivery.
+
+    Auth: pass a stream token as ?token= query parameter.
+    The token is obtained via POST /api/v1/alerts/stream-token.
+
+    Returns text/event-stream with alert, resolved, and heartbeat events.
+    """
+    # Validate token
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing stream token. Use POST /api/v1/alerts/stream-token first.")
+
+    payload = decode_token_optional(token)
+    if not payload or payload.get("type") != "stream":
+        raise HTTPException(status_code=401, detail="Invalid or expired stream token.")
+
+    client_id = payload["sub"]
+
+    return StreamingResponse(
+        sse_event_stream(request, client_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── Alert Rules CRUD ────────────────────────────────────────────

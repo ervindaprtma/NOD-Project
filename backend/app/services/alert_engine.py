@@ -21,7 +21,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.db.models import AlertLog, AlertRule, AlertState
 from app.db.session import AsyncSessionLocal
-from app.services.websocket_manager import alert_ws_manager
+from app.services.sse import sse_broadcast
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -295,15 +295,14 @@ async def evaluate_all_rules():
                                 # Dispatch notification
                                 await _notify(rule, metric_value)
 
-                                # WebSocket broadcast: FIRING alert
-                                await alert_ws_manager.broadcast({
-                                    "type": "alert_firing",
-                                    "rule_id": rule.id,
-                                    "rule_name": rule.name,
-                                    "severity": rule.severity,
-                                    "metric_value": metric_value,
-                                    "fired_at": now.isoformat(),
-                                })
+                                # SSE broadcast: FIRING alert
+                                await sse_broadcast("alert",
+                                    rule_id=rule.id,
+                                    rule_name=rule.name,
+                                    severity=rule.severity,
+                                    metric_value=metric_value,
+                                    fired_at=now.isoformat(),
+                                )
 
                         elif state.state == "FIRING":
                             # Re-notify after interval
@@ -314,15 +313,14 @@ async def evaluate_all_rules():
                                     state.last_notified_at = now
                                     await db.flush()
                                     await _notify(rule, metric_value)
-                                    # WebSocket re-broadcast for sustained alert
-                                    await alert_ws_manager.broadcast({
-                                        "type": "alert_firing",
-                                        "rule_id": rule.id,
-                                        "rule_name": rule.name,
-                                        "severity": rule.severity,
-                                        "metric_value": metric_value,
-                                        "fired_at": now.isoformat(),
-                                    })
+                                    # SSE re-broadcast for sustained alert
+                                    await sse_broadcast("alert",
+                                        rule_id=rule.id,
+                                        rule_name=rule.name,
+                                        severity=rule.severity,
+                                        metric_value=metric_value,
+                                        fired_at=now.isoformat(),
+                                    )
 
                     else:
                         # Condition NOT met
@@ -344,14 +342,13 @@ async def evaluate_all_rules():
                                 alert_log.resolved_at = now
                                 await db.flush()
 
-                            # WebSocket broadcast: RESOLVED alert
-                            await alert_ws_manager.broadcast({
-                                "type": "alert_resolved",
-                                "rule_id": rule.id,
-                                "rule_name": rule.name,
-                                "severity": rule.severity,
-                                "resolved_at": now.isoformat(),
-                            })
+                            # SSE broadcast: RESOLVED alert
+                            await sse_broadcast("resolved",
+                                rule_id=rule.id,
+                                rule_name=rule.name,
+                                severity=rule.severity,
+                                resolved_at=now.isoformat(),
+                            )
 
                     await db.commit()
 
