@@ -160,6 +160,9 @@ async def seed_alert_templates() -> int:
             # Build locked_fields from all the rule-related fields
             template = AlertTemplate(**data)
             db.add(template)
+            # Flush per row — avoids SQLAlchemy 2.x "insertmanyvalues"
+            # sentinel mismatch (Python hex UUID vs. asyncpg-returned UUID).
+            await db.flush()
             count += 1
 
         await db.commit()
