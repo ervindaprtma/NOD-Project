@@ -5,7 +5,7 @@ WhatsApp, Telegram, and SMTP credential management.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -74,3 +74,24 @@ class NotificationConfigSummary(BaseModel):
         default_factory=dict,
         description="One entry per configured channel"
     )
+
+
+# ── User-facing notification schemas (FR-10) ──────────────────
+
+
+class NotificationRead(BaseModel):
+    """User-facing notification read schema (FR-10).
+
+    Maps from the Notification ORM model (notifications table) —
+    distinct from NotificationConfigRead above (notification_configs).
+    """
+    id: str
+    user_id: str
+    alert_log_id: Optional[str] = None
+    alert_name: str
+    severity: str
+    message: str
+    is_read: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
