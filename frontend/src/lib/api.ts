@@ -193,7 +193,19 @@ export async function apiFetch<T = unknown>(
     }
   }
 
-  const json = await resp.json();
+  // Safely parse JSON — non-JSON 5xx responses (e.g. plain text from
+  // uvicorn's default error handler) must not crash the client with
+  // "Unexpected token" SyntaxErrors. Treat as a generic error.
+  let json: any;
+  try {
+    json = await resp.json();
+  } catch {
+    throw new ApiError(
+      resp.status,
+      "INVALID_RESPONSE",
+      `Server returned non-JSON response (status ${resp.status})`
+    );
+  }
 
   if (!resp.ok || !json.success) {
     throw new ApiError(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import useSWR, { mutate } from "swr";
 import { swrFetcher, apiFetch, hasMinRole, getErrorMessage } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -29,7 +29,15 @@ const ALL_TABS: { id: Tab; label: string; adminOnly: boolean }[] = [
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("password");
+  const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
   const isAdmin = hasMinRole("admin");
+
+  // Auto-dismiss toast after 5s (matches Reports/Distribute pattern)
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   // If a non-admin somehow lands on an admin tab, bounce them back.
   const visibleTabs = ALL_TABS.filter((t) => !t.adminOnly || isAdmin);
@@ -62,9 +70,27 @@ export default function SettingsPage() {
         {safeActive === "password" && <ChangePasswordForm />}
         {safeActive === "profile" && <DisplayNameForm />}
         {safeActive === "appearance" && <AppearanceForm />}
-        {safeActive === "notifications" && isAdmin && <NotificationChannelsTab />}
-        {safeActive === "maintenance" && isAdmin && <MaintenanceWindowsTab />}
+        {safeActive === "notifications" && isAdmin && <NotificationChannelsTab showToast={setToast} />}
+        {safeActive === "maintenance" && isAdmin && <MaintenanceWindowsTab showToast={setToast} />}
       </div>
+
+      {/* ── Status Toast (Reports/Distribute pattern) ───────── */}
+      {toast && (
+        <div
+          className={cn(
+            "fixed bottom-4 right-4 z-50 max-w-sm px-4 py-3 rounded-lg shadow-lg text-sm flex items-center gap-3",
+            toast.ok
+              ? "bg-green-50 border border-green-200 text-green-800 dark:bg-green-950 dark:border-green-800 dark:text-green-200"
+              : "bg-red-50 border border-red-200 text-red-800 dark:bg-red-950 dark:border-red-800 dark:text-red-200"
+          )}
+        >
+          <span>{toast.ok ? "✅" : "❌"}</span>
+          <span className="flex-1">{toast.msg}</span>
+          <button onClick={() => setToast(null)} className="font-bold hover:opacity-70">
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -277,7 +303,11 @@ function AppearanceForm() {
 
 // ── Notification Channels Tab (v3 §3.13) — admin only ─────────
 
-function NotificationChannelsTab() {
+function NotificationChannelsTab({
+  showToast,
+}: {
+  showToast: (t: { ok: boolean; msg: string }) => void;
+}) {
   const { data, error, isLoading } = useSWR<{ data: Record<string, NotificationChannelRead> }>(
     "/api/v1/config/notifications",
     swrFetcher
@@ -290,13 +320,23 @@ function NotificationChannelsTab() {
 
   async function toggleChannel(channel: string, enabled: boolean) {
     try {
-      await apiFetch(`/api/v1/config/notifications/${channel}`, {
-        method: "PUT",
-        body: JSON.stringify({ enabled }),
+      const resp = await apiFetch<{ data: NotificationChannelRead; message?: string }>(
+        `/api/v1/config/notifications/${channel}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ enabled }),
+        }
+      );
+      await mutate("/api/v1/config/notifications");
+      const status = enabled ? "enabled" : "disabled";
+      showToast({
+        ok: true,
+        msg: resp?.message
+          ? `${channel} ${status}: ${resp.message}`
+          : `Channel ${channel} ${status} successfully.`,
       });
-      mutate("/api/v1/config/notifications");
     } catch (e: unknown) {
-      alert(`Failed: ${(e as Error).message}`);
+      showToast({ ok: false, msg: getErrorMessage(e, `Failed to ${enabled ? "enable" : "disable"} ${channel}.`) });
     }
   }
 
@@ -393,6 +433,8 @@ function NotificationChannelsTab() {
                           mutate("/api/v1/config/notifications");
                           setEditing(null);
                         }}
+                        onSuccess={(msg) => showToast({ ok: true, msg })}
+                        onError={(msg) => showToast({ ok: false, msg })}
                       />
                     )}
                     {channel === "smtp" && (
@@ -402,6 +444,8 @@ function NotificationChannelsTab() {
                           mutate("/api/v1/config/notifications");
                           setEditing(null);
                         }}
+                        onSuccess={(msg) => showToast({ ok: true, msg })}
+                        onError={(msg) => showToast({ ok: false, msg })}
                       />
                     )}
                     {channel === "whatsapp" && (
@@ -411,6 +455,8 @@ function NotificationChannelsTab() {
                           mutate("/api/v1/config/notifications");
                           setEditing(null);
                         }}
+                        onSuccess={(msg) => showToast({ ok: true, msg })}
+                        onError={(msg) => showToast({ ok: false, msg })}
                       />
                     )}
 
@@ -467,9 +513,13 @@ function ChannelIcon({ channel }: { channel: string }) {
 function TelegramConfigForm({
   config,
   onSaved,
+  onSuccess,
+  onError,
 }: {
   config?: Record<string, unknown>;
   onSaved: () => void;
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
 }) {
   const [botToken, setBotToken] = useState("");
   const [chatId, setChatId] = useState((config?.chat_id as string) || "");
@@ -506,8 +556,11 @@ function TelegramConfigForm({
       });
       setBotToken("");
       onSaved();
+      onSuccess("Telegram configuration saved.");
     } catch (e: unknown) {
-      setError(getErrorMessage(e, "Failed to save Telegram config."));
+      const msg = getErrorMessage(e, "Failed to save Telegram config.");
+      setError(msg);
+      onError(msg);
     } finally {
       setSaving(false);
     }
@@ -581,9 +634,13 @@ function TelegramConfigForm({
 function SMTPConfigForm({
   config,
   onSaved,
+  onSuccess,
+  onError,
 }: {
   config?: Record<string, unknown>;
   onSaved: () => void;
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
 }) {
   const [host, setHost] = useState((config?.host as string) || "");
   const [port, setPort] = useState<number>((config?.port as number) || 587);
@@ -633,8 +690,11 @@ function SMTPConfigForm({
       setUser("");
       setPassword("");
       onSaved();
+      onSuccess("SMTP configuration saved.");
     } catch (e: unknown) {
-      setError(getErrorMessage(e, "Failed to save SMTP config."));
+      const msg = getErrorMessage(e, "Failed to save SMTP config.");
+      setError(msg);
+      onError(msg);
     } finally {
       setSaving(false);
     }
@@ -757,9 +817,13 @@ function SMTPConfigForm({
 function WhatsAppConfigForm({
   config,
   onSaved,
+  onSuccess,
+  onError,
 }: {
   config?: Record<string, unknown>;
   onSaved: () => void;
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
 }) {
   const [phoneNumberId, setPhoneNumberId] = useState(
     (config?.phone_number_id as string) || ""
@@ -797,8 +861,11 @@ function WhatsAppConfigForm({
       });
       setApiToken("");
       onSaved();
+      onSuccess("WhatsApp configuration saved.");
     } catch (e: unknown) {
-      setError(getErrorMessage(e, "Failed to save WhatsApp config."));
+      const msg = getErrorMessage(e, "Failed to save WhatsApp config.");
+      setError(msg);
+      onError(msg);
     } finally {
       setSaving(false);
     }
@@ -877,7 +944,11 @@ function WhatsAppConfigForm({
 
 // ── Maintenance Windows Tab (v3 §3.14) — admin only ──────────
 
-function MaintenanceWindowsTab() {
+function MaintenanceWindowsTab({
+  showToast,
+}: {
+  showToast: (t: { ok: boolean; msg: string }) => void;
+}) {
   const { data, isLoading } = useSWR<{ data: MaintenanceWindow[] }>(
     "/api/v1/config/maintenance",
     swrFetcher
@@ -905,18 +976,20 @@ function MaintenanceWindowsTab() {
       setShowCreate(false);
       setNewSite(""); setNewStart(""); setNewEnd(""); setNewReason("");
       mutate("/api/v1/config/maintenance");
+      showToast({ ok: true, msg: `Maintenance window for ${newSite} created.` });
     } catch (e: unknown) {
-      alert(`Failed: ${(e as Error).message}`);
+      showToast({ ok: false, msg: getErrorMessage(e, "Failed to create maintenance window.") });
     }
   }
 
-  async function deleteWindow(id: string) {
+  async function deleteWindow(id: string, site: string) {
     if (!confirm("Delete this maintenance window?")) return;
     try {
       await apiFetch(`/api/v1/config/maintenance/${id}`, { method: "DELETE" });
       mutate("/api/v1/config/maintenance");
+      showToast({ ok: true, msg: `Maintenance window for ${site} deleted.` });
     } catch (e: unknown) {
-      alert(`Failed: ${(e as Error).message}`);
+      showToast({ ok: false, msg: getErrorMessage(e, "Failed to delete maintenance window.") });
     }
   }
 
@@ -1048,7 +1121,7 @@ function MaintenanceWindowsTab() {
                       </td>
                       <td className="py-3 px-3 text-right">
                         <button
-                          onClick={() => deleteWindow(w.id)}
+                          onClick={() => deleteWindow(w.id, w.site_name)}
                           className="px-2 py-1 text-[11px] rounded border border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
                         >
                           Delete

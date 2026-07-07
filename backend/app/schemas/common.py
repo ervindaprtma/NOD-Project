@@ -27,11 +27,14 @@ class APIResponse(BaseModel, Generic[T]):
     success: bool
     data: Optional[T] = None
     meta: Optional[Meta] = None
+    message: Optional[str] = None
     error: Optional[ErrorDetail] = None
 
     @classmethod
-    def ok(cls, data: T, meta: Optional[Meta] = None) -> "APIResponse[T]":
-        return cls(success=True, data=data, meta=meta, error=None)
+    def ok(
+        cls, data: T, meta: Optional[Meta] = None, message: Optional[str] = None
+    ) -> "APIResponse[T]":
+        return cls(success=True, data=data, meta=meta, message=message, error=None)
 
     @classmethod
     def fail(cls, code: str, message: str) -> "APIResponse[None]":
@@ -39,6 +42,7 @@ class APIResponse(BaseModel, Generic[T]):
             success=False,
             data=None,
             meta=None,
+            message=None,
             error=ErrorDetail(code=code, message=message),
         )
 
