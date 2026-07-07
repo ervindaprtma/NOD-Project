@@ -5,31 +5,47 @@ import useSWR from "swr";
 import { swrFetcher, getAccessToken, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, formatBytes, getDefaultTimeRange } from "@/lib/constants";
+import { TagFilterField } from "@/components/TagFilterField";
 import type { RawFlowRecord, APIResponse } from "@/types";
 
 const PAGE_SIZES = [25, 50, 100];
 
+// All filters are multi-value (string[]), consistent with the Traffic* pages.
+// Backend accepts comma-separated values; we join on send and split on receive.
 interface FilterState {
-  client_ip: string;
-  server_ip: string;
-  application: string;
-  category: string;
-  protocol: string;
-  dst_port: string;
-  ingress_zone: string;
-  egress_link: string;
+  client_ip: string[];
+  server_ip: string[];
+  application: string[];
+  category: string[];
+  protocol: string[];
+  dst_port: string[];  // stored as strings, sent as "80,443,8080"
+  ingress_zone: string[];
+  egress_link: string[];
 }
 
 const defaultFilters: FilterState = {
-  client_ip: "",
-  server_ip: "",
-  application: "",
-  category: "",
-  protocol: "",
-  dst_port: "",
-  ingress_zone: "",
-  egress_link: "",
+  client_ip: [],
+  server_ip: [],
+  application: [],
+  category: [],
+  protocol: [],
+  dst_port: [],
+  ingress_zone: [],
+  egress_link: [],
 };
+
+function countActiveFilters(f: FilterState): number {
+  return (
+    f.client_ip.length +
+    f.server_ip.length +
+    f.application.length +
+    f.category.length +
+    f.protocol.length +
+    f.dst_port.length +
+    f.ingress_zone.length +
+    f.egress_link.length
+  );
+}
 
 interface SortState {
   column: string;
@@ -57,7 +73,7 @@ export default function RawDataPage() {
     correlation_id: true, correlation_direction: true,
   });
   const [siteName, setSiteName] = useState("Site_FGT-DC");
-  const [pathFilter, setPathFilter] = useState("internet"); // internet, inter-site, intra-lan, all
+  const [pathFilter, setPathFilter] = useState("all"); // internet, inter-site, intra-lan, all
   const [direction, setDirection] = useState(""); // upload, download
 
   // Build query params
@@ -76,14 +92,16 @@ export default function RawDataPage() {
       p.search_after_timestamp = currentCursor[0];
       p.search_after_id = currentCursor[1];
     }
-    if (filters.client_ip) p.client_ip = filters.client_ip;
-    if (filters.server_ip) p.server_ip = filters.server_ip;
-    if (filters.application) p.application = filters.application;
-    if (filters.category) p.category = filters.category;
-    if (filters.protocol) p.protocol = filters.protocol;
-    if (filters.dst_port) p.dst_port = parseInt(filters.dst_port);
-    if (filters.ingress_zone) p.ingress_zone = filters.ingress_zone;
-    if (filters.egress_link) p.egress_link = filters.egress_link;
+    // Multi-value filters: join as comma-separated string (backend splits).
+    // URLSearchParams handles the encoding for us.
+    if (filters.client_ip.length > 0) p.client_ip = filters.client_ip.join(",");
+    if (filters.server_ip.length > 0) p.server_ip = filters.server_ip.join(",");
+    if (filters.application.length > 0) p.application = filters.application.join(",");
+    if (filters.category.length > 0) p.category = filters.category.join(",");
+    if (filters.protocol.length > 0) p.protocol = filters.protocol.join(",");
+    if (filters.dst_port.length > 0) p.dst_port = filters.dst_port.join(",");
+    if (filters.ingress_zone.length > 0) p.ingress_zone = filters.ingress_zone.join(",");
+    if (filters.egress_link.length > 0) p.egress_link = filters.egress_link.join(",");
     return p;
   }, [gteMs, lteMs, pageSize, sort, currentCursor, filters, siteName, pathFilter, direction]);
 
@@ -238,6 +256,22 @@ export default function RawDataPage() {
             <option value="Site_FGT-DRC">Site_FGT-DRC</option>
             <option value="Site_FGT_Office">Site_FGT_Office</option>
           </select>
+          <select
+            value={pathFilter}
+            onChange={(e) => {
+              setPathFilter(e.target.value);
+              setCurrentCursor(null);
+              setCursorStack([]);
+              setPageIndex(0);
+            }}
+            className="px-3 py-1.5 rounded-md border border-border/60 bg-background text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+            title="Traffic path"
+          >
+            <option value="all">All paths</option>
+            <option value="internet">Internet (egress)</option>
+            <option value="inter-site">Inter-site</option>
+            <option value="intra-lan">Intra-LAN</option>
+          </select>
           <div className="flex gap-1 bg-muted/40 dark:bg-muted/30 rounded-md p-1">
             {TIME_PRESETS.map((p) => (
               <button
@@ -291,7 +325,7 @@ export default function RawDataPage() {
               showFilters ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border"
             )}
           >
-            Filters {Object.values(filters).some((v) => v) ? "●" : ""}
+            Filters {countActiveFilters(filters) > 0 ? `(${countActiveFilters(filters)})` : ""}
           </button>
           <button onClick={exportCSV} className="px-2.5 py-1 text-xs rounded-md border bg-background text-muted-foreground border-border hover:bg-muted">
             Export CSV
@@ -321,33 +355,34 @@ export default function RawDataPage() {
         </span>
       </div>
 
-      {/* Filter panel */}
+      {/* Filter panel — multi-value tag inputs (consistent with Traffic* pages) */}
       {showFilters && (
         <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {[
-              { key: "client_ip", label: "Client IP" },
-              { key: "server_ip", label: "Server IP" },
-              { key: "application", label: "Application" },
-              { key: "category", label: "Category" },
-              { key: "protocol", label: "Protocol" },
-              { key: "dst_port", label: "Dst Port" },
-              { key: "ingress_zone", label: "Ingress Zone" },
-              { key: "egress_link", label: "Egress Link" },
-            ].map((f) => (
-              <div key={f.key}>
-                <label className="text-[10px] text-muted-foreground uppercase tracking-wider">{f.label}</label>
-                <input
-                  type={f.key === "dst_port" ? "number" : "text"}
-                  value={(draftFilters as unknown as Record<string, string>)[f.key] || ""}
-                  onChange={(e) =>
-                    setDraftFilters({ ...draftFilters, [f.key]: e.target.value })
-                  }
-                  placeholder={f.label}
-                  className="w-full px-2 py-1 text-xs rounded border bg-background mt-1"
-                />
-              </div>
-            ))}
+            <TagFilterField label="Client IP" values={draftFilters.client_ip}
+              onChange={(v) => setDraftFilters({ ...draftFilters, client_ip: v })} mono
+              placeholder="e.g. 10.0.0.5" />
+            <TagFilterField label="Server IP" values={draftFilters.server_ip}
+              onChange={(v) => setDraftFilters({ ...draftFilters, server_ip: v })} mono
+              placeholder="e.g. 8.8.8.8" />
+            <TagFilterField label="Application" values={draftFilters.application}
+              onChange={(v) => setDraftFilters({ ...draftFilters, application: v })}
+              placeholder="e.g. HTTPS" />
+            <TagFilterField label="Category" values={draftFilters.category}
+              onChange={(v) => setDraftFilters({ ...draftFilters, category: v })}
+              placeholder="e.g. Web.Client" />
+            <TagFilterField label="Protocol" values={draftFilters.protocol}
+              onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })}
+              placeholder="e.g. tcp" />
+            <TagFilterField label="Dst Port" values={draftFilters.dst_port}
+              onChange={(v) => setDraftFilters({ ...draftFilters, dst_port: v })}
+              placeholder="e.g. 443" />
+            <TagFilterField label="Ingress Zone" values={draftFilters.ingress_zone}
+              onChange={(v) => setDraftFilters({ ...draftFilters, ingress_zone: v })}
+              placeholder="e.g. port1" />
+            <TagFilterField label="Egress Link" values={draftFilters.egress_link}
+              onChange={(v) => setDraftFilters({ ...draftFilters, egress_link: v })}
+              placeholder="e.g. wan1" />
           </div>
           <div className="flex gap-2 mt-3">
             <button onClick={applyFilters} className="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground">

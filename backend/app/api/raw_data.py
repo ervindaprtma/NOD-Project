@@ -42,7 +42,7 @@ async def get_raw_flows(
     application: Optional[str] = Query(default=None, description="Comma-separated application names"),
     category: Optional[str] = Query(default=None, description="Comma-separated categories"),
     protocol: Optional[str] = Query(default=None, description="Comma-separated protocols"),
-    dst_port: Optional[int] = Query(default=None),
+    dst_port: Optional[str] = Query(default=None, description="Destination port(s) — single value or comma-separated list (e.g. 80,443,8080)"),
     ingress_zone: Optional[str] = Query(default=None),
     egress_link: Optional[str] = Query(default=None),
     site_name: str = Query(default="Site_FGT-DC", description="Site: Site_FGT-DC, Site_FGT-DRC, Site_FGT_Office"),
@@ -58,12 +58,16 @@ async def get_raw_flows(
     """
     t0 = time.monotonic()
 
-    # Build filters dict
+    # Build filters dict — accept comma-separated values for all text fields
     filters: dict = {}
     if client_ip:
-        filters["client_ip"] = client_ip
+        vals = [v.strip() for v in client_ip.split(",") if v.strip()]
+        if vals:
+            filters["client_ip"] = vals
     if server_ip:
-        filters["server_ip"] = server_ip
+        vals = [v.strip() for v in server_ip.split(",") if v.strip()]
+        if vals:
+            filters["server_ip"] = vals
     if application:
         filters["application"] = [a.strip() for a in application.split(",") if a.strip()]
     if category:
@@ -71,7 +75,10 @@ async def get_raw_flows(
     if protocol:
         filters["protocol"] = [p.strip() for p in protocol.split(",") if p.strip()]
     if dst_port is not None:
-        filters["dst_port"] = dst_port
+        # Accept comma-separated ports, but keep as ints for OpenSearch term query
+        ports = [int(p.strip()) for p in str(dst_port).split(",") if p.strip()]
+        if ports:
+            filters["dst_port"] = ports
     if ingress_zone:
         filters["ingress_zone"] = [z.strip() for z in ingress_zone.split(",") if z.strip()]
     if egress_link:

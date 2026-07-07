@@ -613,9 +613,11 @@ async def raw_flows(
     # Apply additional filters
     if filters:
         if "client_ip" in filters and filters["client_ip"]:
-            must_filters.append({"term": {"flow.client.ip.addr": filters["client_ip"]}})
+            vals = filters["client_ip"] if isinstance(filters["client_ip"], list) else [filters["client_ip"]]
+            must_filters.append({"terms": {"flow.client.ip.addr": vals}})
         if "server_ip" in filters and filters["server_ip"]:
-            must_filters.append({"term": {"flow.server.ip.addr": filters["server_ip"]}})
+            vals = filters["server_ip"] if isinstance(filters["server_ip"], list) else [filters["server_ip"]]
+            must_filters.append({"terms": {"flow.server.ip.addr": vals}})
         if "application" in filters and filters["application"]:
             must_filters.append({"terms": {"flow.application.name": filters["application"]}})
         if "category" in filters and filters["category"]:
@@ -623,7 +625,8 @@ async def raw_flows(
         if "protocol" in filters and filters["protocol"]:
             must_filters.append({"terms": {"l4.proto.name": filters["protocol"]}})
         if "dst_port" in filters and filters["dst_port"]:
-            must_filters.append({"term": {"flow.dst.l4.port.id": filters["dst_port"]}})
+            vals = filters["dst_port"] if isinstance(filters["dst_port"], list) else [filters["dst_port"]]
+            must_filters.append({"terms": {"flow.dst.l4.port.id": vals}})
         if "ingress_zone" in filters and filters["ingress_zone"]:
             must_filters.append({"terms": {"flow.in.netif.alias": filters["ingress_zone"]}})
         if "egress_link" in filters and filters["egress_link"]:
