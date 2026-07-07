@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatMs, formatPercent, formatNumber, getDefaultTimeRange } from "@/lib/constants";
+import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatMs, formatPercent, formatNumber, getDefaultTimeRange, formatBucketLabelWIB } from "@/lib/constants";
 import type { SDWANData } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { AreaChart } from "@/components/charts/AreaChart";
@@ -517,12 +517,16 @@ function SlaAreaChart({
   }
   const chartData = Object.entries(byTs)
     .sort(([a], [b]) => Number(a) - Number(b))
-    .map(([ts, vals]) => ({
-      timestamp: new Date(Number(ts)).toLocaleTimeString("en-US", {
-        hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Jakarta",
-      }),
-      ...vals,
-    }));
+    .map(([ts, vals], idx, arr) => {
+      const ms = Number(ts);
+      const prevMs = idx > 0 ? Number(arr[idx - 1][0]) : null;
+      return {
+        // Use the Resources-page formatter: always show date on the first row
+        // and on any day boundary; subsequent rows in the same day show time only.
+        timestamp: formatBucketLabelWIB(ms, prevMs),
+        ...vals,
+      };
+    });
 
   // Color hex values for chart series
   const chartColors: Record<string, string> = {

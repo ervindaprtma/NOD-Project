@@ -23,7 +23,7 @@ const DATA_SOURCES = [
 const AGGREGATIONS = ["avg", "max", "min", "sum", "count"];
 const CONDITIONS = [">", "<", ">=", "<=", "=="];
 const SEVERITIES = ["INFO", "WARNING", "CRITICAL"];
-const CHANNELS = ["telegram", "email"];
+const CHANNELS = ["whatsapp", "telegram", "smtp"];
 
 interface RuleForm {
   name: string;
