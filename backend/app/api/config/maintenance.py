@@ -18,7 +18,7 @@ from app.db.session import get_db
 from app.schemas.common import APIResponse
 
 router = APIRouter(
-    prefix="/config/maintenance",
+    prefix="/api/v1/config/maintenance",
     tags=["config", "maintenance"],
     dependencies=[Depends(require_role("admin"))],
 )
