@@ -73,7 +73,7 @@ export default function RawDataPage() {
     correlation_id: true, correlation_direction: true,
   });
   const [siteName, setSiteName] = useState("Site_FGT-DC");
-  const [pathFilter, setPathFilter] = useState("all"); // internet, inter-site, intra-lan, all
+  const [pathFilter, setPathFilter] = useState("internet"); // internet, inbound-vip, inter-site, intra-lan
   const [direction, setDirection] = useState(""); // upload, download
 
   // Build query params
@@ -267,10 +267,10 @@ export default function RawDataPage() {
             className="px-3 py-1.5 rounded-md border border-border/60 bg-background text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
             title="Traffic path"
           >
-            <option value="all">All paths</option>
-            <option value="internet">Internet (egress)</option>
+            <option value="internet">Internet</option>
+            <option value="inbound-vip">Inbound-vip</option>
             <option value="inter-site">Inter-site</option>
-            <option value="intra-lan">Intra-LAN</option>
+            <option value="intra-lan">Intra-lan</option>
           </select>
           <div className="flex gap-1 bg-muted/40 dark:bg-muted/30 rounded-md p-1">
             {TIME_PRESETS.map((p) => (

@@ -46,7 +46,7 @@ async def get_raw_flows(
     ingress_zone: Optional[str] = Query(default=None),
     egress_link: Optional[str] = Query(default=None),
     site_name: str = Query(default="Site_FGT-DC", description="Site: Site_FGT-DC, Site_FGT-DRC, Site_FGT_Office"),
-    path_filter: str = Query(default="internet", description="Traffic path: internet, inter-site, intra-lan, or 'all' for all paths"),
+    path_filter: str = Query(default="internet", description="Traffic path: internet, inbound-vip, inter-site, or intra-lan"),
     direction: Optional[str] = Query(default=None, description="Direction: 'upload' or 'download' (only for internet path)"),
     current_user=Depends(require_role("operator")),
 ):
