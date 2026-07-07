@@ -208,11 +208,19 @@ export async function apiFetch<T = unknown>(
   }
 
   if (!resp.ok || !json.success) {
-    throw new ApiError(
-      resp.status,
-      json.error?.code || "UNKNOWN_ERROR",
-      json.error?.message || "An error occurred"
-    );
+    // FastAPI 422 validation errors come back as { detail: [{loc, msg, type, ...}] }
+    // instead of the project's { error: { code, message } } shape. Surface the
+    // first validation message so the user sees *why* it was rejected, not a
+    // generic "An error occurred".
+    let code = json.error?.code || "UNKNOWN_ERROR";
+    let message = json.error?.message || "An error occurred";
+    if (Array.isArray(json.detail) && json.detail.length > 0) {
+      const first = json.detail[0];
+      const loc = Array.isArray(first.loc) ? first.loc.filter((p: any) => p !== "body").join(".") : "";
+      message = loc ? `${loc}: ${first.msg}` : first.msg || message;
+      code = first.type?.toUpperCase() || code;
+    }
+    throw new ApiError(resp.status, code, message);
   }
 
   return json as T;

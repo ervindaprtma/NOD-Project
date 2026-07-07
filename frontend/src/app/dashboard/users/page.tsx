@@ -8,6 +8,18 @@ import { cn } from "@/lib/utils";
 const ROLES = ["viewer", "operator", "admin", "superadmin"] as const;
 type Role = (typeof ROLES)[number];
 
+// Must stay in sync with backend/app/schemas/user.py::_validate_password_complexity
+const SPECIAL_CHARS = "@$!%*?&^#()_+=-{}[]:;\"'<>,.?/~`|\\";
+function validatePasswordComplexity(pw: string): string | null {
+  if (pw.length < 8) return "Password must be at least 8 characters.";
+  if (!/[a-z]/.test(pw)) return "Password must contain at least one lowercase letter.";
+  if (!/[A-Z]/.test(pw)) return "Password must contain at least one uppercase letter.";
+  if (!/\d/.test(pw)) return "Password must contain at least one digit.";
+  if (!new RegExp(`[${SPECIAL_CHARS.replace(/[\\\]\-]/g, "\\$&")}]`).test(pw))
+    return "Password must contain at least one special character.";
+  return null;
+}
+
 interface UserRecord {
   id: string;
   username: string;
@@ -441,9 +453,15 @@ function UserFormModal({
     e.preventDefault();
     setError("");
 
-    if (mode === "create" && password.length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
+    if (mode === "create") {
+      // Match the backend's _validate_password_complexity rules so users
+      // see the exact error before the request is sent (faster + clearer
+      // than waiting for a 422 round-trip).
+      const pwError = validatePasswordComplexity(password);
+      if (pwError) {
+        setError(pwError);
+        return;
+      }
     }
 
     setLoading(true);
@@ -533,8 +551,12 @@ function UserFormModal({
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
+                aria-describedby="password-hint"
                 className="w-full px-3 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
               />
+              <p id="password-hint" className="text-[11px] text-muted-foreground mt-1">
+                Min 8 characters with uppercase, lowercase, digit, and special character.
+              </p>
             </div>
           )}
           <div className="flex gap-2 justify-end pt-2">
