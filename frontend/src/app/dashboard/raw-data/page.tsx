@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import useSWR from "swr";
-import { swrFetcher, getAccessToken } from "@/lib/api";
+import { swrFetcher, getAccessToken, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, formatBytes, getDefaultTimeRange } from "@/lib/constants";
 import type { RawFlowRecord, APIResponse } from "@/types";
@@ -88,8 +88,10 @@ export default function RawDataPage() {
   }, [gteMs, lteMs, pageSize, sort, currentCursor, filters, siteName, pathFilter, direction]);
 
   const token = typeof window !== "undefined" ? getAccessToken() : null;
+  // Gate the SWR key on operator+ so a viewer never triggers a 403 round-trip.
+  const canFetch = token !== null && hasMinRole("operator");
   const { data, error, isLoading } = useSWR<APIResponse<RawFlowRecord[]>>(
-    token ? `/api/v1/traffic/raw?${new URLSearchParams(
+    canFetch ? `/api/v1/traffic/raw?${new URLSearchParams(
       Object.entries(queryParams)
         .filter(([, v]) => v !== undefined)
         .map(([k, v]) => [k, String(v)])
@@ -101,6 +103,25 @@ export default function RawDataPage() {
   const records = data?.data || [];
   const total = data?.meta?.total || 0;
   const queryTook = data?.meta?.query_took_ms;
+
+  // ── Privilege guard ──────────────────────────────────────────
+  // The backend /api/v1/traffic/raw requires operator+ (raw_data.py:51).
+  // A viewer who lands on this page should see a friendly notice,
+  // not a broken empty table from a 403 response.
+  if (!hasMinRole("operator")) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold tracking-tight">Raw Data</h1>
+        <div className="bg-card border rounded-lg p-8 text-center space-y-2">
+          <p className="text-base font-semibold">Operator access required</p>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            Raw flow data is available to <span className="font-mono">operator</span> and
+            above. Contact a superadmin if you need elevated access.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   function handlePreset(seconds: number, label: string) {
     const now = Date.now();
