@@ -85,6 +85,58 @@ export default function AlertsPage() {
   );
   const alertLogs = logsData?.data || [];
 
+  // §9.8: SSE live push. EventSource cannot set custom headers, so we
+  // request a short-lived stream token (POST /stream-token) and pass it
+  // as a query param. The 30s useSWR poll stays as a reconciliation
+  // fallback — SSE reconnect gaps are common.
+  const [liveState, setLiveState] = useState<"connecting" | "open" | "closed">("closed");
+  useEffect(() => {
+    if (!canManageAlerts) return;  // viewer doesn't need live updates
+    let es: EventSource | null = null;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    async function connect() {
+      try {
+        const tokResp = await apiFetch<{ data: { token: string } }>(
+          "/api/v1/alerts/stream-token",
+          { method: "POST" }
+        );
+        if (cancelled) return;
+        const token = tokResp.data.token;
+        setLiveState("connecting");
+        es = new EventSource(`/api/v1/alerts/stream?token=${encodeURIComponent(token)}`);
+        es.onopen = () => setLiveState("open");
+        es.onerror = () => {
+          setLiveState("closed");
+          es?.close();
+          if (!cancelled) retryTimer = setTimeout(connect, 5000);
+        };
+        es.addEventListener("alert", () => {
+          // ponytail: invalidate both caches — the rule's last_fired_at may
+          // have changed too, and the history table wants the new row.
+          mutate("/api/v1/alerts/rules");
+          mutate((key: string) => typeof key === "string" && key.startsWith("/api/v1/alerts/logs"));
+        });
+        es.addEventListener("resolved", () => {
+          mutate("/api/v1/alerts/rules");
+          mutate((key: string) => typeof key === "string" && key.startsWith("/api/v1/alerts/logs"));
+        });
+      } catch {
+        setLiveState("closed");
+        if (!cancelled) retryTimer = setTimeout(connect, 10000);
+      }
+    }
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      es?.close();
+      setLiveState("closed");
+    };
+  }, [canManageAlerts]);
+
   function openCreate() {
     setEditingRule(null);
     setForm(emptyForm);
@@ -188,10 +240,28 @@ export default function AlertsPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-bold tracking-tight">Alert Rules</h1>
-          {/* SSE live indicator */}
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            LIVE
+          {/* §9.8: live indicator driven by EventSource.readyState */}
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium",
+              liveState === "open"
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                : liveState === "connecting"
+                  ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                  : "bg-muted text-muted-foreground"
+            )}
+          >
+            <span
+              className={cn(
+                "w-1.5 h-1.5 rounded-full",
+                liveState === "open"
+                  ? "bg-emerald-500 animate-pulse"
+                  : liveState === "connecting"
+                    ? "bg-amber-500"
+                    : "bg-muted-foreground"
+              )}
+            />
+            {liveState === "open" ? "LIVE" : liveState === "connecting" ? "CONNECTING" : "OFFLINE"}
           </span>
         </div>
         <div className="flex gap-2">
