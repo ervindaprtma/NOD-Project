@@ -127,7 +127,12 @@ async def preview_template_rule(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("operator")),
 ) -> APIResponse[AlertTemplateRead]:
-    """Preview what a rule created from this template would look like."""
+    """Preview what a rule created from this template would look like.
+
+    §9.5: actually render subject_template and body_template via sandboxed
+    Jinja2 against sample data, so the caller sees the real output, not just
+    the raw template text.
+    """
     template = await db.get(AlertTemplate, template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
@@ -143,7 +148,43 @@ async def preview_template_rule(
     if body.site_name and "site_name" in template.exposed_fields:
         merged["site_name"] = body.site_name
 
-    return APIResponse.ok(data=AlertTemplateRead.model_validate(template))
+    # §9.5: render via sandbox. StrictUndefined on the engine surfaces
+    # template typos to the operator at preview time, not at fire time.
+    from app.services.alert_engine import _render_template
+
+    render_ctx = {
+        "rule": {
+            "name": body.name,
+            "severity": merged.get("severity", "WARNING"),
+            "site_name": merged.get("site_name"),
+            "metric_field": merged.get("metric_field", ""),
+            "condition": merged.get("condition", ">"),
+            "threshold_value": merged.get("threshold_value", 0.0),
+        },
+        # Flat aliases — match the seeded templates' body syntax
+        "name": body.name,
+        "severity": merged.get("severity", "WARNING"),
+        "site_name": merged.get("site_name"),
+        "metric_field": merged.get("metric_field", ""),
+        "condition": merged.get("condition", ">"),
+        "threshold_value": merged.get("threshold_value", 0.0),
+        "threshold": merged.get("threshold_value", 0.0),
+        "metric_value": 0.0,
+        "data_source": merged.get("data_source", ""),
+        "aggregation": merged.get("aggregation", "avg"),
+        "fired_at": "—",
+    }
+    rendered = AlertTemplateRead.model_validate(template)
+    try:
+        if template.subject_template:
+            rendered.rendered_subject = _render_template(template.subject_template, render_ctx)
+        if template.body_template:
+            rendered.rendered_body = _render_template(template.body_template, render_ctx)
+    except Exception as e:
+        # ponytail: template errors are loud, not silent — surface to the UI
+        raise HTTPException(status_code=422, detail=f"Template render failed: {e}")
+
+    return APIResponse.ok(data=rendered)
 
 
 @router.post("/rules/from-template/{template_id}")

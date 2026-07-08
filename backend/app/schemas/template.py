@@ -24,6 +24,9 @@ class AlertTemplateRead(BaseModel):
     is_default: bool
     sort_order: int
     created_at: datetime | None
+    # §9.5: populated by /preview endpoint with the rendered subject/body
+    rendered_subject: str | None = None
+    rendered_body: str | None = None
 
     model_config = {"from_attributes": True}
 

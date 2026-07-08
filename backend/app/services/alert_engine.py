@@ -42,6 +42,37 @@ def _parse_sdwan_metric_field(metric_field: str) -> tuple[str, int]:
     return ((m.group(1), int(m.group(2)) - 1) if m else (metric_field, 0))
 
 
+# §9.5: Jinja2 SandboxedEnvironment — only path for rendering any user-
+# editable template body. SandboxedEnvironment blocks dunder / attribute-
+# chain escapes by default. Do NOT swap for vanilla Environment.
+from jinja2 import StrictUndefined
+from jinja2.sandbox import SandboxedEnvironment
+
+_SANDBOX = SandboxedEnvironment(
+    autoescape=True,           # SSTI defense-in-depth: escape <, >, &, " in interpolated values
+    undefined=StrictUndefined,  # {{ missing_var }} → render error, NOT empty string
+    keep_trailing_newline=False,
+)
+
+# ponytail: the only Jinja2 filters a template body may use. Adding more
+# here requires a §10 gate pass — see docs/alert_notification_design.md §10.
+_ALLOWED_FILTERS = frozenset({"round", "upper", "lower", "default", "e"})
+
+_SANDBOX.filters = {k: _SANDBOX.filters[k] for k in _ALLOWED_FILTERS if k in _SANDBOX.filters}
+
+
+def _render_template(text: str, ctx: dict) -> str:
+    """Render a Jinja2 template body in the sandbox. Whitelist of filter names
+    is enforced at module init. StrictUndefined means a typo in a variable
+    name raises — caught at fire time, not silently dropped.
+
+    Returns the rendered string. Never raises for a syntax-valid template
+    referencing only allow-listed vars; re-raises for any other error so
+    the engine's existing try/except logs it.
+    """
+    return _SANDBOX.from_string(text).render(**ctx)
+
+
 # ── P1: Group query runner ──────────────────────────────────────
 # Rules sharing the same (data_source, site_name, evaluation_window_minutes)
 # are evaluated with a single OpenSearch call.  Results are cached in a
@@ -409,6 +440,10 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
 
     Instead of one message per rule, aggregates all pending notifications
     into a single message per notification channel.
+
+    §9.5: per-rule line rendering via Jinja2 SandboxedEnvironment, if the
+    rule's template has a body_template. Rules without a template use the
+    legacy hardcoded line format.
     """
     if not notify_queue:
         return
@@ -418,8 +453,59 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
     # Build aggregated message
     lines = [f"🛑  NOD Alert Summary — {now_str}", "━" * 35]
     sev_emoji = {"CRITICAL": "🔴", "WARNING": "⚠️", "INFO": "ℹ️"}
+
+    # §9.5: pre-fetch all referenced templates in one query
+    template_ids = {r.template_id for r, _ in notify_queue if r.template_id}
+    template_body: dict[str, str] = {}
+    if template_ids:
+        from app.db.models import AlertTemplate
+        from app.db.session import AsyncSessionLocal
+        try:
+            async with AsyncSessionLocal() as tdb:
+                result = await tdb.execute(
+                    select(AlertTemplate.id, AlertTemplate.body_template)
+                    .where(AlertTemplate.id.in_(template_ids))
+                )
+                template_body = {row[0]: row[1] for row in result.all() if row[1]}
+        except Exception as e:
+            logger.error("Failed to fetch alert templates: %s", e)
+
     for rule, mv in notify_queue:
         sev = sev_emoji.get(rule.severity, "🔔")
+        if rule.template_id and rule.template_id in template_body:
+            # §9.5: render the rule's template body in the sandbox.
+            # The seeded templates use flat var names ({{ name }}, {{ metric_value }})
+            # for backward compat with the pre-§9.5 spec; the §11.1 design moves
+            # to nested {{ rule.* }} once notification_templates ships its own body.
+            ctx = {
+                "rule": {
+                    "name": rule.name,
+                    "severity": rule.severity,
+                    "site_name": rule.site_name,
+                    "metric_field": rule.metric_field,
+                    "condition": rule.condition,
+                    "threshold_value": rule.threshold_value,
+                },
+                # Flat aliases for the seeded templates — keep until §11.1.
+                "name": rule.name,
+                "severity": rule.severity,
+                "site_name": rule.site_name,
+                "metric_field": rule.metric_field,
+                "condition": rule.condition,
+                "threshold_value": rule.threshold_value,
+                "threshold": rule.threshold_value,
+                "metric_value": mv,
+                "data_source": rule.data_source,
+                "aggregation": rule.aggregation,
+                "fired_at": now_str,
+            }
+            try:
+                lines.append(_render_template(template_body[rule.template_id], ctx))
+                continue
+            except Exception as e:
+                # ponytail: render error falls back to hardcoded line — never
+                # lose the alert to a template typo
+                logger.error("Template render failed for rule %s: %s — falling back to hardcoded", rule.id, e)
         lines.append(f"{sev} [{rule.severity}] {rule.name} @ {rule.site_name or '—'}: {mv}")
     body = "\n".join(lines)
 
