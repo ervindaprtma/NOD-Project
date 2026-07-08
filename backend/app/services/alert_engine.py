@@ -412,15 +412,21 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
         lines.append(f"{sev} [{rule.severity}] {rule.name} @ {rule.site_name or '—'}: {mv}")
     body = "\n".join(lines)
 
-    # Load channels and send
+    # Load channels and send — only the ones the firing rules actually want
+    # (§9.3: was sending to every enabled channel; now respects rule.notify_channels)
     try:
         from app.db.session import AsyncSessionLocal
         from app.db.models import NotificationConfig as NotifCfg
         from app.services.notifier_helper import send_alert
 
+        fired_channels = {ch for rule, _ in notify_queue for ch in rule.notify_channels}
+
         async with AsyncSessionLocal() as db:
             result = await db.execute(
-                select(NotifCfg).where(NotifCfg.enabled == True)  # noqa: E712
+                select(NotifCfg).where(
+                    (NotifCfg.enabled == True)  # noqa: E712
+                    & (NotifCfg.channel.in_(fired_channels))
+                )
             )
             channels = result.scalars().all()
             for ch in channels:
