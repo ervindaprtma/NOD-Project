@@ -19,11 +19,35 @@ logger = logging.getLogger(__name__)
 _T = httpx.Timeout(10.0)
 _T_LONG = httpx.Timeout(30.0)
 
+# ponytail: §9.2 SSRF egress allow-list. User-supplied webhook URLs are POSTed
+# to — an unvalidated URL is an SSRF vector (OWASP A10). Allow only Discord's
+# webhook hostname. If a future deployment needs a custom host, add it here
+# with a one-line reason.
+_ALLOWED_DISCORD_HOSTS = frozenset({"discord.com", "discordapp.com", "canary.discord.com"})
+
+
+def _check_discord_url(url: str) -> str | None:
+    """Return the URL if its host is on the allow-list, else None. Strips
+    userinfo to prevent e.g. https://discord.com@attacker.example/."""
+    from urllib.parse import urlparse
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return None
+    if p.scheme not in ("http", "https"):
+        return None
+    if p.hostname is None:
+        return None
+    if p.hostname.lower() not in _ALLOWED_DISCORD_HOSTS:
+        return None
+    return url
+
 
 async def _discord_message(message: str, config: dict | None = None) -> bool:
-    url = (config or {}).get("webhook_url", settings.DISCORD_WEBHOOK_URL)
+    raw = (config or {}).get("webhook_url", settings.DISCORD_WEBHOOK_URL)
+    url = _check_discord_url(raw) if raw else None
     if not url:
-        logger.warning("Discord not configured — skipping")
+        logger.warning("Discord webhook host not in allow-list — skipping")
         return False
     try:
         async with httpx.AsyncClient(timeout=_T) as c:
@@ -36,7 +60,8 @@ async def _discord_message(message: str, config: dict | None = None) -> bool:
 
 
 async def _discord_file(file_path: str, message: str = "", config: dict | None = None) -> bool:
-    url = (config or {}).get("webhook_url", settings.DISCORD_WEBHOOK_URL)
+    raw = (config or {}).get("webhook_url", settings.DISCORD_WEBHOOK_URL)
+    url = _check_discord_url(raw) if raw else None
     if not url:
         return False
     try:

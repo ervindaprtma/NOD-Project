@@ -40,6 +40,7 @@ _SECRET_FIELDS_BY_CHANNEL = {
     "whatsapp": {"api_token", "phone_number_id"},
     "telegram": {"bot_token"},
     "smtp": {"user", "password"},
+    "discord": {"webhook_url"},
 }
 
 

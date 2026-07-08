@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 async def load_channel_configs(min_severity: str | None = None) -> dict[str, dict]:
     """Load enabled notification configs from DB, decrypting secrets."""
+    from app.api.config.notifications import _SECRET_FIELDS_BY_CHANNEL
     from app.core.security import decrypt_secret
 
     async with AsyncSessionLocal() as db:
@@ -25,11 +26,6 @@ async def load_channel_configs(min_severity: str | None = None) -> dict[str, dic
         )).scalars().all()
 
     severity_order = {"INFO": 0, "WARNING": 1, "CRITICAL": 2}
-    secret_fields = {
-        "whatsapp": {"api_token", "phone_number_id"},
-        "telegram": {"bot_token"},
-        "smtp": {"user", "password"},
-    }
 
     channels: dict[str, dict] = {}
     for row in rows:
@@ -37,7 +33,7 @@ async def load_channel_configs(min_severity: str | None = None) -> dict[str, dic
                 severity_order.get(min_severity, 0) < severity_order.get(row.min_severity, 2):
             continue
         decrypted = dict(row.config)
-        for key in secret_fields.get(row.channel, set()):
+        for key in _SECRET_FIELDS_BY_CHANNEL.get(row.channel, set()):
             if decrypted.get(key):
                 try:
                     decrypted[key] = decrypt_secret(decrypted[key])

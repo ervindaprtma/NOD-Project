@@ -313,7 +313,7 @@ function NotificationChannelsTab({
     swrFetcher
   );
   const channelsObj = data?.data || {};
-  const channels = ["whatsapp", "telegram", "smtp"] as const;
+  const channels = ["whatsapp", "telegram", "smtp", "discord"] as const;
   const [editing, setEditing] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<Record<string, "idle" | "sending" | "ok" | "error">>({});
   const [testMessage, setTestMessage] = useState<Record<string, string>>({});
@@ -459,6 +459,17 @@ function NotificationChannelsTab({
                         onError={(msg) => showToast({ ok: false, msg })}
                       />
                     )}
+                    {channel === "discord" && (
+                      <DiscordConfigForm
+                        config={cfg?.config}
+                        onSaved={() => {
+                          mutate("/api/v1/config/notifications");
+                          setEditing(null);
+                        }}
+                        onSuccess={(msg) => showToast({ ok: true, msg })}
+                        onError={(msg) => showToast({ ok: false, msg })}
+                      />
+                    )}
 
                     {/* Test send row */}
                     <div className="mt-4 pt-3 border-t flex items-center gap-3">
@@ -499,6 +510,7 @@ function ChannelIcon({ channel }: { channel: string }) {
     whatsapp: { emoji: "💬", bg: "bg-emerald-100 dark:bg-emerald-900/30" },
     telegram: { emoji: "✈️", bg: "bg-sky-100 dark:bg-sky-900/30" },
     smtp: { emoji: "📧", bg: "bg-amber-100 dark:bg-amber-900/30" },
+    discord: { emoji: "🎮", bg: "bg-indigo-100 dark:bg-indigo-900/30" },
   };
   const c = iconMap[channel] || { emoji: "•", bg: "bg-muted" };
   return (
@@ -914,6 +926,110 @@ function WhatsAppConfigForm({
           value={apiToken}
           onChange={(e) => setApiToken(e.target.value)}
           placeholder={tokenSet ? "••••••••" : "EAA…"}
+          className="w-full px-3 py-1.5 text-sm rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+        />
+      </div>
+
+      <div>
+        <label className="text-xs font-medium block mb-1">Minimum Severity</label>
+        <select
+          value={minSeverity}
+          onChange={(e) => setMinSeverity(e.target.value)}
+          className="w-full px-3 py-1.5 text-sm rounded-md border bg-background"
+        >
+          <option value="INFO">INFO</option>
+          <option value="WARNING">WARNING</option>
+          <option value="CRITICAL">CRITICAL</option>
+        </select>
+      </div>
+
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+      >
+        {saving ? "Saving…" : "Save & Connect"}
+      </button>
+    </div>
+  );
+}
+
+// ── Discord Config Form (§9.2) ──────────────────────────────
+
+function DiscordConfigForm({
+  config,
+  onSaved,
+  onSuccess,
+  onError,
+}: {
+  config?: Record<string, unknown>;
+  onSaved: () => void;
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [minSeverity, setMinSeverity] = useState<string>(
+    (config?.min_severity as string) || "CRITICAL"
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [urlSet, setUrlSet] = useState(Boolean(config?.webhook_url));
+
+  async function handleSave() {
+    setError("");
+    if (!webhookUrl && !urlSet) {
+      setError("Webhook URL is required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const newConfig: Record<string, unknown> = {
+        ...(webhookUrl ? { webhook_url: webhookUrl } : {}),
+      };
+      await apiFetch("/api/v1/config/notifications/discord", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: true,
+          min_severity: minSeverity,
+          config: newConfig,
+        }),
+      });
+      setWebhookUrl("");
+      onSaved();
+      onSuccess("Discord configuration saved.");
+    } catch (e: unknown) {
+      const msg = getErrorMessage(e, "Failed to save Discord config.");
+      setError(msg);
+      onError(msg);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-semibold">Discord Webhook Configuration</h3>
+      <p className="text-xs text-muted-foreground">
+        Create an incoming webhook in your Discord server (Channel Settings →
+        Integrations → Webhooks) and paste the URL here. The backend will only
+        POST to <span className="font-mono">discord.com</span> /{" "}
+        <span className="font-mono">discordapp.com</span> hosts — any other
+        host is rejected as a security safeguard.
+      </p>
+
+      {error && (
+        <p className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-md">{error}</p>
+      )}
+
+      <div>
+        <label className="text-xs font-medium block mb-1">
+          Webhook URL {urlSet && <span className="text-emerald-600">(set — leave blank to keep)</span>}
+        </label>
+        <input
+          type="password"
+          value={webhookUrl}
+          onChange={(e) => setWebhookUrl(e.target.value)}
+          placeholder={urlSet ? "••••••••" : "https://discord.com/api/webhooks/…"}
           className="w-full px-3 py-1.5 text-sm rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
         />
       </div>
