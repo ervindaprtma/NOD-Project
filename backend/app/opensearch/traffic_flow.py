@@ -7,7 +7,7 @@ Routes: DC→dc cluster, DRC+Office→drc cluster
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Optional
+from typing import Any, Optional
 
 from opensearchpy import AsyncOpenSearch
 
@@ -272,7 +272,7 @@ async def flow_chart(
     app_totals: dict[str, int] = {}
     chart_data = []
     for bucket in result["buckets"]:
-        row: dict[str, any] = {"timestamp": bucket["key_as_string"], "timestampMs": bucket["key"]}
+        row: dict[str, Any] = {"timestamp": bucket["key_as_string"], "timestampMs": bucket["key"]}
         for app_bucket in bucket["top_apps"]["buckets"]:
             app_name = app_bucket["key"]
             app_bytes = int(app_bucket["total_bytes"]["value"])

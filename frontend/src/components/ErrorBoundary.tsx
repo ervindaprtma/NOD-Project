@@ -2,9 +2,12 @@
 
 import React, { Component, type ErrorInfo, type ReactNode } from "react";
 
+type Variant = "page" | "panel";
+
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  variant?: Variant;
 }
 
 interface State {
@@ -23,7 +26,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("ErrorBoundary caught an error:", error, errorInfo);
+    console.error("ErrorBoundary caught:", error, errorInfo);
   }
 
   handleTryAgain = () => {
@@ -31,32 +34,35 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   render() {
-    if (this.state.hasError) {
-      if (this.props.fallback) {
-        return this.props.fallback;
-      }
-
+    if (!this.state.hasError) {
+      return this.props.children;
+    }
+    if (this.props.fallback) {
+      return this.props.fallback;
+    }
+    if (this.props.variant === "panel") {
       return (
-        <div className="flex flex-col items-center justify-center min-h-[400px] p-6 text-center">
-          <div className="max-w-md space-y-4">
-            <div className="text-4xl">⚠️</div>
-            <h2 className="text-lg font-semibold text-foreground">
-              Something went wrong
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              {this.state.error?.message || "An unexpected error occurred."}
-            </p>
-            <button
-              onClick={this.handleTryAgain}
-              className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 transition-colors"
-            >
-              Try Again
-            </button>
-          </div>
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">
+          <strong>Render error:</strong> {this.state.error?.message}
         </div>
       );
     }
-
-    return this.props.children;
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] p-6 text-center">
+        <div className="max-w-md space-y-4">
+          <div className="text-4xl">⚠️</div>
+          <h2 className="text-lg font-semibold text-foreground">Something went wrong</h2>
+          <p className="text-sm text-muted-foreground">
+            {this.state.error?.message || "An unexpected error occurred."}
+          </p>
+          <button
+            onClick={this.handleTryAgain}
+            className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
   }
 }

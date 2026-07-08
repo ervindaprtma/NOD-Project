@@ -8,7 +8,7 @@ ALL queries comply with Q-01 through Q-08 mandates.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from opensearchpy import AsyncOpenSearch
 from app.opensearch.client import get_drc_client
@@ -597,7 +597,7 @@ async def raw_flows(
     ]
 
     must_filters = [_time_range(gte_ms, lte_ms), _tf_site_filter(site_name)]
-    must_not_filters = []
+    must_not_filters: list[dict[str, Any]] = []
 
     # Apply traffic path filter (internet, inter-site, intra-lan)
     if path_filter and path_filter != "all":

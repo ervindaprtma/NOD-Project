@@ -85,6 +85,7 @@ def _clear_failed_logins(username: str) -> None:
 async def login(
     request: Request,
     body: LoginRequest,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> APIResponse[TokenResponse]:
     """Authenticate user, return access token and set refresh token cookie."""
@@ -166,27 +167,22 @@ async def login(
     await db.flush()
 
     response_data = APIResponse.ok(TokenResponse(access_token=access_token))
-
-    # Set refresh token as HTTP-only cookie with __Host- prefix
-    resp = Response(
-        content=response_data.model_dump_json(),
-        media_type="application/json",
-    )
-    resp.set_cookie(
+    response.set_cookie(
         key=COOKIE_REFRESH_TOKEN,
         value=refresh_token,
         httponly=True,
-        secure=True,           # __Host- requires Secure
+        secure=True,
         samesite="strict",
         max_age=int(settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60),
-        path="/",              # __Host- requires Path=/
+        path="/",
     )
-    return resp
+    return response_data
 
 
 @router.post("/logout", response_model=APIResponse[dict])
 async def logout(
     request: Request,
+    response: Response,
     refresh_token: Optional[str] = Cookie(default=None, alias=COOKIE_REFRESH_TOKEN),
     db: AsyncSession = Depends(get_db),
 ) -> APIResponse[dict]:
@@ -212,18 +208,16 @@ async def logout(
                 source_ip=get_real_client_ip(request),
             )
 
-    resp = Response(
-        content=APIResponse.ok({"message": "Logged out"}).model_dump_json(),
-        media_type="application/json",
-    )
-    resp.delete_cookie(COOKIE_REFRESH_TOKEN, path="/")
-    return resp
+    response_data = APIResponse.ok({"message": "Logged out"})
+    response.delete_cookie(COOKIE_REFRESH_TOKEN, path="/")
+    return response_data
 
 
 @router.post("/refresh", response_model=APIResponse[TokenResponse])
 @limiter.limit(f"{settings.RATE_LIMIT_REFRESH_REQUESTS}/{settings.RATE_LIMIT_REFRESH_WINDOW}")
 async def refresh(
     request: Request,
+    response: Response,
     refresh_token: Optional[str] = Cookie(default=None, alias=COOKIE_REFRESH_TOKEN),
     db: AsyncSession = Depends(get_db),
 ) -> APIResponse[TokenResponse]:
@@ -257,8 +251,8 @@ async def refresh(
         )
 
     # Get user
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    user: User | None = user_result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -286,20 +280,16 @@ async def refresh(
     await db.commit()
 
     response_data = APIResponse.ok(TokenResponse(access_token=access_token))
-    resp = Response(
-        content=response_data.model_dump_json(),
-        media_type="application/json",
-    )
-    resp.set_cookie(
+    response.set_cookie(
         key=COOKIE_REFRESH_TOKEN,
         value=new_refresh_token,
         httponly=True,
-        secure=True,           # __Host- requires Secure
+        secure=True,
         samesite="strict",
         max_age=int(settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60),
-        path="/",              # __Host- requires Path=/
+        path="/",
     )
-    return resp
+    return response_data
 
 
 # ─────────────────────────────────────────────────────────────────

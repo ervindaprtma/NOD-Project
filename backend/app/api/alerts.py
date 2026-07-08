@@ -21,7 +21,7 @@ from app.schemas.alert import (
     AlertRuleUpdate,
     AlertTestResult,
 )
-from app.schemas.common import APIResponse
+from app.schemas.common import APIResponse, Meta
 from app.schemas.template import AlertFromTemplateRequest, AlertTemplateRead
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["Alerts"])
@@ -350,11 +350,11 @@ async def test_alert_rule(
     # Execute the rule's query against OpenSearch
     metric_value = 0.0
     try:
-        from app.opensearch import appid as appid_qb
         from app.opensearch import ha as ha_qb
         from app.opensearch import sdwan as sdwan_qb
         from app.opensearch import sslvpn as sslvpn_qb
         from app.opensearch import ipsec as ipsec_qb
+        from app.opensearch import traffic_flow as tf_qb
         import time as _t
         now_ms = int(_t.time() * 1000)
         window_ms = rule.evaluation_window_minutes * 60 * 1000
@@ -369,7 +369,7 @@ async def test_alert_rule(
                 field_name = rule.metric_field.split(".", 1)[1]
                 metric_value = float(devices[0].get(field_name, 0) or 0)
         elif rule.data_source == "appid_flow":
-            total = await appid_qb.total_throughput(
+            total = await tf_qb.total_throughput(
                 gte_ms=gte_ms, lte_ms=lte_ms
             )
             metric_value = float(total)
@@ -396,9 +396,9 @@ async def test_alert_rule(
             )
             metric_value = float(count)
     except Exception as e:
-        return APIResponse.fail(
-            code="QUERY_ERROR",
-            message=f"Failed to evaluate rule: {str(e)}",
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to evaluate rule: {str(e)}",
         )
 
     elapsed = int((_time.monotonic() - t0) * 1000)
@@ -449,5 +449,5 @@ async def get_alert_logs(
     total = (await db.execute(select(func.count(AlertLog.id)))).scalar() or 0
     return APIResponse.ok(
         data=[AlertLogRead.model_validate(l) for l in logs],
-        meta={"total": total},
+        meta=Meta(total=total),
     )

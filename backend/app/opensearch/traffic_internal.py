@@ -6,14 +6,15 @@ Key dimension: flow.server.l4.port.id (service/port-based).
 """
 from __future__ import annotations
 
+import socket
 from collections import defaultdict
 from typing import Optional
 
 from opensearchpy import AsyncOpenSearch
 
-from app.opensearch.client import get_drc_client, get_dc_client
+from app.opensearch.client import get_dc_client, get_drc_client
 from app.opensearch.query import safe_search
-from app.port_service_map import PORT_SERVICE_MAP, SVC_NAME_TO_PORT
+from app.port_service_map import port_to_service
 
 FLOW_INDEX = "fortigate-appid-flow-*"
 SITE_FLOW_MAP: dict[str, tuple[str, str]] = {
@@ -25,15 +26,16 @@ SITE_FLOW_MAP: dict[str, tuple[str, str]] = {
 
 def _port_to_service(port_value) -> str:
     try:
-        return PORT_SERVICE_MAP.get(int(port_value), f"Port-{port_value}")
+        return port_to_service(int(port_value))
     except (ValueError, TypeError):
         return str(port_value)
 
 
 def _resolve_service_filter(service_filter: str) -> list[int] | None:
     """Resolve a service name or port string to a list of port numbers.
+
     - Pure digits → exact port match
-    - Text → match any service name containing the text (case-insensitive)
+    - Text → try IANA getservbyname; fall back to substring scan of common aliases.
     Returns list of port numbers, or None if no match.
     """
     if not service_filter:
@@ -41,9 +43,17 @@ def _resolve_service_filter(service_filter: str) -> list[int] | None:
     s = service_filter.strip()
     if s.isdigit():
         return [int(s)]
+    matched: list[int] = []
+    try:
+        matched.append(socket.getservbyname(s))
+    except OSError:
+        pass
+    # ponytail: IANA misses MongoDB/Steam/Plex/DB2. Substring match the alias
+    # dict for the gap. If a 2nd missed service shows up, expand _ALIAS upstream.
+    from app.port_service_map import _ALIAS
     s_lower = s.lower()
-    matched = [port for svc_name, port in SVC_NAME_TO_PORT.items() if s_lower in svc_name]
-    return matched if matched else None
+    matched.extend(p for p, name in _ALIAS.items() if s_lower in name.lower())
+    return matched or None
 
 
 def _get_client(site_name: str = "Site_FGT_Office") -> AsyncOpenSearch:

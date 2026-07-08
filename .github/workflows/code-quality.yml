@@ -14,5 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: npm ci
+        working-directory: frontend
       - run: npx tsc --noEmit
+        working-directory: frontend
       - run: npm audit --audit-level=high
+        working-directory: frontend

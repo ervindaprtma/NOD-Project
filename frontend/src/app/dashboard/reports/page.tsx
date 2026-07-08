@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import useSWR from "swr";
 import { getAccessToken, apiFetch, hasMinRole, ApiError, getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { PanelErrorBoundary } from "@/components/PanelErrorBoundary";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -663,7 +663,7 @@ export default function ReportsPage() {
       {/* ── Distribute Modal ──────────────────────────────── */}
       {distJobId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <PanelErrorBoundary>
+          <ErrorBoundary variant="panel">
           <div className="bg-card border rounded-lg p-6 w-full max-w-md mx-4 space-y-4 shadow-xl">
             <h2 className="text-lg font-semibold">
               Distribute Report <code className="text-xs bg-muted px-1 rounded">{distJobId.slice(0, 8)}</code>
@@ -746,7 +746,7 @@ export default function ReportsPage() {
               </button>
             </div>
           </div>
-          </PanelErrorBoundary>
+          </ErrorBoundary>
         </div>
       )}
 
