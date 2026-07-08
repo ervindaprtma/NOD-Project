@@ -29,8 +29,25 @@ async def load_channel_configs(min_severity: str | None = None) -> dict[str, dic
 
     channels: dict[str, dict] = {}
     for row in rows:
+        # §9.7: fail-closed on unknown severity values. A typo'd
+        # min_severity="HIIGH" used to silently mean "always send" because
+        # .get() defaulted to 0; we now drop the channel with a loud log
+        # so the misconfig shows up in dashboards, not in a flood of
+        # over-permissive notifications.
+        if min_severity and min_severity not in severity_order:
+            logger.error(
+                "Unknown rule severity %r — skipping ALL channels, not defaulting",
+                min_severity,
+            )
+            return {}
+        if row.min_severity not in severity_order:
+            logger.error(
+                "Unknown channel min_severity %r on channel=%s — skipping channel",
+                row.min_severity, row.channel,
+            )
+            continue
         if row.min_severity and min_severity and \
-                severity_order.get(min_severity, 0) < severity_order.get(row.min_severity, 2):
+                severity_order[min_severity] < severity_order[row.min_severity]:
             continue
         decrypted = dict(row.config)
         for key in _SECRET_FIELDS_BY_CHANNEL.get(row.channel, set()):
