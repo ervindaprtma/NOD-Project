@@ -16,14 +16,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import select
 
-from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.models import User
 from app.db.session import AsyncSessionLocal
 
 
 async def seed_superadmin():
-    settings = get_settings()
 
     print("=" * 60)
     print("  NOD — Superadmin Account Seeding")
@@ -90,7 +88,7 @@ async def seed_superadmin():
         print()
         print("✅ Superadmin account created successfully!")
         print(f"   Username: {username}")
-        print(f"   Role: superadmin")
+        print("   Role: superadmin")
         print()
 
 

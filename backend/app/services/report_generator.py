@@ -1868,7 +1868,7 @@ async def build_report_context(
         ibw: dict[str, Any] = {}
         try:
             from app.opensearch import interface_stats as iface_qb
-            from app.api.interface_stats import _compute_throughput_timeline
+            from app.api.interface_stats import _compute_throughput_timeline as _iface_throughput_timeline
 
             is_r09 = report_type == "R-09"
             tbl_interval = table_interval or "1h"
@@ -1925,7 +1925,7 @@ async def build_report_context(
                     time_buckets = iface_bucket.get("by_time", {}).get("buckets", [])
 
                     # Throughput at summary interval
-                    timeline = _compute_throughput_timeline(time_buckets, interval_seconds=summary_interval_seconds)
+                    timeline = _iface_throughput_timeline(time_buckets, interval_seconds=summary_interval_seconds)
 
                     # Speed and oper_status from latest non-null bucket
                     speed_mbps = None
@@ -1983,7 +1983,7 @@ async def build_report_context(
                     cb = chart_iface_buckets.get(if_index)
                     if cb:
                         ctb = cb.get("by_time", {}).get("buckets", [])
-                        c_timeline = _compute_throughput_timeline(ctb, interval_seconds=chart_interval_seconds)
+                        c_timeline = _iface_throughput_timeline(ctb, interval_seconds=chart_interval_seconds)
                         chart_data = []
                         for pt in c_timeline:
                             if pt.in_mbps is not None:
@@ -2144,12 +2144,8 @@ def generate_pdf(context: dict[str, Any], output_path: Path) -> Path:
 
 def _generate_docx(context: dict, output_path: Path) -> None:
     """Delegate DOCX generation to the existing DOCX generator."""
-    try:
-        from app.services.docx_generator import generate_docx_report
-        generate_docx_report(context, output_path)
-    except ImportError:
-        logger.warning("DOCX generator not available; output_path %s not created", output_path)
-        raise NotImplementedError("DOCX output format is not configured.")
+    from app.services.docx_generator import generate_docx_report
+    generate_docx_report(context, output_path)
 
 
 # ══════════════════════════════════════════════════════════════════════════

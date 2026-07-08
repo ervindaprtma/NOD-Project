@@ -23,11 +23,12 @@ const DATA_SOURCES = [
 const AGGREGATIONS = ["avg", "max", "min", "sum", "count"];
 const CONDITIONS = [">", "<", ">=", "<=", "=="];
 const SEVERITIES = ["INFO", "WARNING", "CRITICAL"];
-const CHANNELS = ["telegram", "email"];
+const CHANNELS = ["whatsapp", "telegram", "smtp", "discord"];
 
 interface RuleForm {
   name: string;
   severity: string;
+  kind: "single" | "composite";
   data_source: string;
   metric_field: string;
   aggregation: string;
@@ -36,12 +37,14 @@ interface RuleForm {
   evaluation_window_minutes: number;
   sustained_for_minutes: number;
   notify_channels: string[];
+  site_name: string;
   enabled: boolean;
 }
 
 const emptyForm: RuleForm = {
   name: "",
   severity: "WARNING",
+  kind: "single",
   data_source: "ha_resource",
   metric_field: "ha_member.cpu_usage",
   aggregation: "avg",
@@ -50,6 +53,7 @@ const emptyForm: RuleForm = {
   evaluation_window_minutes: 5,
   sustained_for_minutes: 2,
   notify_channels: ["telegram"],
+  site_name: "",
   enabled: true,
 };
 
@@ -81,6 +85,58 @@ export default function AlertsPage() {
   );
   const alertLogs = logsData?.data || [];
 
+  // §9.8: SSE live push. EventSource cannot set custom headers, so we
+  // request a short-lived stream token (POST /stream-token) and pass it
+  // as a query param. The 30s useSWR poll stays as a reconciliation
+  // fallback — SSE reconnect gaps are common.
+  const [liveState, setLiveState] = useState<"connecting" | "open" | "closed">("closed");
+  useEffect(() => {
+    if (!canManageAlerts) return;  // viewer doesn't need live updates
+    let es: EventSource | null = null;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    async function connect() {
+      try {
+        const tokResp = await apiFetch<{ data: { token: string } }>(
+          "/api/v1/alerts/stream-token",
+          { method: "POST" }
+        );
+        if (cancelled) return;
+        const token = tokResp.data.token;
+        setLiveState("connecting");
+        es = new EventSource(`/api/v1/alerts/stream?token=${encodeURIComponent(token)}`);
+        es.onopen = () => setLiveState("open");
+        es.onerror = () => {
+          setLiveState("closed");
+          es?.close();
+          if (!cancelled) retryTimer = setTimeout(connect, 5000);
+        };
+        es.addEventListener("alert", () => {
+          // ponytail: invalidate both caches — the rule's last_fired_at may
+          // have changed too, and the history table wants the new row.
+          mutate("/api/v1/alerts/rules");
+          mutate((key: string) => typeof key === "string" && key.startsWith("/api/v1/alerts/logs"));
+        });
+        es.addEventListener("resolved", () => {
+          mutate("/api/v1/alerts/rules");
+          mutate((key: string) => typeof key === "string" && key.startsWith("/api/v1/alerts/logs"));
+        });
+      } catch {
+        setLiveState("closed");
+        if (!cancelled) retryTimer = setTimeout(connect, 10000);
+      }
+    }
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      es?.close();
+      setLiveState("closed");
+    };
+  }, [canManageAlerts]);
+
   function openCreate() {
     setEditingRule(null);
     setForm(emptyForm);
@@ -93,6 +149,7 @@ export default function AlertsPage() {
     setForm({
       name: rule.name,
       severity: rule.severity,
+      kind: rule.kind || "single",
       data_source: rule.data_source,
       metric_field: rule.metric_field,
       aggregation: rule.aggregation,
@@ -101,6 +158,7 @@ export default function AlertsPage() {
       evaluation_window_minutes: rule.evaluation_window_minutes,
       sustained_for_minutes: rule.sustained_for_minutes,
       notify_channels: rule.notify_channels,
+      site_name: rule.site_name || "",
       enabled: rule.enabled,
     });
     setTestResult(null);
@@ -180,7 +238,32 @@ export default function AlertsPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold tracking-tight">Alert Rules</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">Alert Rules</h1>
+          {/* §9.8: live indicator driven by EventSource.readyState */}
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium",
+              liveState === "open"
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                : liveState === "connecting"
+                  ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                  : "bg-muted text-muted-foreground"
+            )}
+          >
+            <span
+              className={cn(
+                "w-1.5 h-1.5 rounded-full",
+                liveState === "open"
+                  ? "bg-emerald-500 animate-pulse"
+                  : liveState === "connecting"
+                    ? "bg-amber-500"
+                    : "bg-muted-foreground"
+              )}
+            />
+            {liveState === "open" ? "LIVE" : liveState === "connecting" ? "CONNECTING" : "OFFLINE"}
+          </span>
+        </div>
         <div className="flex gap-2">
           <button
             onClick={() => setShowHistory(!showHistory)}
@@ -247,20 +330,55 @@ export default function AlertsPage() {
         </div>
       )}
 
+      {/* Template Gallery (v3 §3.12) */}
+      <div className="bg-card border rounded-lg p-3">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold">Templates</h3>
+          <span className="text-[10px] text-muted-foreground">Quick-start from pre-built templates</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            { icon: "📶", name: "SD-WAN SLA Breach", cat: "performance" },
+            { icon: "🔒", name: "VPN Tunnel Down", cat: "availability" },
+            { icon: "🚦", name: "WAN Congestion", cat: "performance" },
+            { icon: "📈", name: "Throughput Spike", cat: "capacity" },
+            { icon: "🔑", name: "SSL VPN Capacity", cat: "capacity" },
+            { icon: "🔗", name: "IPsec Tunnel Status", cat: "availability" },
+          ].map((t) => (
+            <button
+              key={t.name}
+              onClick={() => {
+                if (!canManageAlerts) return;
+                setEditingRule(null);
+                setForm({ ...emptyForm, name: `[Template] ${t.name}` });
+                setShowModal(true);
+              }}
+              disabled={!canManageAlerts}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border bg-background hover:bg-muted transition-colors disabled:opacity-50"
+              title={t.cat}
+            >
+              <span>{t.icon}</span>
+              <span>{t.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Rules Table */}
       <div className="bg-card border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50 text-muted-foreground">
-                <th className="text-left py-2.5 px-3 font-medium">Rule Name</th>
-                <th className="text-left py-2.5 px-3 font-medium">Severity</th>
-                <th className="text-left py-2.5 px-3 font-medium">Source</th>
-                <th className="text-left py-2.5 px-3 font-medium">Metric</th>
-                <th className="text-center py-2.5 px-3 font-medium">Condition</th>
-                <th className="text-center py-2.5 px-3 font-medium">Enabled</th>
-                <th className="text-right py-2.5 px-3 font-medium">Actions</th>
-              </tr>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Name</th>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Site</th>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Severity</th>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Source</th>
+                    <th className="text-left py-3 px-3 text-xs font-medium">Metric</th>
+                    <th className="text-center py-3 px-3 text-xs font-medium">Condition</th>
+                    <th className="text-center py-3 px-3 text-xs font-medium">Status</th>
+                    <th className="text-right py-3 px-3 text-xs font-medium">Actions</th>
+                  </tr>
             </thead>
             <tbody>
               {isLoading ? (
@@ -273,7 +391,7 @@ export default function AlertsPage() {
                 ))
               ) : rules.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-muted-foreground">
+                  <td colSpan={8} className="py-12 text-center text-muted-foreground">
                     No alert rules configured. Create your first rule to get started.
                   </td>
                 </tr>
@@ -281,6 +399,7 @@ export default function AlertsPage() {
                 rules.map((rule) => (
                   <tr key={rule.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
                     <td className="py-2.5 px-3 font-medium">{rule.name}</td>
+                    <td className="py-2.5 px-3 text-xs text-muted-foreground">{rule.site_name || "\u2014"}</td>
                     <td className="py-2.5 px-3">
                       <span className={cn("px-2 py-0.5 rounded-full text-[11px] font-medium border", SEVERITY_COLORS[rule.severity] || "")}>
                         {rule.severity}
@@ -386,20 +505,32 @@ export default function AlertsPage() {
             <div className="p-6 space-y-4">
               <h2 className="text-lg font-bold">{editingRule ? "Edit Rule" : "Create Alert Rule"}</h2>
 
-              {/* Name */}
-              <div>
-                <label className="text-xs font-medium">Rule Name</label>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                  placeholder="e.g. High CPU Alert"
-                />
+              {/* Name + Site */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium">Rule Name</label>
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    placeholder="e.g. High CPU Alert"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium">Site Name</label>
+                  <input
+                    type="text"
+                    value={form.site_name}
+                    onChange={(e) => setForm({ ...form, site_name: e.target.value })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1 font-mono"
+                    placeholder="DC, DRC, Office"
+                  />
+                </div>
               </div>
 
-              {/* Severity + Data Source */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Severity + Kind + Data Source */}
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="text-xs font-medium">Severity</label>
                   <select
@@ -408,6 +539,17 @@ export default function AlertsPage() {
                     className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                   >
                     {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium">Kind</label>
+                  <select
+                    value={form.kind}
+                    onChange={(e) => setForm({ ...form, kind: e.target.value as "single" | "composite" })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  >
+                    <option value="single">Single</option>
+                    <option value="composite">Composite</option>
                   </select>
                 </div>
                 <div>

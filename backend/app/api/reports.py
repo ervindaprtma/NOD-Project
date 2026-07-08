@@ -311,45 +311,33 @@ async def _distribute_report_background(
     Background task: distribute report to all requested channels.
     """
     import logging
-    from pathlib import Path
-    from app.services.notifiers.email import send_email_with_attachment
-    from app.services.notifiers.telegram import send_telegram_document
-    from app.services.notifiers.discord import send_discord_file
-    from app.services.notifiers.whatsapp import send_whatsapp_document
+    from app.services.notifiers import DOCUMENT_DISPATCH
 
     logger = logging.getLogger(__name__)
-    fname = Path(file_path).name
     caption = f"NOD Report — {job_id[:8]} ({output_format.upper()})"
+    body_text = f"Please find attached the requested report (format: {output_format})."
+    discord_msg = f"📊 **NOD Report** — Job `{job_id[:8]}`"
 
-    results = {}
-
-    if "email" in channels:
-        results["email"] = await send_email_with_attachment(
-            subject=f"NOD Report {job_id[:8]}",
-            body=f"Please find attached the requested report (format: {output_format}).",
-            file_path=file_path,
-            recipient=recipient_email,
+    results: dict[str, bool] = {}
+    if "email" in channels and "email" in DOCUMENT_DISPATCH:
+        results["email"] = await DOCUMENT_DISPATCH["email"](
+            subject=f"NOD Report {job_id[:8]}", body=body_text,
+            file_path=file_path, recipient=recipient_email,
         )
-
-    if "telegram" in channels:
-        results["telegram"] = await send_telegram_document(
-            file_path=file_path, caption=caption
+    if "telegram" in channels and "telegram" in DOCUMENT_DISPATCH:
+        results["telegram"] = await DOCUMENT_DISPATCH["telegram"](
+            file_path=file_path, caption=caption,
         )
-
-    if "discord" in channels:
-        results["discord"] = await send_discord_file(
-            file_path=file_path, message=f"📊 **NOD Report** — Job `{job_id[:8]}`"
+    if "discord" in channels and "discord" in DOCUMENT_DISPATCH:
+        results["discord"] = await DOCUMENT_DISPATCH["discord"](
+            file_path=file_path, message=discord_msg,
         )
-
-    if "whatsapp" in channels:
-        results["whatsapp"] = await send_whatsapp_document(
-            file_path=file_path,
-            caption=caption,
-            recipient_phone=recipient_phone,
+    if "whatsapp" in channels and "whatsapp" in DOCUMENT_DISPATCH:
+        results["whatsapp"] = await DOCUMENT_DISPATCH["whatsapp"](
+            file_path=file_path, caption=caption, recipient_phone=recipient_phone,
         )
 
     logger.info(f"Report {job_id} distribution results: {results}")
-
     return results
 
 

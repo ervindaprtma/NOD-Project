@@ -1,12 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import useSWR from "swr";
-import { swrFetcher, getAccessToken, apiFetch, hasMinRole } from "@/lib/api";
+import { swrFetcher, getAccessToken, apiFetch, hasMinRole, getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const ROLES = ["viewer", "operator", "admin", "superadmin"] as const;
 type Role = (typeof ROLES)[number];
+
+// Must stay in sync with backend/app/schemas/user.py::_validate_password_complexity
+const SPECIAL_CHARS = "@$!%*?&^#()_+=-{}[]:;\"'<>,.?/~`|\\";
+function validatePasswordComplexity(pw: string): string | null {
+  if (pw.length < 8) return "Password must be at least 8 characters.";
+  if (!/[a-z]/.test(pw)) return "Password must contain at least one lowercase letter.";
+  if (!/[A-Z]/.test(pw)) return "Password must contain at least one uppercase letter.";
+  if (!/\d/.test(pw)) return "Password must contain at least one digit.";
+  if (!new RegExp(`[${SPECIAL_CHARS.replace(/[\\\]\-]/g, "\\$&")}]`).test(pw))
+    return "Password must contain at least one special character.";
+  return null;
+}
 
 interface UserRecord {
   id: string;
@@ -45,16 +57,22 @@ export default function UsersPage() {
   const token = typeof window !== "undefined" ? getAccessToken() : null;
   const swrKey = token ? "/api/v1/users?limit=100" : null;
 
-  const { data, error, isLoading, mutate } = useSWR<{ data: { users: UserRecord[]; total: number }; meta: any }>(
+  const { data, error, isLoading, mutate } = useSWR<{ data: { users: UserRecord[]; total: number } }>(
     swrKey,
     swrFetcher
   );
 
   const [showCreate, setShowCreate] = useState(false);
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
-  const [actionError, setActionError] = useState("");
-  const [actionSuccess, setActionSuccess] = useState("");
+  const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
   const [showSessions, setShowSessions] = useState(false);
+
+  // Auto-dismiss toast after 5s (matches Settings/Distribute pattern)
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   const users = data?.data?.users || [];
 
@@ -67,7 +85,7 @@ export default function UsersPage() {
 
   async function handleToggleActive(user: UserRecord) {
     if (user.role === "superadmin") {
-      setActionError("Cannot deactivate superadmin account.");
+      setToast({ ok: false, msg: `Cannot ${user.is_active ? "deactivate" : "activate"} superadmin account.` });
       return;
     }
     try {
@@ -76,26 +94,31 @@ export default function UsersPage() {
         body: JSON.stringify({ is_active: !user.is_active }),
       });
       mutate();
-    } catch (err: any) {
-      setActionError(err?.message || "Failed to update user.");
+      setToast({
+        ok: true,
+        msg: `User ${user.username} ${user.is_active ? "deactivated" : "activated"} successfully.`,
+      });
+    } catch (err: unknown) {
+      setToast({ ok: false, msg: getErrorMessage(err, "Failed to update user.") });
     }
   }
 
   async function handleDelete(user: UserRecord) {
     if (user.role === "superadmin") {
-      setActionError("Cannot delete superadmin account.");
+      setToast({ ok: false, msg: "Cannot delete superadmin account." });
       return;
     }
     if (!confirm(`PERMANENTLY DELETE user "${user.username}"?\n\nThis action cannot be undone.`)) return;
     try {
       await apiFetch(`/api/v1/users/${user.id}`, { method: "DELETE" });
       mutate();
-    } catch (err: any) {
-      setActionError(err?.message || "Failed to delete user.");
+      setToast({ ok: true, msg: `User ${user.username} deleted permanently.` });
+    } catch (err: unknown) {
+      setToast({ ok: false, msg: getErrorMessage(err, "Failed to delete user.") });
     }
   }
 
-  async function handleRevokeSession(userId: string, jti?: string) {
+  async function handleRevokeSession(userId: string, username: string, jti?: string) {
     const confirmed = window.confirm(
       jti ? "Revoke this session?" : "Revoke ALL active sessions for this user?"
     );
@@ -113,11 +136,15 @@ export default function UsersPage() {
           body: JSON.stringify({ revoke_all: true }),
         });
       }
-      setActionSuccess("Session revoked successfully.");
-      setTimeout(() => setActionSuccess(""), 3000);
+      setToast({
+        ok: true,
+        msg: jti
+          ? `Session for ${username} revoked.`
+          : `All sessions for ${username} revoked.`,
+      });
       mutate();
-    } catch (err: any) {
-      setActionError(err?.message || "Failed to revoke session.");
+    } catch (err: unknown) {
+      setToast({ ok: false, msg: getErrorMessage(err, "Failed to revoke session.") });
     }
   }
 
@@ -136,20 +163,6 @@ export default function UsersPage() {
       {error && (
         <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-sm">
           Failed to load users. You may not have admin privileges.
-        </div>
-      )}
-
-      {actionError && (
-        <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-xs flex items-center justify-between">
-          <span>{actionError}</span>
-          <button onClick={() => setActionError("")} className="text-muted-foreground hover:text-foreground">✕</button>
-        </div>
-      )}
-
-      {actionSuccess && (
-        <div className="p-3 rounded-lg bg-green-500/10 text-green-600 text-xs flex items-center justify-between">
-          <span>{actionSuccess}</span>
-          <button onClick={() => setActionSuccess("")} className="text-muted-foreground hover:text-foreground">✕</button>
         </div>
       )}
 
@@ -335,7 +348,7 @@ export default function UsersPage() {
                               <td className="py-2 px-4 text-right">
                                 {sess.is_valid && (
                                   <button
-                                    onClick={() => handleRevokeSession(su.user_id, sess.jti)}
+                                    onClick={() => handleRevokeSession(su.user_id, su.username, sess.jti)}
                                     className="px-2 py-1 text-xs border border-red-300 text-red-600 rounded-md hover:bg-red-50 dark:hover:bg-red-950/20"
                                   >
                                     Revoke
@@ -383,7 +396,12 @@ export default function UsersPage() {
         <UserFormModal
           mode="create"
           onClose={() => setShowCreate(false)}
-          onSuccess={() => { setShowCreate(false); mutate(); }}
+          onSuccess={() => {
+            setShowCreate(false);
+            mutate();
+            setToast({ ok: true, msg: "User created successfully." });
+          }}
+          onToast={setToast}
         />
       )}
 
@@ -393,8 +411,31 @@ export default function UsersPage() {
           mode="edit"
           user={editingUser}
           onClose={() => setEditingUser(null)}
-          onSuccess={() => { setEditingUser(null); mutate(); }}
+          onSuccess={() => {
+            setEditingUser(null);
+            mutate();
+            setToast({ ok: true, msg: `User ${editingUser.username} updated successfully.` });
+          }}
+          onToast={setToast}
         />
+      )}
+
+      {/* ── Status Toast (Settings/Distribute pattern) ───────── */}
+      {toast && (
+        <div
+          className={cn(
+            "fixed bottom-4 right-4 z-50 max-w-sm px-4 py-3 rounded-lg shadow-lg text-sm flex items-center gap-3",
+            toast.ok
+              ? "bg-green-50 border border-green-200 text-green-800 dark:bg-green-950 dark:border-green-800 dark:text-green-200"
+              : "bg-red-50 border border-red-200 text-red-800 dark:bg-red-950 dark:border-red-800 dark:text-red-200"
+          )}
+        >
+          <span>{toast.ok ? "✅" : "❌"}</span>
+          <span className="flex-1">{toast.msg}</span>
+          <button onClick={() => setToast(null)} className="font-bold hover:opacity-70">
+            ×
+          </button>
+        </div>
       )}
     </div>
   );
@@ -423,11 +464,13 @@ function UserFormModal({
   user,
   onClose,
   onSuccess,
+  onToast,
 }: {
   mode: "create" | "edit";
   user?: UserRecord;
   onClose: () => void;
   onSuccess: () => void;
+  onToast: (t: { ok: boolean; msg: string }) => void;
 }) {
   const [username, setUsername] = useState(user?.username || "");
   const [email, setEmail] = useState(user?.email || "");
@@ -441,9 +484,16 @@ function UserFormModal({
     e.preventDefault();
     setError("");
 
-    if (mode === "create" && password.length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
+    if (mode === "create") {
+      // Match the backend's _validate_password_complexity rules so users
+      // see the exact error before the request is sent (faster + clearer
+      // than waiting for a 422 round-trip).
+      const pwError = validatePasswordComplexity(password);
+      if (pwError) {
+        setError(pwError);
+        onToast({ ok: false, msg: pwError });
+        return;
+      }
     }
 
     setLoading(true);
@@ -461,8 +511,10 @@ function UserFormModal({
         });
       }
       onSuccess();
-    } catch (err: any) {
-      setError(err?.message || "Operation failed.");
+    } catch (err: unknown) {
+      const msg = getErrorMessage(err, "Operation failed.");
+      setError(msg);
+      onToast({ ok: false, msg });
     } finally {
       setLoading(false);
     }
@@ -533,8 +585,12 @@ function UserFormModal({
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
+                aria-describedby="password-hint"
                 className="w-full px-3 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
               />
+              <p id="password-hint" className="text-[11px] text-muted-foreground mt-1">
+                Min 8 characters with uppercase, lowercase, digit, and special character.
+              </p>
             </div>
           )}
           <div className="flex gap-2 justify-end pt-2">

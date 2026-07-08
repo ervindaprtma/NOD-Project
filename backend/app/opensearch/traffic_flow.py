@@ -7,7 +7,7 @@ Routes: DC→dc cluster, DRC+Office→drc cluster
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Optional
+from typing import Any, Optional
 
 from opensearchpy import AsyncOpenSearch
 
@@ -171,8 +171,9 @@ async def flow_summary(
     resp = await safe_search(client, FLOW_INDEX, body)
     aggs = resp["aggregations"]
 
-    def _buckets(agg_name: str) -> list[dict]:
-        return aggs.get(agg_name, {}).get("buckets", [])
+    def _buckets(agg_name: str) -> list[dict[str, Any]]:
+        buckets: list[dict[str, Any]] = aggs.get(agg_name, {}).get("buckets", [])
+        return buckets
 
     def _merge_filter_buckets(upload_agg: str, download_agg: str, inner_agg: str) -> list[dict]:
         merged: dict[str, int] = {}
@@ -272,7 +273,7 @@ async def flow_chart(
     app_totals: dict[str, int] = {}
     chart_data = []
     for bucket in result["buckets"]:
-        row: dict[str, any] = {"timestamp": bucket["key_as_string"], "timestampMs": bucket["key"]}
+        row: dict[str, Any] = {"timestamp": bucket["key_as_string"], "timestampMs": bucket["key"]}
         for app_bucket in bucket["top_apps"]["buckets"]:
             app_name = app_bucket["key"]
             app_bytes = int(app_bucket["total_bytes"]["value"])
@@ -314,7 +315,6 @@ async def sankey_data(
             {"egress": {"terms": {"field": "flow.out.netif.name"}}},
         ]
         level_names = ["src_as", "ingress", "app", "egress"]
-        level_labels = {0: "Src AS Org", 1: "Ingress", 2: "Apps", 3: "Egress"}
     else:
         # Upload: Ingress → Apps → Egress → Dst AS Org
         sources = [
@@ -324,7 +324,6 @@ async def sankey_data(
             {"as_org": {"terms": {"field": "flow.dst.as.org"}}},
         ]
         level_names = ["ingress", "app", "egress", "as_org"]
-        level_labels = {0: "Ingress", 1: "Apps", 2: "Egress", 3: "Dst AS Org"}
 
     body = {
         "size": 0,

@@ -5,7 +5,6 @@ Q-03: _source includes only required fields.
 """
 from __future__ import annotations
 
-from typing import Optional
 from opensearchpy import AsyncOpenSearch
 from app.opensearch.client import get_ipsec_client
 
@@ -47,7 +46,8 @@ async def active_ipsec_users_count(
     }
 
     resp = await client.search(index="ipsec-*", body=body)
-    return resp["aggregations"]["active_users"]["value"]
+    value: int = resp["aggregations"]["active_users"]["value"]
+    return int(value)
 
 
 async def active_ipsec_users_count_timeline(

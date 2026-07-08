@@ -193,14 +193,34 @@ export async function apiFetch<T = unknown>(
     }
   }
 
-  const json = await resp.json();
-
-  if (!resp.ok || !json.success) {
+  // Safely parse JSON — non-JSON 5xx responses (e.g. plain text from
+  // uvicorn's default error handler) must not crash the client with
+  // "Unexpected token" SyntaxErrors. Treat as a generic error.
+  let json: any;
+  try {
+    json = await resp.json();
+  } catch {
     throw new ApiError(
       resp.status,
-      json.error?.code || "UNKNOWN_ERROR",
-      json.error?.message || "An error occurred"
+      "INVALID_RESPONSE",
+      `Server returned non-JSON response (status ${resp.status})`
     );
+  }
+
+  if (!resp.ok || !json.success) {
+    // FastAPI 422 validation errors come back as { detail: [{loc, msg, type, ...}] }
+    // instead of the project's { error: { code, message } } shape. Surface the
+    // first validation message so the user sees *why* it was rejected, not a
+    // generic "An error occurred".
+    let code = json.error?.code || "UNKNOWN_ERROR";
+    let message = json.error?.message || "An error occurred";
+    if (Array.isArray(json.detail) && json.detail.length > 0) {
+      const first = json.detail[0];
+      const loc = Array.isArray(first.loc) ? first.loc.filter((p: any) => p !== "body").join(".") : "";
+      message = loc ? `${loc}: ${first.msg}` : first.msg || message;
+      code = first.type?.toUpperCase() || code;
+    }
+    throw new ApiError(resp.status, code, message);
   }
 
   return json as T;
@@ -211,6 +231,13 @@ export const swrFetcher = <T = unknown>(url: string) => apiFetch<T>(url);
 
 export { ApiError };
 export default apiFetch;
+
+/** Safely extract a human-readable message from an unknown catch value. */
+export function getErrorMessage(err: unknown, fallback = "Unknown error"): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return fallback;
+}
 
 /** Decode JWT payload to extract user role (without verifying signature — for UI gating only). */
 export function getUserRole(): string | null {

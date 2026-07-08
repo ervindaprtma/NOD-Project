@@ -19,7 +19,7 @@ import type {
   TrafficFlowChartData,
   TrafficFlowTableData,
   TrafficFlowTableRecord,
-  SankeyResponse,
+  SankeyResponse, SankeyNodeExt, SankeyLinkExt,
 } from "@/types";
 import TimeRangePicker, {
   type CustomTimeRange,
@@ -652,7 +652,7 @@ function SankeyView({ data, loading, error }: {
     const width = 800;
     const height = 400;
 
-    const sankey = (d3Sankey as any).sankey()
+    const sankey = d3Sankey.sankey<any, SankeyNodeExt, SankeyLinkExt>()
       .nodeWidth(20)
       .nodePadding(16)
       .extent([[8, 8], [width - 8, height - 8]])
@@ -683,8 +683,8 @@ function SankeyView({ data, loading, error }: {
 
     const linkPath = d3Sankey.sankeyLinkHorizontal();
     for (const link of graph.links) {
-      const srcNode = (link as any).source as SankeyNodeExt;
-      const tgtNode = (link as any).target as SankeyNodeExt;
+      const srcNode = (link as SankeyLinkExt).source as unknown as SankeyNodeExt;
+      const tgtNode = (link as SankeyLinkExt).target as unknown as SankeyNodeExt;
       if (!srcNode || !tgtNode) continue;
 
       const g = ce("g");

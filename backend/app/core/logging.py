@@ -8,7 +8,6 @@ import logging
 import sys
 from logging.handlers import RotatingFileHandler, SysLogHandler
 from pathlib import Path
-from uuid import uuid4
 
 from pythonjsonlogger import jsonlogger
 

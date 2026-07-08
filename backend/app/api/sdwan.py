@@ -19,7 +19,6 @@ from app.schemas.sdwan_resource_vpn import (
     SiteSLAStatus,
     LinkCurrentStatus,
     LinkMetricPoint,
-    SITE_LINK_LABELS,
 )
 
 settings = get_settings()

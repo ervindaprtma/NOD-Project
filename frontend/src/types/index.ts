@@ -301,6 +301,10 @@ export interface AlertRule {
   id: string;
   name: string;
   severity: "INFO" | "WARNING" | "CRITICAL";
+  kind: "single" | "composite";
+  notify_when: "any" | "all";
+  clauses: Record<string, unknown>[];
+  template_id: string | null;
   data_source: string;
   metric_field: string;
   aggregation: string;
@@ -309,9 +313,52 @@ export interface AlertRule {
   evaluation_window_minutes: number;
   sustained_for_minutes: number;
   notify_channels: string[];
+  site_name: string | null;
   enabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// ── Alert Templates (v3 §3.12) ─────────────────────────────────
+
+export interface AlertTemplate {
+  id: string;
+  name: string;
+  category: string;
+  icon: string;
+  description: string;
+  underlying_kind: string;
+  locked_fields: Record<string, unknown>;
+  exposed_fields: string[];
+  is_user_created: boolean;
+  created_at: string;
+}
+
+// ── Notification Configs (v3 §3.13) ─────────────────────────────
+
+export type NotificationChannelName = "telegram" | "email" | "whatsapp";
+
+export interface NotificationChannelRead {
+  channel: NotificationChannelName;
+  enabled: boolean;
+  min_severity: string;
+  config: Record<string, unknown>;   // masked on GET
+  recipients: Record<string, unknown> | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Maintenance Windows (v3 §3.14) ──────────────────────────────
+
+export interface MaintenanceWindow {
+  id: string;
+  site_name: string;
+  starts_at: string;
+  ends_at: string;
+  reason: string;
+  created_by: string | null;
+  created_at: string;
 }
 
 // ── Notifications ──────────────────────────────────────────────
@@ -365,6 +412,21 @@ export const TIME_PRESETS: TimeRange[] = [
 export interface SankeyNode { id: number; label: string; level: number; }
 export interface SankeyLink { source: number; target: number; value: number; }
 export interface SankeyResponse { nodes: SankeyNode[]; links: SankeyLink[]; }
+
+/** Sankey node with layout-computed properties (after sankey.layout()). */
+export interface SankeyNodeExt extends SankeyNode {
+  x0?: number; x1?: number; y0?: number; y1?: number;
+  value?: number; index?: number; depth?: number; height?: number;
+  sourceLinks?: Array<SankeyLinkExt>;
+  targetLinks?: Array<SankeyLinkExt>;
+}
+
+/** Sankey link with layout-computed properties (after sankey.layout()). */
+export interface SankeyLinkExt extends Omit<SankeyLink, "source" | "target"> {
+  width?: number; y0?: number; y1?: number; index?: number;
+  source: SankeyNodeExt | number;
+  target: SankeyNodeExt | number;
+}
 
 // ── Traffic Inbound v2.0 ──────────────────────────────────────────
 

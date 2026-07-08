@@ -115,6 +115,18 @@ class AlertRule(Base):
     severity: Mapped[str] = mapped_column(
         String(20), nullable=False
     )  # INFO, WARNING, CRITICAL
+    kind: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="single", server_default=text("'single'")
+    )  # single | composite (P5)
+    notify_when: Mapped[str] = mapped_column(
+        String(4), nullable=False, default="any", server_default=text("'any'")
+    )  # any | all (composite rule combination logic, P5)
+    notification_mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="stateful", server_default=text("'stateful'")
+    )  # stateful | peak_only (§11.4)
+    renotify_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )  # whether to re-notify while still firing (§11.4)
     data_source: Mapped[str] = mapped_column(
         String(20), nullable=False
     )  # appid_flow, sdwan_sla, ha_resource, vpn_ssl, vpn_ipsec
@@ -129,8 +141,15 @@ class AlertRule(Base):
     evaluation_window_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     sustained_for_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     notify_channels: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    clauses: Mapped[list[dict]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment="Composite rule clauses (P5). List of {\"data_source\", \"metric_field\", ...} dicts.",
+    )
     template_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), ForeignKey("alert_templates.id", ondelete="SET NULL"), nullable=True
+    )
+    notification_template_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("notification_templates.id", ondelete="SET NULL"), nullable=True
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     site_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
@@ -148,23 +167,92 @@ class AlertRule(Base):
     )
 
     template: Mapped[Optional["AlertTemplate"]] = relationship(back_populates="rules")
+    notification_template: Mapped[Optional["NotificationTemplate"]] = relationship(back_populates="rules")
 
 
 class AlertTemplate(Base):
+    """Pre-built rule templates for non-technical users (v3 §3.12).
+
+    A template hardcodes locked_fields (data_source, threshold, etc.) and
+    exposes only a few fields (e.g. threshold_value) via exposed_fields.
+    This allows non-technical users to create rules by picking a template
+    and filling in a few values, without needing to understand data sources
+    or aggregation functions.
+    """
     __tablename__ = "alert_templates"
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=_new_uuid
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    subject_template: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="performance", index=True
+    )  # availability, performance, security, capacity
+    icon: Mapped[str] = mapped_column(String(4), nullable=False, default="📊")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    subject_template: Mapped[str] = mapped_column(Text, nullable=False, default="Alert: {{ name }}")
     body_template: Mapped[str] = mapped_column(Text, nullable=False)
+    underlying_kind: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="single"
+    )  # single | composite
+    locked_fields: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict,
+        comment="Fields hardcoded by this template (data_source, metric_field, etc.)"
+    )
+    exposed_fields: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment="Fields the user can set (e.g. ['threshold_value', 'site_name'])"
+    )
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_user_created: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    default_notification_mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="stateful", server_default=text("'stateful'")
+    )  # stateful | peak_only
+    locks_notification_mode: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )  # whether to lock mode for this template
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
 
     rules: Mapped[list["AlertRule"]] = relationship(back_populates="template")
+
+
+class NotificationTemplate(Base):
+    """Message-format templates for alert notifications (§11.1).
+
+    Split from AlertTemplate — this owns subject/body/line templates only.
+    Rule-shape templates (data_source, metric_field, etc.) stay in AlertTemplate.
+    """
+    __tablename__ = "notification_templates"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    subject_template: Mapped[str] = mapped_column(
+        Text, nullable=False, default="Alert: {{ rule.name }}"
+    )
+    body_template: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    line_template: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_user_created: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("now()"),
+        onupdate=_utcnow,
+        nullable=False,
+    )
+
+    rules: Mapped[list["AlertRule"]] = relationship(back_populates="notification_template")
 
 
 class AlertLog(Base):
@@ -209,6 +297,82 @@ class AlertState(Base):
     )
     last_notified_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("now()"),
+        onupdate=_utcnow,
+        nullable=False,
+    )
+
+
+class AlertFieldCatalog(Base):
+    """Field catalog for guided rule creation (§11.2).
+
+    Single source of truth for data_source, field_key, units, and valid
+    aggregations/conditions. Used by Field Reference tab and template-driven
+    rule creation.
+    """
+    __tablename__ = "alert_field_catalog"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    data_source: Mapped[str] = mapped_column(
+        String(20), nullable=False, index=True
+    )  # ha_resource, sdwan_sla, vpn_ssl, vpn_ipsec, appid_flow
+    field_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    unit: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    category: Mapped[str] = mapped_column(
+        String(10), nullable=False
+    )  # state | traffic
+    valid_aggregations: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list
+    )  # e.g. ["avg", "max"]
+    valid_conditions: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list
+    )  # e.g. [">", "<", ">=", "<="]
+    example_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("data_source", "field_key", name="uq_field_catalog"),
+    )
+
+
+class NotificationConfig(Base):
+    """Configurations → Notifications (v3 §3.13).
+
+    Encrypted credentials for WhatsApp/Telegram/SMTP notification channels.
+    Secrets are encrypted at rest via Fernet (core/security.py).
+    GET returns masked values; only an explicit PUT with new values changes them.
+    """
+    __tablename__ = "notification_configs"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    channel: Mapped[str] = mapped_column(
+        String(20), unique=True, nullable=False, index=True
+    )  # whatsapp, telegram, smtp
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    min_severity: Mapped[str] = mapped_column(
+        String(20), default="CRITICAL", nullable=False
+    )  # INFO, WARNING, CRITICAL
+    config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict,
+        comment="Encrypted credentials + plaintext metadata"
+    )
+    recipients: Mapped[Optional[dict]] = mapped_column(
+        JSONB, nullable=True,
+        comment="Optional per-group routing (e.g. DC alerts → DC group)"
+    )
+    updated_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -388,6 +552,35 @@ class UserPinnedWidget(Base):
     )
     widget_id: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g. P01-A, TF-01
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+class MaintenanceWindow(Base):
+    """Planned maintenance window suppressing alerts for a site (v3 §3.14).
+
+    During the window, alert rules matching the site are NOT evaluated —
+    they're skipped silently (no FIRING, no RESOLVED).
+    """
+    __tablename__ = "maintenance_windows"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    site_name: Mapped[str] = mapped_column(
+        String(128), nullable=False, index=True
+    )
+    starts_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    ends_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )

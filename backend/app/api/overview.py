@@ -10,20 +10,16 @@ returns empty data on failure rather than 500.
 from __future__ import annotations
 
 import time
-import math
 import asyncio
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
 from app.api._safe import safe_query
 from app.core.config import get_settings
-from app.db.session import get_db, AsyncSessionLocal
-from app.opensearch import appid as appid_qb
+from app.db.session import AsyncSessionLocal
 from app.opensearch import ha as ha_qb
 from app.opensearch import ipsec as ipsec_qb
 from app.opensearch import sdwan as sdwan_qb

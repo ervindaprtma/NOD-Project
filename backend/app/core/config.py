@@ -19,9 +19,6 @@ class Settings(BaseSettings):
     )
 
     # ── Service ports ──────────────────────────────────────────
-    NGINX_PORT: int = 80
-    FRONTEND_PORT: int = 3000
-    BACKEND_PORT: int = 8000
     POSTGRES_PORT: int = 5432
 
     # ── Frontend ───────────────────────────────────────────────
@@ -119,11 +116,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_LOGIN_WINDOW: str = "minute"
     RATE_LIMIT_REFRESH_REQUESTS: int = 20
     RATE_LIMIT_REFRESH_WINDOW: str = "minute"
-    RATE_LIMIT_WEBSOCKET_CONNECTIONS: int = 5
 
     # ── App config ──────────────────────────────────────────────
     ENVIRONMENT: str = "production"  # set "development" to enable /api/docs
-    METRICS_ENABLED: bool = False
 
 
 @lru_cache()

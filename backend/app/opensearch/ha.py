@@ -5,8 +5,6 @@ Q-01: ALL queries include @timestamp range filter with gte/lte.
 """
 from __future__ import annotations
 
-import time
-from typing import Optional
 
 from opensearchpy import AsyncOpenSearch
 
@@ -319,7 +317,6 @@ async def ha_cluster_status(site_name: str = "Site_FGT-DC") -> dict:
     members: list[dict] = []
     for idx, (hostname, src) in enumerate(members_by_hostname.items()):
         ha_member_data = src.get("ha_member", {})
-        tag_data = src.get("tag", {})
 
         sync_val = ha_member_data.get("sync_status")
         sync_status = "in-sync" if sync_val == 1 else "out-of-sync"

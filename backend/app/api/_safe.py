@@ -8,7 +8,7 @@ result on error so frontend can show "No data" gracefully.
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 logger = logging.getLogger("nod.api")
 

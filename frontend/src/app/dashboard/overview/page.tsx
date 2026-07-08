@@ -6,7 +6,7 @@ import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, formatNumber, getDefaultTimeRange } from "@/lib/constants";
-import type { OverviewData, TopASOrg, WanInterfaceSummary, SiteWanBandwidth, ResourceData } from "@/types";
+import type { OverviewData, TopASOrg, WanInterfaceSummary, SiteWanBandwidth, ResourceData, TrafficFlowSummary, TrafficInboundSummary } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"] as const;
@@ -72,7 +72,7 @@ export default function OverviewPage() {
   const swrKey = token
     ? `/api/v1/overview?gte_ms=${currentGteMs}&lte_ms=${currentLteMs}`
     : null;
-  const { data, error, isLoading } = useSWR<{ data: OverviewData; meta: any }>(
+  const { data, error, isLoading } = useSWR<{ data: OverviewData }>(
     swrKey, swrFetcher, { refreshInterval: 0 }
   );
   const overview = data?.data;
@@ -81,9 +81,9 @@ export default function OverviewPage() {
   const siteKeys = SITES.map(s =>
     token ? `/api/v1/traffic-flow/summary?site_name=${s}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&path_filter=internet` : null
   );
-  const { data: siteData0 } = useSWR<{ data: any }>(siteKeys[0], swrFetcher, { refreshInterval: 0 });
-  const { data: siteData1 } = useSWR<{ data: any }>(siteKeys[1], swrFetcher, { refreshInterval: 0 });
-  const { data: siteData2 } = useSWR<{ data: any }>(siteKeys[2], swrFetcher, { refreshInterval: 0 });
+  const { data: siteData0 } = useSWR<{ data: TrafficFlowSummary }>(siteKeys[0], swrFetcher, { refreshInterval: 0 });
+  const { data: siteData1 } = useSWR<{ data: TrafficFlowSummary }>(siteKeys[1], swrFetcher, { refreshInterval: 0 });
+  const { data: siteData2 } = useSWR<{ data: TrafficFlowSummary }>(siteKeys[2], swrFetcher, { refreshInterval: 0 });
   const siteDatas = [siteData0, siteData1, siteData2];
 
   // ── Per-site Device Health ──
@@ -100,8 +100,8 @@ export default function OverviewPage() {
   const inbKeys = inboundSites.map(s =>
     token ? `/api/v1/traffic-inbound/summary?site_name=${s}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}` : null
   );
-  const { data: inbData0 } = useSWR<{ data: any }>(inbKeys[0], swrFetcher, { refreshInterval: 0 });
-  const { data: inbData1 } = useSWR<{ data: any }>(inbKeys[1], swrFetcher, { refreshInterval: 0 });
+  const { data: inbData0 } = useSWR<{ data: TrafficInboundSummary }>(inbKeys[0], swrFetcher, { refreshInterval: 0 });
+  const { data: inbData1 } = useSWR<{ data: TrafficInboundSummary }>(inbKeys[1], swrFetcher, { refreshInterval: 0 });
   const inbDatas = [inbData0, inbData1];
 
   function selectPreset(preset: typeof TIME_PRESETS[0]) {
@@ -371,7 +371,7 @@ export default function OverviewPage() {
               if (items.length === 0) return <EmptyText />;
               return (
                 <div className="space-y-1.5">
-                  {items.filter((a: any) => a.app_name !== "app-0").slice(0, 7).map((app: any, i: number) => (
+                  {items.filter((a) => a.app_name !== "app-0").slice(0, 7).map((app, i) => (
                     <BarRow key={app.app_name || i} rank={i + 1} label={app.app_name} bytes={app.total_bytes} bytesHuman={formatBytes(app.total_bytes)}
                       max={items[0]?.total_bytes || 1} color="bg-primary" />
                   ))}

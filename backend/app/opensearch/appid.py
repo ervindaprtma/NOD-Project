@@ -8,7 +8,7 @@ ALL queries comply with Q-01 through Q-08 mandates.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from opensearchpy import AsyncOpenSearch
 from app.opensearch.client import get_drc_client
@@ -593,10 +593,11 @@ async def raw_flows(
         "flow.out.netif.alias",
         "flow.correlation_id",
         "flow.correlation_direction",
+        "flow.traffic.path",
     ]
 
     must_filters = [_time_range(gte_ms, lte_ms), _tf_site_filter(site_name)]
-    must_not_filters = [_exclude_app0(), _exclude_private_as()]
+    must_not_filters: list[dict[str, Any]] = []
 
     # Apply traffic path filter (internet, inter-site, intra-lan)
     if path_filter and path_filter != "all":
@@ -613,9 +614,11 @@ async def raw_flows(
     # Apply additional filters
     if filters:
         if "client_ip" in filters and filters["client_ip"]:
-            must_filters.append({"term": {"flow.client.ip.addr": filters["client_ip"]}})
+            vals = filters["client_ip"] if isinstance(filters["client_ip"], list) else [filters["client_ip"]]
+            must_filters.append({"terms": {"flow.client.ip.addr": vals}})
         if "server_ip" in filters and filters["server_ip"]:
-            must_filters.append({"term": {"flow.server.ip.addr": filters["server_ip"]}})
+            vals = filters["server_ip"] if isinstance(filters["server_ip"], list) else [filters["server_ip"]]
+            must_filters.append({"terms": {"flow.server.ip.addr": vals}})
         if "application" in filters and filters["application"]:
             must_filters.append({"terms": {"flow.application.name": filters["application"]}})
         if "category" in filters and filters["category"]:
@@ -623,11 +626,14 @@ async def raw_flows(
         if "protocol" in filters and filters["protocol"]:
             must_filters.append({"terms": {"l4.proto.name": filters["protocol"]}})
         if "dst_port" in filters and filters["dst_port"]:
-            must_filters.append({"term": {"flow.dst.l4.port.id": filters["dst_port"]}})
+            vals = filters["dst_port"] if isinstance(filters["dst_port"], list) else [filters["dst_port"]]
+            must_filters.append({"terms": {"flow.dst.l4.port.id": vals}})
         if "ingress_zone" in filters and filters["ingress_zone"]:
             must_filters.append({"terms": {"flow.in.netif.alias": filters["ingress_zone"]}})
         if "egress_link" in filters and filters["egress_link"]:
             must_filters.append({"terms": {"flow.out.netif.alias": filters["egress_link"]}})
+        if "correlation_id" in filters and filters["correlation_id"]:
+            must_filters.append({"terms": {"flow.correlation_id": filters["correlation_id"]}})
 
     # Sort — always include _id as tiebreaker
     sort_field = sort_by if sort_by else "@timestamp"
@@ -674,6 +680,7 @@ async def raw_flows(
             "egress_link": src.get("flow.out.netif.alias", ""),
             "correlation_id": src.get("flow.correlation_id", ""),
             "correlation_direction": src.get("flow.correlation_direction", ""),
+            "path": src.get("flow.traffic.path", ""),
         })
 
     next_search_after = hits[-1]["sort"] if hits else None

@@ -11,10 +11,11 @@ from __future__ import annotations
 import time
 import json
 import logging
-from typing import Optional, Any
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
+from app.api._safe import safe_query
 from app.api.auth import get_current_user
 from app.opensearch import traffic_flow as tf_qb
 from app.schemas.common import APIResponse, Meta
@@ -25,21 +26,6 @@ from app.schemas.traffic_flow import (
 
 logger = logging.getLogger("nod.api.traffic_flow")
 router = APIRouter(prefix="/api/v1/traffic-flow", tags=["Traffic Flow"])
-
-
-# ─────────────────────────────────────────────────────────────────
-# Safe wrapper — returns empty result on OpenSearch error/timeout
-# ─────────────────────────────────────────────────────────────────
-
-async def _safe_query(fn_name: str, **kwargs):
-    """Run a query function with error handling.
-    Returns (data_dict, error_string). data_dict is None on error."""
-    fn = getattr(tf_qb, fn_name)
-    try:
-        return await fn(**kwargs), None
-    except Exception as e:
-        logger.error(f"{fn_name} failed: {type(e).__name__}: {e}")
-        return None, str(e)
 
 
 @router.get("/summary", response_model=APIResponse[TrafficSummaryResponse])
@@ -58,8 +44,8 @@ async def traffic_flow_summary(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
-    data, err = await _safe_query(
-        "flow_summary",
+    data, err = await safe_query(
+        tf_qb.flow_summary,
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
@@ -96,8 +82,8 @@ async def traffic_flow_chart(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
-    data, err = await _safe_query(
-        "flow_chart",
+    data, err = await safe_query(
+        tf_qb.flow_chart,
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         bucket_seconds=bucket_seconds,
         app_filter=app_filter, category_filter=category_filter,
@@ -135,8 +121,8 @@ async def traffic_flow_table(
     if after:
         try: after_key = json.loads(after)
         except json.JSONDecodeError: return APIResponse.fail("INVALID_AFTER", "after must be valid JSON")
-    data, err = await _safe_query(
-        "flow_table",
+    data, err = await safe_query(
+        tf_qb.flow_table,
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, after=after_key, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
@@ -169,8 +155,8 @@ async def traffic_flow_sankey(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
-    data, err = await _safe_query(
-        "sankey_data",
+    data, err = await safe_query(
+        tf_qb.sankey_data,
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         direction=direction,
         app_filter=app_filter, category_filter=category_filter,

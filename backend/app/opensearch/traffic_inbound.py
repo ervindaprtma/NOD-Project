@@ -13,7 +13,7 @@ from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_dc_client, get_drc_client
 from app.opensearch.query import safe_search
-from app.port_service_map import PORT_SERVICE_MAP
+from app.port_service_map import port_to_service
 
 # ── Index & site config ──────────────────────────────────────────
 
@@ -41,7 +41,7 @@ def _site_filter(site_name: str) -> dict:
 
 def _port_to_service(port_value) -> str:
     try:
-        return PORT_SERVICE_MAP.get(int(port_value), f"Port-{port_value}")
+        return port_to_service(int(port_value))
     except (ValueError, TypeError):
         return str(port_value)
 
@@ -297,7 +297,6 @@ async def sankey_data(
             {"dst_as_org": {"terms": {"field": "flow.dst.as.org"}}},
         ]
         level_names = ["ingress", "service", "egress", "dst_as_org"]
-        level_labels = {0: "Ingress", 1: "Service", 2: "Egress", 3: "Dst AS Org"}
     else:
         # Upload: Src AS Org → Ingress → Service → Egress
         sources = [
@@ -307,7 +306,6 @@ async def sankey_data(
             {"egress": {"terms": {"field": "flow.out.netif.name"}}},
         ]
         level_names = ["src_as_org", "ingress", "service", "egress"]
-        level_labels = {0: "Src AS Org", 1: "Ingress", 2: "Service", 3: "Egress"}
 
     body = {
         "size": 0,

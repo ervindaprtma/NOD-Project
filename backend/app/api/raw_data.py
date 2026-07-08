@@ -42,11 +42,12 @@ async def get_raw_flows(
     application: Optional[str] = Query(default=None, description="Comma-separated application names"),
     category: Optional[str] = Query(default=None, description="Comma-separated categories"),
     protocol: Optional[str] = Query(default=None, description="Comma-separated protocols"),
-    dst_port: Optional[int] = Query(default=None),
+    dst_port: Optional[str] = Query(default=None, description="Destination port(s) — single value or comma-separated list (e.g. 80,443,8080)"),
     ingress_zone: Optional[str] = Query(default=None),
     egress_link: Optional[str] = Query(default=None),
+    correlation_id: Optional[str] = Query(default=None, description="Comma-separated correlation IDs"),
     site_name: str = Query(default="Site_FGT-DC", description="Site: Site_FGT-DC, Site_FGT-DRC, Site_FGT_Office"),
-    path_filter: str = Query(default="internet", description="Traffic path: internet, inter-site, intra-lan, or 'all' for all paths"),
+    path_filter: str = Query(default="internet", description="Traffic path: internet, inbound-vip, inter-site, or intra-lan"),
     direction: Optional[str] = Query(default=None, description="Direction: 'upload' or 'download' (only for internet path)"),
     current_user=Depends(require_role("operator")),
 ):
@@ -58,12 +59,16 @@ async def get_raw_flows(
     """
     t0 = time.monotonic()
 
-    # Build filters dict
+    # Build filters dict — accept comma-separated values for all text fields
     filters: dict = {}
     if client_ip:
-        filters["client_ip"] = client_ip
+        vals = [v.strip() for v in client_ip.split(",") if v.strip()]
+        if vals:
+            filters["client_ip"] = vals
     if server_ip:
-        filters["server_ip"] = server_ip
+        vals = [v.strip() for v in server_ip.split(",") if v.strip()]
+        if vals:
+            filters["server_ip"] = vals
     if application:
         filters["application"] = [a.strip() for a in application.split(",") if a.strip()]
     if category:
@@ -71,11 +76,16 @@ async def get_raw_flows(
     if protocol:
         filters["protocol"] = [p.strip() for p in protocol.split(",") if p.strip()]
     if dst_port is not None:
-        filters["dst_port"] = dst_port
+        # Accept comma-separated ports, but keep as ints for OpenSearch term query
+        ports = [int(p.strip()) for p in str(dst_port).split(",") if p.strip()]
+        if ports:
+            filters["dst_port"] = ports
     if ingress_zone:
         filters["ingress_zone"] = [z.strip() for z in ingress_zone.split(",") if z.strip()]
     if egress_link:
         filters["egress_link"] = [l.strip() for l in egress_link.split(",") if l.strip()]
+    if correlation_id:
+        filters["correlation_id"] = [c.strip() for c in correlation_id.split(",") if c.strip()]
 
     # Build search_after array
     sa = None
@@ -111,6 +121,7 @@ async def get_raw_flows(
             packets=r["packets"],
             ingress_zone=r["ingress_zone"],
             egress_link=r["egress_link"],
+            path=r.get("path", path_filter),
             correlation_id=r.get("correlation_id"),
             correlation_direction=r.get("correlation_direction"),
         )

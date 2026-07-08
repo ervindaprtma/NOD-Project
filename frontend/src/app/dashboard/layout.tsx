@@ -122,8 +122,8 @@ export default function DashboardLayout({
     initAuth();
   }, [router]);
 
-  // WebSocket for real-time notifications (falls back to polling)
-  const wsRef = useRef<WebSocket | null>(null);
+  // ponytail: removed WS push — backend /ws/alerts deleted, SSE handles real-time alerts.
+  // 30s polling for notifications is sufficient (dashboard already polls).
   const [wsConnected, setWsConnected] = useState(false);
 
   useEffect(() => {
@@ -131,53 +131,9 @@ export default function DashboardLayout({
     fetchUser();
     fetchNotifications();
 
-    // Try WebSocket connection for push notifications
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    function connectWs() {
-      try {
-        const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const ws = new WebSocket(`${proto}//${window.location.host}/ws/alerts`);
-        wsRef.current = ws;
-        ws.onopen = () => {
-          // Send auth handshake (backend expects JWT in first message)
-          const tk = getAccessToken();
-          if (tk) {
-            ws.send(JSON.stringify({ type: "auth", token: tk }));
-          }
-          setWsConnected(true);
-        };
-        ws.onmessage = (evt) => {
-          try {
-            const data = JSON.parse(evt.data);
-            if (data.type === "notification") {
-              setNotifications((prev) => [data.payload, ...prev]);
-            } else if (data.type === "notification_list") {
-              setNotifications(data.payload || []);
-            }
-          } catch { /* ignore malformed */ }
-        };
-        ws.onclose = () => {
-          setWsConnected(false);
-          // Reconnect after 5s
-          reconnectTimer = setTimeout(connectWs, 5000);
-        };
-        ws.onerror = () => ws.close();
-      } catch {
-        // WebSocket not available, fall back to polling
-      }
-    }
-    connectWs();
-
-    // Also poll every 30s as fallback / for initial load
     const interval = setInterval(fetchNotifications, 30000);
     return () => {
       clearInterval(interval);
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (wsRef.current) {
-        wsRef.current.onclose = null; // prevent reconnect on unmount
-        wsRef.current.close();
-        wsRef.current = null;
-      }
     };
   }, [fetchUser, fetchNotifications, tokenPresent]);
 
@@ -210,7 +166,7 @@ export default function DashboardLayout({
           <p className="text-sm text-muted-foreground">Redirecting to login...</p>
         </div>
       ) : (
-        <>
+      <>
       {isMobile && sidebarOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/50"

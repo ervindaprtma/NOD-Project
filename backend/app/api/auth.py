@@ -8,7 +8,7 @@ import asyncio
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
@@ -18,16 +18,14 @@ from app.core.config import get_settings
 from app.core.security import (
     create_access_token,
     create_refresh_token,
-    decode_token,
     decode_token_optional,
-    hash_password,
     verify_password,
 )
 from app.db.models import RefreshToken as RefreshTokenModel
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.common import APIResponse
-from app.schemas.user import ChangePasswordRequest, LoginRequest, TokenResponse, UserRead
+from app.schemas.user import LoginRequest, TokenResponse
 from app.services.activity_logger import log_activity
 
 settings = get_settings()
@@ -87,8 +85,9 @@ def _clear_failed_logins(username: str) -> None:
 async def login(
     request: Request,
     body: LoginRequest,
+    response: Response,
     db: AsyncSession = Depends(get_db),
-):
+) -> APIResponse[TokenResponse]:
     """Authenticate user, return access token and set refresh token cookie."""
     # B-05: Per-account lockout check
     if _is_locked_out(body.username):
@@ -168,30 +167,25 @@ async def login(
     await db.flush()
 
     response_data = APIResponse.ok(TokenResponse(access_token=access_token))
-
-    # Set refresh token as HTTP-only cookie with __Host- prefix
-    resp = Response(
-        content=response_data.model_dump_json(),
-        media_type="application/json",
-    )
-    resp.set_cookie(
+    response.set_cookie(
         key=COOKIE_REFRESH_TOKEN,
         value=refresh_token,
         httponly=True,
-        secure=True,           # __Host- requires Secure
+        secure=True,
         samesite="strict",
         max_age=int(settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60),
-        path="/",              # __Host- requires Path=/
+        path="/",
     )
-    return resp
+    return response_data
 
 
 @router.post("/logout", response_model=APIResponse[dict])
 async def logout(
     request: Request,
+    response: Response,
     refresh_token: Optional[str] = Cookie(default=None, alias=COOKIE_REFRESH_TOKEN),
     db: AsyncSession = Depends(get_db),
-):
+) -> APIResponse[dict]:
     """Revoke refresh token and clear cookie."""
     if refresh_token:
         payload = decode_token_optional(refresh_token)
@@ -214,21 +208,19 @@ async def logout(
                 source_ip=get_real_client_ip(request),
             )
 
-    resp = Response(
-        content=APIResponse.ok({"message": "Logged out"}).model_dump_json(),
-        media_type="application/json",
-    )
-    resp.delete_cookie(COOKIE_REFRESH_TOKEN, path="/")
-    return resp
+    response_data = APIResponse.ok({"message": "Logged out"})
+    response.delete_cookie(COOKIE_REFRESH_TOKEN, path="/")
+    return response_data
 
 
 @router.post("/refresh", response_model=APIResponse[TokenResponse])
 @limiter.limit(f"{settings.RATE_LIMIT_REFRESH_REQUESTS}/{settings.RATE_LIMIT_REFRESH_WINDOW}")
 async def refresh(
     request: Request,
+    response: Response,
     refresh_token: Optional[str] = Cookie(default=None, alias=COOKIE_REFRESH_TOKEN),
     db: AsyncSession = Depends(get_db),
-):
+) -> APIResponse[TokenResponse]:
     """Issue a new access token using a valid refresh token cookie."""
     if not refresh_token:
         raise HTTPException(
@@ -259,8 +251,8 @@ async def refresh(
         )
 
     # Get user
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    user: User | None = user_result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -288,20 +280,16 @@ async def refresh(
     await db.commit()
 
     response_data = APIResponse.ok(TokenResponse(access_token=access_token))
-    resp = Response(
-        content=response_data.model_dump_json(),
-        media_type="application/json",
-    )
-    resp.set_cookie(
+    response.set_cookie(
         key=COOKIE_REFRESH_TOKEN,
         value=new_refresh_token,
         httponly=True,
-        secure=True,           # __Host- requires Secure
+        secure=True,
         samesite="strict",
         max_age=int(settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60),
-        path="/",              # __Host- requires Path=/
+        path="/",
     )
-    return resp
+    return response_data
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -351,12 +339,12 @@ async def get_current_user(
     return user
 
 
-def require_role(minimum_role: str):
+def require_role(minimum_role: str) -> Any:
     """
     FastAPI dependency factory: returns a dependency that enforces minimum role.
     Usage: Depends(require_role("admin"))
     """
-    async def role_checker(current_user: User = Depends(get_current_user)):
+    async def role_checker(current_user: User = Depends(get_current_user)) -> User:
         required_level = _ROLE_HIERARCHY.get(minimum_role, 0)
         user_level = _ROLE_HIERARCHY.get(current_user.role, 0)
         if user_level < required_level:

@@ -2,34 +2,53 @@
 
 import { useState, useMemo, useCallback } from "react";
 import useSWR from "swr";
-import { swrFetcher, getAccessToken } from "@/lib/api";
+import { swrFetcher, getAccessToken, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, formatBytes, getDefaultTimeRange } from "@/lib/constants";
+import { TagFilterField } from "@/components/TagFilterField";
 import type { RawFlowRecord, APIResponse } from "@/types";
 
 const PAGE_SIZES = [25, 50, 100];
 
+// All filters are multi-value (string[]), consistent with the Traffic* pages.
+// Backend accepts comma-separated values; we join on send and split on receive.
 interface FilterState {
-  client_ip: string;
-  server_ip: string;
-  application: string;
-  category: string;
-  protocol: string;
-  dst_port: string;
-  ingress_zone: string;
-  egress_link: string;
+  client_ip: string[];
+  server_ip: string[];
+  application: string[];
+  category: string[];
+  protocol: string[];
+  dst_port: string[];  // stored as strings, sent as "80,443,8080"
+  ingress_zone: string[];
+  egress_link: string[];
+  correlation_id: string[];
 }
 
 const defaultFilters: FilterState = {
-  client_ip: "",
-  server_ip: "",
-  application: "",
-  category: "",
-  protocol: "",
-  dst_port: "",
-  ingress_zone: "",
-  egress_link: "",
+  client_ip: [],
+  server_ip: [],
+  application: [],
+  category: [],
+  protocol: [],
+  dst_port: [],
+  ingress_zone: [],
+  egress_link: [],
+  correlation_id: [],
 };
+
+function countActiveFilters(f: FilterState): number {
+  return (
+    f.client_ip.length +
+    f.server_ip.length +
+    f.application.length +
+    f.category.length +
+    f.protocol.length +
+    f.dst_port.length +
+    f.ingress_zone.length +
+    f.egress_link.length +
+    f.correlation_id.length
+  );
+}
 
 interface SortState {
   column: string;
@@ -54,10 +73,10 @@ export default function RawDataPage() {
     timestamp: true, client_ip: true, server_ip: true, application: true,
     category: true, protocol: true, dst_port: true, total_bytes: true,
     packets: true, ingress_zone: true, egress_link: true,
-    correlation_id: true, correlation_direction: true,
+    correlation_id: true, correlation_direction: true, path: false,
   });
   const [siteName, setSiteName] = useState("Site_FGT-DC");
-  const [pathFilter, setPathFilter] = useState("internet"); // internet, inter-site, intra-lan, all
+  const [pathFilter, setPathFilter] = useState("internet"); // internet, inbound-vip, inter-site, intra-lan
   const [direction, setDirection] = useState(""); // upload, download
 
   // Build query params
@@ -76,20 +95,25 @@ export default function RawDataPage() {
       p.search_after_timestamp = currentCursor[0];
       p.search_after_id = currentCursor[1];
     }
-    if (filters.client_ip) p.client_ip = filters.client_ip;
-    if (filters.server_ip) p.server_ip = filters.server_ip;
-    if (filters.application) p.application = filters.application;
-    if (filters.category) p.category = filters.category;
-    if (filters.protocol) p.protocol = filters.protocol;
-    if (filters.dst_port) p.dst_port = parseInt(filters.dst_port);
-    if (filters.ingress_zone) p.ingress_zone = filters.ingress_zone;
-    if (filters.egress_link) p.egress_link = filters.egress_link;
+    // Multi-value filters: join as comma-separated string (backend splits).
+    // URLSearchParams handles the encoding for us.
+    if (filters.client_ip.length > 0) p.client_ip = filters.client_ip.join(",");
+    if (filters.server_ip.length > 0) p.server_ip = filters.server_ip.join(",");
+    if (filters.application.length > 0) p.application = filters.application.join(",");
+    if (filters.category.length > 0) p.category = filters.category.join(",");
+    if (filters.protocol.length > 0) p.protocol = filters.protocol.join(",");
+    if (filters.dst_port.length > 0) p.dst_port = filters.dst_port.join(",");
+    if (filters.ingress_zone.length > 0) p.ingress_zone = filters.ingress_zone.join(",");
+    if (filters.egress_link.length > 0) p.egress_link = filters.egress_link.join(",");
+    if (filters.correlation_id.length > 0) p.correlation_id = filters.correlation_id.join(",");
     return p;
   }, [gteMs, lteMs, pageSize, sort, currentCursor, filters, siteName, pathFilter, direction]);
 
   const token = typeof window !== "undefined" ? getAccessToken() : null;
+  // Gate the SWR key on operator+ so a viewer never triggers a 403 round-trip.
+  const canFetch = token !== null && hasMinRole("operator");
   const { data, error, isLoading } = useSWR<APIResponse<RawFlowRecord[]>>(
-    token ? `/api/v1/traffic/raw?${new URLSearchParams(
+    canFetch ? `/api/v1/traffic/raw?${new URLSearchParams(
       Object.entries(queryParams)
         .filter(([, v]) => v !== undefined)
         .map(([k, v]) => [k, String(v)])
@@ -101,6 +125,25 @@ export default function RawDataPage() {
   const records = data?.data || [];
   const total = data?.meta?.total || 0;
   const queryTook = data?.meta?.query_took_ms;
+
+  // ── Privilege guard ──────────────────────────────────────────
+  // The backend /api/v1/traffic/raw requires operator+ (raw_data.py:51).
+  // A viewer who lands on this page should see a friendly notice,
+  // not a broken empty table from a 403 response.
+  if (!hasMinRole("operator")) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold tracking-tight">Raw Data</h1>
+        <div className="bg-card border rounded-lg p-8 text-center space-y-2">
+          <p className="text-base font-semibold">Operator access required</p>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            Raw flow data is available to <span className="font-mono">operator</span> and
+            above. Contact a superadmin if you need elevated access.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   function handlePreset(seconds: number, label: string) {
     const now = Date.now();
@@ -171,6 +214,7 @@ export default function RawDataPage() {
     { key: "egress_link", label: "Egress Link", visible: visibleColumns.egress_link, sortable: false },
     { key: "correlation_id", label: "Correlation ID", visible: visibleColumns.correlation_id, sortable: false },
     { key: "correlation_direction", label: "Direction", visible: visibleColumns.correlation_direction, sortable: false },
+    { key: "path", label: "Traffic Path", visible: visibleColumns.path, sortable: false },
   ];
 
   const visibleCols = columns.filter((c) => c.visible);
@@ -216,6 +260,22 @@ export default function RawDataPage() {
             <option value="Site_FGT-DC">Site_FGT-DC</option>
             <option value="Site_FGT-DRC">Site_FGT-DRC</option>
             <option value="Site_FGT_Office">Site_FGT_Office</option>
+          </select>
+          <select
+            value={pathFilter}
+            onChange={(e) => {
+              setPathFilter(e.target.value);
+              setCurrentCursor(null);
+              setCursorStack([]);
+              setPageIndex(0);
+            }}
+            className="px-3 py-1.5 rounded-md border border-border/60 bg-background text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+            title="Traffic path"
+          >
+            <option value="internet">Internet</option>
+            <option value="inbound-vip">Inbound-vip</option>
+            <option value="inter-site">Inter-site</option>
+            <option value="intra-lan">Intra-lan</option>
           </select>
           <div className="flex gap-1 bg-muted/40 dark:bg-muted/30 rounded-md p-1">
             {TIME_PRESETS.map((p) => (
@@ -270,7 +330,7 @@ export default function RawDataPage() {
               showFilters ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border"
             )}
           >
-            Filters {Object.values(filters).some((v) => v) ? "●" : ""}
+            Filters {countActiveFilters(filters) > 0 ? `(${countActiveFilters(filters)})` : ""}
           </button>
           <button onClick={exportCSV} className="px-2.5 py-1 text-xs rounded-md border bg-background text-muted-foreground border-border hover:bg-muted">
             Export CSV
@@ -300,33 +360,37 @@ export default function RawDataPage() {
         </span>
       </div>
 
-      {/* Filter panel */}
+      {/* Filter panel — multi-value tag inputs (consistent with Traffic* pages) */}
       {showFilters && (
         <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {[
-              { key: "client_ip", label: "Client IP" },
-              { key: "server_ip", label: "Server IP" },
-              { key: "application", label: "Application" },
-              { key: "category", label: "Category" },
-              { key: "protocol", label: "Protocol" },
-              { key: "dst_port", label: "Dst Port" },
-              { key: "ingress_zone", label: "Ingress Zone" },
-              { key: "egress_link", label: "Egress Link" },
-            ].map((f) => (
-              <div key={f.key}>
-                <label className="text-[10px] text-muted-foreground uppercase tracking-wider">{f.label}</label>
-                <input
-                  type={f.key === "dst_port" ? "number" : "text"}
-                  value={(draftFilters as unknown as Record<string, string>)[f.key] || ""}
-                  onChange={(e) =>
-                    setDraftFilters({ ...draftFilters, [f.key]: e.target.value })
-                  }
-                  placeholder={f.label}
-                  className="w-full px-2 py-1 text-xs rounded border bg-background mt-1"
-                />
-              </div>
-            ))}
+            <TagFilterField label="Client IP" values={draftFilters.client_ip}
+              onChange={(v) => setDraftFilters({ ...draftFilters, client_ip: v })} mono
+              placeholder="e.g. 10.0.0.5" />
+            <TagFilterField label="Server IP" values={draftFilters.server_ip}
+              onChange={(v) => setDraftFilters({ ...draftFilters, server_ip: v })} mono
+              placeholder="e.g. 8.8.8.8" />
+            <TagFilterField label="Application" values={draftFilters.application}
+              onChange={(v) => setDraftFilters({ ...draftFilters, application: v })}
+              placeholder="e.g. HTTPS" />
+            <TagFilterField label="Category" values={draftFilters.category}
+              onChange={(v) => setDraftFilters({ ...draftFilters, category: v })}
+              placeholder="e.g. Web.Client" />
+            <TagFilterField label="Protocol" values={draftFilters.protocol}
+              onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })}
+              placeholder="e.g. tcp" />
+            <TagFilterField label="Dst Port" values={draftFilters.dst_port}
+              onChange={(v) => setDraftFilters({ ...draftFilters, dst_port: v })}
+              placeholder="e.g. 443" />
+            <TagFilterField label="Ingress Zone" values={draftFilters.ingress_zone}
+              onChange={(v) => setDraftFilters({ ...draftFilters, ingress_zone: v })}
+              placeholder="e.g. port1" />
+            <TagFilterField label="Egress Link" values={draftFilters.egress_link}
+              onChange={(v) => setDraftFilters({ ...draftFilters, egress_link: v })}
+              placeholder="e.g. wan1" />
+            <TagFilterField label="Correlation ID" values={draftFilters.correlation_id}
+              onChange={(v) => setDraftFilters({ ...draftFilters, correlation_id: v })} mono
+              placeholder="e.g. a1b2c3d4" />
           </div>
           <div className="flex gap-2 mt-3">
             <button onClick={applyFilters} className="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground">
@@ -375,10 +439,10 @@ export default function RawDataPage() {
                     ))}
                   </tr>
                 ))
-              ) : records.length === 0 ? (
+              ) : records.length === 0 && !isLoading ? (
                 <tr>
                   <td colSpan={visibleCols.length} className="py-12 text-center text-muted-foreground">
-                    No records found for the selected range and filters.
+                    No data can be see, because not have data on index.
                   </td>
                 </tr>
               ) : (
@@ -415,13 +479,6 @@ export default function RawDataPage() {
                           </td>
                         );
                       }
-                      if (col.key === "correlation_id") {
-                        return (
-                          <td key={col.key} className="py-2 px-3 font-mono text-[10px] truncate max-w-[180px]" title={String(val || "—")}>
-                            {val ? String(val).slice(0, 20) + "…" : "—"}
-                          </td>
-                        );
-                      }
                       if (col.key === "correlation_direction") {
                         const dir = String(val || "");
                         return (
@@ -433,6 +490,32 @@ export default function RawDataPage() {
                               "bg-muted text-muted-foreground"
                             )}>
                               {dir || "—"}
+                            </span>
+                          </td>
+                        );
+                      }
+                      if (col.key === "path") {
+                        const p = String(val || "");
+                        return (
+                          <td key={col.key} className="py-2 px-3 text-center">
+                            <span className={cn(
+                              "px-1.5 py-0.5 rounded text-[10px] font-medium",
+                              p === "internet" ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" :
+                              p === "inbound-vip" ? "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400" :
+                              p === "inter-site" ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400" :
+                              p === "intra-lan" ? "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400" :
+                              "bg-muted text-muted-foreground"
+                            )}>
+                              {p || "—"}
+                            </span>
+                          </td>
+                        );
+                      }
+                      if (col.key === "correlation_id") {
+                        return (
+                          <td key={col.key} className="py-2 px-3 font-mono text-[11px]">
+                            <span className="break-all" title={String(val || "")}>
+                              {String(val || "—")}
                             </span>
                           </td>
                         );

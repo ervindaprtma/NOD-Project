@@ -52,7 +52,8 @@ async def active_sslvpn_users_count(
     }
 
     resp = await client.search(index="telegraf-index*", body=body)
-    return resp["aggregations"]["active_users"]["value"]
+    value: int = resp["aggregations"]["active_users"]["value"]
+    return int(value)
 
 
 async def all_sslvpn_users_count(
@@ -99,7 +100,8 @@ async def all_sslvpn_users_count(
     }
 
     resp = await client.search(index="telegraf-index*", body=body)
-    return resp["aggregations"]["active_users"]["value"]
+    value: int = resp["aggregations"]["active_users"]["value"]
+    return int(value)
 
 
 async def all_sslvpn_users_count_timeline(

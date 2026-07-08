@@ -4,21 +4,16 @@ Initializes middleware, routers, scheduler, and structured logging.
 """
 from __future__ import annotations
 
-import json
+import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Callable
 
-from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.core.security import decode_token
 from app.db.session import AsyncSessionLocal
-from app.db.models import User
-import asyncio
-from sqlalchemy import select
-import jwt
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -41,13 +36,15 @@ from app.api import (
     users,
     vpn,
 )
+from app.api.config.maintenance import router as config_maintenance_router
+from app.api.config.notifications import router as config_notifications_router
+from app.api.config.notification_templates import router as config_notification_templates_router
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.core.limiter import limiter, get_real_client_ip
-from app.db.session import engine, AsyncSessionLocal
-from app.db.models import User
-from app.opensearch.client import check_all_clusters
+from app.db.session import engine
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -93,6 +90,23 @@ async def lifespan(app: FastAPI):
         cleaned = await _cleanup_expired_reports(session)
         if cleaned:
             logger.info(f"Cleaned up {cleaned} expired reports on startup")
+
+    # Seed initial 6 alert templates (v3 §3.12)
+    from app.services.template_seeder import seed_alert_templates, seed_field_catalog
+    seeded = await seed_alert_templates()
+    if seeded:
+        logger.info(f"Seeded {seeded} alert templates")
+
+    # Seed field catalog (§11.2)
+    seeded_cat = await seed_field_catalog()
+    if seeded_cat:
+        logger.info(f"Seeded {seeded_cat} field catalog rows")
+
+    # Seed default notification template (§11.1)
+    from app.services.template_seeder import seed_notification_templates
+    seeded_nt = await seed_notification_templates()
+    if seeded_nt:
+        logger.info(f"Seeded {seeded_nt} notification templates")
 
     # DB connection pool is lazily initialized by SQLAlchemy
     yield
@@ -196,6 +210,9 @@ app.include_router(reports.router)
 app.include_router(users.router)
 app.include_router(logs.router)
 app.include_router(notifications.router)
+app.include_router(config_notifications_router)
+app.include_router(config_maintenance_router)
+app.include_router(config_notification_templates_router)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -239,62 +256,6 @@ async def health_check():
     return JSONResponse(content=status, status_code=200)
 
 
-# ─────────────────────────────────────────────────────────────────
-# WebSocket: Real-Time Alerts (FR-10)
-# ─────────────────────────────────────────────────────────────────
-
-from app.services.websocket_manager import alert_ws_manager
-
-_ALERT_ALLOWED_ROLES = {"admin", "superadmin"}
-
-async def _authenticate_ws_user(websocket: WebSocket) -> str | None:
-    """Wait for auth message, validate JWT, return user_id or None."""
-    try:
-        await websocket.accept()
-        data = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
-        if data.get("type") != "auth" or not data.get("token"):
-            await websocket.close(code=1008, reason="Missing auth message")
-            return None
-        payload = decode_token(data["token"])
-        if not payload or payload.get("type") != "access":
-            await websocket.close(code=1008, reason="Invalid token")
-            return None
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(User).where(User.id == payload["sub"]))
-            user = result.scalar_one_or_none()
-        if not user or not user.is_active:
-            await websocket.close(code=1008, reason="User unauthorized")
-            return None
-        if user.role not in _ALERT_ALLOWED_ROLES:
-            await websocket.close(code=1008, reason="Insufficient role")
-            return None
-        return user.id
-    except asyncio.TimeoutError:
-        await websocket.close(code=1008, reason="Auth timeout")
-        return None
-
-
-@app.websocket("/ws/alerts")
-async def ws_alerts(websocket: WebSocket):
-    """FR-10: WebSocket for real-time alerts. Message-based auth, admin+ only."""
-    user_id = await _authenticate_ws_user(websocket)
-    if not user_id:
-        return
-    if not await alert_ws_manager.connect(websocket, user_id):
-        return
-    try:
-        while True:
-            try:
-                data = await websocket.receive_text()
-                msg = json.loads(data)
-                if msg.get("action") == "ping":
-                    await websocket.send_text(json.dumps({"type": "pong"}))
-            except json.JSONDecodeError:
-                pass
-    except WebSocketDisconnect:
-        await alert_ws_manager.disconnect(user_id, websocket)
-    except Exception:
-        await alert_ws_manager.disconnect(user_id, websocket)
 
 
 # ─────────────────────────────────────────────────────────────────
