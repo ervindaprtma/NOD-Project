@@ -325,11 +325,17 @@ async def _advance_state_machine(
     await db.commit()
 
 
-async def _evaluate_composite_rule(rule: AlertRule) -> tuple[float | None, bool]:
+async def _evaluate_composite_rule(
+    rule: AlertRule, group_cache: dict | None = None
+) -> tuple[float | None, bool]:
     """Evaluate a composite rule's clauses and combine with AND/OR.
 
     Returns (max_metric_value, condition_met).
     Returns (None, False) if no clauses could be evaluated.
+
+    If group_cache is provided, clauses reuse the pre-fetched OpenSearch
+    results from the same cycle (§9.4). Without it, falls back to direct
+    _run_group_query (test/standalone path).
     """
     if not rule.clauses:
         return None, False
@@ -344,7 +350,12 @@ async def _evaluate_composite_rule(rule: AlertRule) -> tuple[float | None, bool]
         thresh = clause.get("threshold_value", 0.0)
         window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
 
-        group_result = await _run_group_query(ds, rule.site_name, window)
+        # §9.4: read from the cycle's pre-fetched cache when available
+        cache_key = (ds, rule.site_name, window)
+        if group_cache is not None and cache_key in group_cache:
+            group_result = group_cache[cache_key]
+        else:
+            group_result = await _run_group_query(ds, rule.site_name, window)
         if group_result is None:
             break  # one clause failed → whole rule fails
 
@@ -486,6 +497,16 @@ async def evaluate_all_rules():
                 key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)
                 groups[key].append(rule)
 
+            # §9.4: also pre-fetch for composite clause keys, sharing the
+            # cache with singles that happen to share a (ds, site, window) tuple.
+            for rule in composite_rules:
+                for clause in (rule.clauses or []):
+                    ds = clause.get("data_source")
+                    if not ds:
+                        continue
+                    window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
+                    groups.setdefault((ds, rule.site_name, window), [])
+
             group_cache: dict[tuple, float | list | dict | None] = {}
             for key in groups:
                 ds, site, window = key
@@ -509,7 +530,7 @@ async def evaluate_all_rules():
             # ── 2. Composite rules (per-rule evaluation) ──
             for rule in composite_rules:
                 try:
-                    metric_value, condition_met = await _evaluate_composite_rule(rule)
+                    metric_value, condition_met = await _evaluate_composite_rule(rule, group_cache)
                     if metric_value is None:
                         continue
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
