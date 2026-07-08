@@ -593,10 +593,11 @@ async def raw_flows(
         "flow.out.netif.alias",
         "flow.correlation_id",
         "flow.correlation_direction",
+        "flow.traffic.path",
     ]
 
     must_filters = [_time_range(gte_ms, lte_ms), _tf_site_filter(site_name)]
-    must_not_filters = [_exclude_app0(), _exclude_private_as()]
+    must_not_filters = []
 
     # Apply traffic path filter (internet, inter-site, intra-lan)
     if path_filter and path_filter != "all":
@@ -631,6 +632,8 @@ async def raw_flows(
             must_filters.append({"terms": {"flow.in.netif.alias": filters["ingress_zone"]}})
         if "egress_link" in filters and filters["egress_link"]:
             must_filters.append({"terms": {"flow.out.netif.alias": filters["egress_link"]}})
+        if "correlation_id" in filters and filters["correlation_id"]:
+            must_filters.append({"terms": {"flow.correlation_id": filters["correlation_id"]}})
 
     # Sort — always include _id as tiebreaker
     sort_field = sort_by if sort_by else "@timestamp"
@@ -677,6 +680,7 @@ async def raw_flows(
             "egress_link": src.get("flow.out.netif.alias", ""),
             "correlation_id": src.get("flow.correlation_id", ""),
             "correlation_direction": src.get("flow.correlation_direction", ""),
+            "path": src.get("flow.traffic.path", ""),
         })
 
     next_search_after = hits[-1]["sort"] if hits else None

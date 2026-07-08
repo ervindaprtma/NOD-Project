@@ -45,6 +45,7 @@ async def get_raw_flows(
     dst_port: Optional[str] = Query(default=None, description="Destination port(s) — single value or comma-separated list (e.g. 80,443,8080)"),
     ingress_zone: Optional[str] = Query(default=None),
     egress_link: Optional[str] = Query(default=None),
+    correlation_id: Optional[str] = Query(default=None, description="Comma-separated correlation IDs"),
     site_name: str = Query(default="Site_FGT-DC", description="Site: Site_FGT-DC, Site_FGT-DRC, Site_FGT_Office"),
     path_filter: str = Query(default="internet", description="Traffic path: internet, inbound-vip, inter-site, or intra-lan"),
     direction: Optional[str] = Query(default=None, description="Direction: 'upload' or 'download' (only for internet path)"),
@@ -83,6 +84,8 @@ async def get_raw_flows(
         filters["ingress_zone"] = [z.strip() for z in ingress_zone.split(",") if z.strip()]
     if egress_link:
         filters["egress_link"] = [l.strip() for l in egress_link.split(",") if l.strip()]
+    if correlation_id:
+        filters["correlation_id"] = [c.strip() for c in correlation_id.split(",") if c.strip()]
 
     # Build search_after array
     sa = None
@@ -118,6 +121,7 @@ async def get_raw_flows(
             packets=r["packets"],
             ingress_zone=r["ingress_zone"],
             egress_link=r["egress_link"],
+            path=r.get("path", path_filter),
             correlation_id=r.get("correlation_id"),
             correlation_direction=r.get("correlation_direction"),
         )

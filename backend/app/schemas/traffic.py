@@ -105,6 +105,7 @@ class RawFlowRecord(BaseModel):
     packets: int
     ingress_zone: str
     egress_link: str
+    path: str  # traffic path: internet, inbound-vip, inter-site, intra-lan
     correlation_id: Optional[str] = None
     correlation_direction: Optional[str] = None
 

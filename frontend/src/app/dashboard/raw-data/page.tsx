@@ -21,6 +21,7 @@ interface FilterState {
   dst_port: string[];  // stored as strings, sent as "80,443,8080"
   ingress_zone: string[];
   egress_link: string[];
+  correlation_id: string[];
 }
 
 const defaultFilters: FilterState = {
@@ -32,6 +33,7 @@ const defaultFilters: FilterState = {
   dst_port: [],
   ingress_zone: [],
   egress_link: [],
+  correlation_id: [],
 };
 
 function countActiveFilters(f: FilterState): number {
@@ -43,7 +45,8 @@ function countActiveFilters(f: FilterState): number {
     f.protocol.length +
     f.dst_port.length +
     f.ingress_zone.length +
-    f.egress_link.length
+    f.egress_link.length +
+    f.correlation_id.length
   );
 }
 
@@ -70,7 +73,7 @@ export default function RawDataPage() {
     timestamp: true, client_ip: true, server_ip: true, application: true,
     category: true, protocol: true, dst_port: true, total_bytes: true,
     packets: true, ingress_zone: true, egress_link: true,
-    correlation_id: true, correlation_direction: true,
+    correlation_id: true, correlation_direction: true, path: false,
   });
   const [siteName, setSiteName] = useState("Site_FGT-DC");
   const [pathFilter, setPathFilter] = useState("internet"); // internet, inbound-vip, inter-site, intra-lan
@@ -102,6 +105,7 @@ export default function RawDataPage() {
     if (filters.dst_port.length > 0) p.dst_port = filters.dst_port.join(",");
     if (filters.ingress_zone.length > 0) p.ingress_zone = filters.ingress_zone.join(",");
     if (filters.egress_link.length > 0) p.egress_link = filters.egress_link.join(",");
+    if (filters.correlation_id.length > 0) p.correlation_id = filters.correlation_id.join(",");
     return p;
   }, [gteMs, lteMs, pageSize, sort, currentCursor, filters, siteName, pathFilter, direction]);
 
@@ -210,6 +214,7 @@ export default function RawDataPage() {
     { key: "egress_link", label: "Egress Link", visible: visibleColumns.egress_link, sortable: false },
     { key: "correlation_id", label: "Correlation ID", visible: visibleColumns.correlation_id, sortable: false },
     { key: "correlation_direction", label: "Direction", visible: visibleColumns.correlation_direction, sortable: false },
+    { key: "path", label: "Traffic Path", visible: visibleColumns.path, sortable: false },
   ];
 
   const visibleCols = columns.filter((c) => c.visible);
@@ -383,6 +388,9 @@ export default function RawDataPage() {
             <TagFilterField label="Egress Link" values={draftFilters.egress_link}
               onChange={(v) => setDraftFilters({ ...draftFilters, egress_link: v })}
               placeholder="e.g. wan1" />
+            <TagFilterField label="Correlation ID" values={draftFilters.correlation_id}
+              onChange={(v) => setDraftFilters({ ...draftFilters, correlation_id: v })} mono
+              placeholder="e.g. a1b2c3d4" />
           </div>
           <div className="flex gap-2 mt-3">
             <button onClick={applyFilters} className="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground">
@@ -431,10 +439,10 @@ export default function RawDataPage() {
                     ))}
                   </tr>
                 ))
-              ) : records.length === 0 ? (
+              ) : records.length === 0 && !isLoading ? (
                 <tr>
                   <td colSpan={visibleCols.length} className="py-12 text-center text-muted-foreground">
-                    No records found for the selected range and filters.
+                    No data can be see, because not have data on index.
                   </td>
                 </tr>
               ) : (
@@ -471,13 +479,6 @@ export default function RawDataPage() {
                           </td>
                         );
                       }
-                      if (col.key === "correlation_id") {
-                        return (
-                          <td key={col.key} className="py-2 px-3 font-mono text-[10px] truncate max-w-[180px]" title={String(val || "—")}>
-                            {val ? String(val).slice(0, 20) + "…" : "—"}
-                          </td>
-                        );
-                      }
                       if (col.key === "correlation_direction") {
                         const dir = String(val || "");
                         return (
@@ -489,6 +490,32 @@ export default function RawDataPage() {
                               "bg-muted text-muted-foreground"
                             )}>
                               {dir || "—"}
+                            </span>
+                          </td>
+                        );
+                      }
+                      if (col.key === "path") {
+                        const p = String(val || "");
+                        return (
+                          <td key={col.key} className="py-2 px-3 text-center">
+                            <span className={cn(
+                              "px-1.5 py-0.5 rounded text-[10px] font-medium",
+                              p === "internet" ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" :
+                              p === "inbound-vip" ? "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400" :
+                              p === "inter-site" ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400" :
+                              p === "intra-lan" ? "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400" :
+                              "bg-muted text-muted-foreground"
+                            )}>
+                              {p || "—"}
+                            </span>
+                          </td>
+                        );
+                      }
+                      if (col.key === "correlation_id") {
+                        return (
+                          <td key={col.key} className="py-2 px-3 font-mono text-[11px]">
+                            <span className="break-all" title={String(val || "")}>
+                              {String(val || "—")}
                             </span>
                           </td>
                         );
