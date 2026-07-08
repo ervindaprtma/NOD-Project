@@ -14,6 +14,7 @@ import re
 import time as _time
 from collections import defaultdict
 from datetime import datetime, timezone
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
@@ -102,7 +103,7 @@ async def _run_group_query(
         if data_source == "appid_flow":
             from app.opensearch import appid as appid_qb
 
-            return await appid_qb.total_throughput(gte_ms=gte_ms, lte_ms=lte_ms)
+            return await appid_qb.total_bytes(gte_ms=gte_ms, lte_ms=lte_ms)
 
         if data_source == "sdwan_sla":
             from app.opensearch import sdwan as sdwan_qb
@@ -135,7 +136,7 @@ async def _run_group_query(
 
 def _extract_per_rule_value(
     rule: AlertRule,
-    group_result: float | list | dict | None,
+    group_result: float | list[Any] | dict[Any, Any] | None,
 ) -> float | None:
     """Extract a single numeric value from the group result for one rule."""
     if group_result is None:
@@ -149,7 +150,9 @@ def _extract_per_rule_value(
             return 0.0
 
         if rule.data_source == "appid_flow":
-            return float(group_result)
+            if isinstance(group_result, (int, float)):
+                return float(group_result)
+            return 0.0
 
         if rule.data_source == "sdwan_sla":
             if isinstance(group_result, dict):
@@ -161,10 +164,14 @@ def _extract_per_rule_value(
             return 0.0
 
         if rule.data_source == "vpn_ssl":
-            return float(group_result)
+            if isinstance(group_result, (int, float)):
+                return float(group_result)
+            return 0.0
 
         if rule.data_source == "vpn_ipsec":
-            return float(group_result)
+            if isinstance(group_result, (int, float)):
+                return float(group_result)
+            return 0.0
 
         return None
 
@@ -292,29 +299,29 @@ async def _advance_state_machine(
             await db.flush()
 
         elif state.state == "PENDING":
-            sustained_duration = (now - state.pending_since).total_seconds() / 60
-            if sustained_duration >= rule.sustained_for_minutes:
-                state.state = "FIRING"
-                state.last_fired_at = now
-                state.last_notified_at = now
-                await db.flush()
-
-                db.add(AlertLog(
-                    rule_id=rule.id,
-                    rule_name=rule.name,
-                    severity=rule.severity,
-                    metric_value_at_firing=metric_value,
-                    notified_channels=rule.notify_channels,
-                    fired_at=now,
-                    rule_snapshot={
-                        "name": rule.name,
-                        "metric_field": rule.metric_field,
-                        "aggregation": rule.aggregation,
-                        "condition": rule.condition,
-                        "threshold_value": rule.threshold_value,
-                    },
-                ))
-                await db.flush()
+            pending_since = state.pending_since
+            if pending_since is not None:
+                sustained_duration = (now - pending_since).total_seconds() / 60
+                if sustained_duration >= rule.sustained_for_minutes:
+                    state.state = "FIRING"
+                    state.last_fired_at = now
+                    state.last_notified_at = now
+                    db.add(AlertLog(
+                        rule_id=rule.id,
+                        rule_name=rule.name,
+                        severity=rule.severity,
+                        metric_value_at_firing=metric_value,
+                        notified_channels=rule.notify_channels,
+                        fired_at=now,
+                        rule_snapshot={
+                            "name": rule.name,
+                            "metric_field": rule.metric_field,
+                            "aggregation": rule.aggregation,
+                            "condition": rule.condition,
+                            "threshold_value": rule.threshold_value,
+                        },
+                    ))
+                    await db.flush()
 
                 # Enqueue notification (batch dispatch, P7)
                 if notify_queue is not None:
@@ -395,8 +402,12 @@ async def _evaluate_composite_rule(
     clause_breaches: list[bool] = []
 
     for clause in rule.clauses:
-        ds = clause.get("data_source")
-        mf = clause.get("metric_field")
+        ds_raw = clause.get("data_source")
+        mf_raw = clause.get("metric_field")
+        if not isinstance(ds_raw, str) or not isinstance(mf_raw, str):
+            continue
+        ds = ds_raw
+        mf = mf_raw
         cond = clause.get("condition", ">")
         thresh = clause.get("threshold_value", 0.0)
         window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
@@ -431,7 +442,7 @@ async def _evaluate_composite_rule(
 
 # ponytail: _extract_per_rule_value but takes flat data_source/metric_field instead of a rule object
 def _extract_per_rule_value_flat(
-    data_source: str, metric_field: str, group_result: float | list | dict | None
+    data_source: str, metric_field: str, group_result: float | list[Any] | dict[Any, Any] | None
 ) -> float | None:
     """Same logic as _extract_per_rule_value but accepts flat params (P5 composite)."""
     if group_result is None:
@@ -443,7 +454,9 @@ def _extract_per_rule_value_flat(
                 return float(group_result[0].get(field_name, 0) or 0)
             return 0.0
         if data_source in ("appid_flow", "vpn_ssl", "vpn_ipsec"):
-            return float(group_result)
+            if isinstance(group_result, (int, float)):
+                return float(group_result)
+            return 0.0
         if data_source == "sdwan_sla":
             if isinstance(group_result, dict):
                 base_key, link_idx = _parse_sdwan_metric_field(metric_field)

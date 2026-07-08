@@ -7,7 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: pip install ruff mypy pip-audit pytest pytest-asyncio --break-system-packages
       - run: ruff check backend/
-      - run: mypy backend/app/api/auth.py backend/app/api/alerts.py
+      - run: mypy backend/app/api/auth.py backend/app/api/alerts.py backend/app/api/config/notifications.py backend/app/core/security.py backend/app/core/limiter.py backend/app/schemas/common.py backend/app/services/alert_engine.py backend/app/services/notifiers.py backend/app/opensearch/query.py backend/app/opensearch/client.py backend/app/opensearch/traffic_flow.py backend/app/opensearch/ipsec.py backend/app/opensearch/sslvpn.py
       - run: pip-audit -r backend/requirements.txt
       # §9.10: only the pure tests (no DB, no OS) run in this CI lane. The
       # 4 integration stubs are @pytest.mark.skip'd with TODOs; they

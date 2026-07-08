@@ -62,7 +62,8 @@ def get_ipsec_client() -> AsyncOpenSearch:
 async def check_opensearch_health(client: AsyncOpenSearch) -> bool:
     """Ping an OpenSearch cluster. Returns True if healthy."""
     try:
-        return await client.ping()
+        result: bool = await client.ping()
+        return result
     except Exception:
         return False
 

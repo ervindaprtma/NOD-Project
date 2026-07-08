@@ -27,11 +27,14 @@ def get_real_client_ip(request: Request) -> str:
     forwarded = request.headers.get("X-Forwarded-For", "")
     if forwarded:
         # X-Forwarded-For: client, proxy1, proxy2 — take first (client)
-        return forwarded.split(",")[0].strip()
+        first: str = forwarded.split(",")[0].strip()
+        return first
     real_ip = request.headers.get("X-Real-IP", "")
     if real_ip:
-        return real_ip.strip()
-    return get_remote_address(request)
+        stripped: str = real_ip.strip()
+        return stripped
+    fallback: str = get_remote_address(request)
+    return fallback
 
 
 limiter = Limiter(

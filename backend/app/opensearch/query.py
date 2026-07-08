@@ -99,7 +99,7 @@ async def safe_search(
     body: dict,
     use_cache: bool = True,
     timeout_s: int | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Execute an OpenSearch search query with:
     - Per-cluster concurrency limit (2 for DC, 4 for DRC) to prevent circuit breaker
     - Per-query timeout (asyncio.wait_for)
@@ -124,7 +124,7 @@ async def safe_search(
     if use_cache:
         cache = _get_cache(client)
         cache_key = _cache_key(index, body)
-        cached = _cache_get(cache, cache_key)
+        cached: dict[str, Any] | None = _cache_get(cache, cache_key)
         if cached is not None:
             return cached
 
@@ -147,7 +147,7 @@ async def safe_search(
                         f"Slow OpenSearch query: {elapsed:.1f}s / {timeout_s}s timeout — "
                         f"client={_client_id(client)} index={index}"
                     )
-                resp_dict = dict(resp) if not isinstance(resp, dict) else resp
+                resp_dict: dict[str, Any] = dict(resp) if not isinstance(resp, dict) else resp
                 if "aggregations" not in resp_dict:
                     resp_dict["aggregations"] = {}
                 if "hits" not in resp_dict:
@@ -176,3 +176,7 @@ async def safe_search(
                 logger = logging.getLogger("nod.opensearch")
                 logger.error(f"OpenSearch query error: {type(e).__name__}: {e}")
                 return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_error": err_str[:200]}
+
+    # Defensive fallback — every code path above returns, but mypy doesn't
+    # always narrow through for/continue, so this satisfies the type checker.
+    return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_error": "unreachable"}

@@ -156,6 +156,9 @@ async def upsert_config(
             cfg = NotificationConfig(channel=channel)
             db.add(cfg)
 
+        # mypy: cfg is now guaranteed NotificationConfig, not Optional.
+        assert cfg is not None
+
         if body.enabled is not None:
             cfg.enabled = body.enabled
         if body.min_severity is not None:

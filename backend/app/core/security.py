@@ -20,11 +20,13 @@ _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return _pwd_context.verify(plain_password, hashed_password)
+    verified: bool = _pwd_context.verify(plain_password, hashed_password)
+    return verified
 
 
 def hash_password(password: str) -> str:
-    return _pwd_context.hash(password)
+    hashed: str = _pwd_context.hash(password)
+    return hashed
 
 
 def create_access_token(
@@ -83,12 +85,13 @@ def create_refresh_token(
 
 def decode_token(token: str) -> dict[str, Any]:
     """Decode and validate a JWT token. Raises jwt.PyJWTError on failure."""
-    return jwt.decode(
+    decoded: dict[str, Any] = jwt.decode(
         token,
         settings.JWT_SECRET,
         algorithms=[settings.JWT_ALGORITHM],
         options={"require": ["sub", "exp", "jti", "type"]},
     )
+    return decoded
 
 
 def decode_token_optional(token: str) -> Optional[dict[str, Any]]:

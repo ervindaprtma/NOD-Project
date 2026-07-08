@@ -171,8 +171,9 @@ async def flow_summary(
     resp = await safe_search(client, FLOW_INDEX, body)
     aggs = resp["aggregations"]
 
-    def _buckets(agg_name: str) -> list[dict]:
-        return aggs.get(agg_name, {}).get("buckets", [])
+    def _buckets(agg_name: str) -> list[dict[str, Any]]:
+        buckets: list[dict[str, Any]] = aggs.get(agg_name, {}).get("buckets", [])
+        return buckets
 
     def _merge_filter_buckets(upload_agg: str, download_agg: str, inner_agg: str) -> list[dict]:
         merged: dict[str, int] = {}

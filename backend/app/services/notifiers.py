@@ -200,14 +200,18 @@ async def _whatsapp_document(file_path: str, caption: str = "") -> bool:
 
 
 # ponytail: dispatch tables — single surface for alert_engine + reports.
-ALERT_DISPATCH = {
+from typing import Awaitable, Callable
+
+AlertSender = Callable[..., Awaitable[bool]]
+ALERT_DISPATCH: dict[str, AlertSender] = {
     "whatsapp": _whatsapp_message,
     "telegram": _telegram_alert,
     "smtp": _email_alert,
     "discord": _discord_message,
 }
 
-DOCUMENT_DISPATCH = {
+DocumentSender = Callable[..., Awaitable[bool]]
+DOCUMENT_DISPATCH: dict[str, DocumentSender] = {
     "email": _email_with_attachment,
     "telegram": _telegram_document,
     "discord": _discord_file,
