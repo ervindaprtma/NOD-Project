@@ -19,7 +19,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.db.models import AlertLog, AlertRule, AlertState, MaintenanceWindow
+from app.db.models import AlertLog, AlertRule, AlertState, MaintenanceWindow, NotificationTemplate
 from app.db.session import AsyncSessionLocal
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.sse import sse_broadcast
@@ -197,16 +197,51 @@ async def _notify(rule: AlertRule, metric_value: float):
     Loads enabled channel configs from the notification_configs table,
     decrypts secrets, and dispatches to the appropriate notifier module.
     Falls back to env-var config if DB config is empty.
+
+    §11.1: If rule has notification_template_id, renders subject/body/line
+    from the template via sandboxed Jinja2. Falls back to hardcoded format
+    if no template is set.
     """
     from app.services.notifier_helper import send_alert, load_channel_configs
 
-    message = (
-        f"🚨 *Alert: {rule.name}*\n"
-        f"Severity: {rule.severity}\n"
-        f"Metric: {rule.metric_field} = {metric_value:.2f}\n"
-        f"Condition: {rule.condition} {rule.threshold_value}\n"
-        f"Fired at: {datetime.now(timezone.utc).isoformat()}"
-    )
+    fired_at = datetime.now(timezone.utc).isoformat()
+    subject: str | None = None
+    message: str | None = None
+
+    # §11.1: Try to load notification template
+    if rule.notification_template_id:
+        async with AsyncSessionLocal() as db:
+            tmpl = await db.get(NotificationTemplate, rule.notification_template_id)
+        if tmpl:
+            ctx = {
+                "rule": {
+                    "name": rule.name,
+                    "severity": rule.severity,
+                    "site_name": rule.site_name,
+                    "metric_field": rule.metric_field,
+                    "condition": rule.condition,
+                    "threshold_value": rule.threshold_value,
+                },
+                "metric_value": metric_value,
+                "fired_at": fired_at,
+            }
+            try:
+                subject = _render_template(tmpl.subject_template, ctx)
+                message = _render_template(tmpl.body_template, ctx)
+            except Exception as e:
+                logger.warning(f"Template render failed, using fallback: {e}")
+                tmpl = None
+
+    # Fallback if no template or render failed
+    if subject is None or message is None:
+        subject = rule.name
+        message = (
+            f"🚨 *Alert: {rule.name}*\n"
+            f"Severity: {rule.severity}\n"
+            f"Metric: {rule.metric_field} = {metric_value:.2f}\n"
+            f"Condition: {rule.condition} {rule.threshold_value}\n"
+            f"Fired at: {fired_at}"
+        )
 
     # Load DB channel configs once
     db_configs = await load_channel_configs(min_severity=rule.severity)
@@ -217,7 +252,7 @@ async def _notify(rule: AlertRule, metric_value: float):
             await send_alert(
                 channel=channel,
                 config=channel_config,
-                subject=rule.name,
+                subject=subject,
                 body=message,
                 severity=rule.severity,
             )

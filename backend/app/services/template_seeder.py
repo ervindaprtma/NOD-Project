@@ -168,3 +168,227 @@ async def seed_alert_templates() -> int:
         await db.commit()
         logger.info("Seeded %d alert templates", count)
         return count
+
+
+# ── Notification Templates ( §11.1 ) ───────────────────────────────────────────
+
+
+SEED_NOTIFICATION_TEMPLATES: list[dict] = [
+    {
+        "name": "Default Alert",
+        "description": "System default notification template for alert messages.",
+        "subject_template": "🚨 Alert: {{ rule.name }}",
+        "body_template": "🚨 *Alert: {{ rule.name }}*\nSeverity: {{ rule.severity }}\nMetric: {{ rule.metric_field }} = {{ metric_value|round(2) }}\nCondition: {{ rule.condition }} {{ rule.threshold_value }}\nFired at: {{ fired_at }}",
+        "line_template": "[{{ rule.severity|upper[:3] }}] {{ rule.name }}: {{ metric_value|round(2) }} ({{ rule.condition }} {{ rule.threshold_value }})",
+        "is_default": True,
+        "is_user_created": False,
+    },
+]
+
+
+async def seed_notification_templates() -> int:
+    """Insert seed notification templates if empty.
+
+    Returns the number of templates inserted.
+    """
+    from app.db.models import NotificationTemplate
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(NotificationTemplate).limit(1))
+        existing = result.scalar_one_or_none()
+
+        if existing is not None:
+            return 0  # Already seeded
+
+        count = 0
+        for data in SEED_NOTIFICATION_TEMPLATES:
+            tmpl = NotificationTemplate(**data)
+            db.add(tmpl)
+            await db.flush()
+            count += 1
+
+        await db.commit()
+        logger.info("Seeded %d notification templates", count)
+        return count
+
+
+# ── Field Catalog ( §11.2 ) ────────────────────────────────────────────────
+
+SEED_FIELD_CATALOG: list[dict] = [
+    # ha_resource
+    {
+        "data_source": "ha_resource",
+        "field_key": "ha_member.cpu_usage",
+        "display_name": "HA Member CPU",
+        "description": "CPU usage percentage per HA member device",
+        "unit": "%",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 80.0,
+    },
+    {
+        "data_source": "ha_resource",
+        "field_key": "num_active",
+        "display_name": "Device Active Count",
+        "description": "Number of active devices/tunnels in HA pair",
+        "unit": "count",
+        "category": "state",
+        "valid_aggregations": ["avg", "min", "max"],
+        "valid_conditions": ["<", "<=", "=="],
+        "example_threshold": 2,
+    },
+    # sdwan_sla
+    {
+        "data_source": "sdwan_sla",
+        "field_key": "avg_packet_loss_link1",
+        "display_name": "SD-WAN Link 1 Packet Loss",
+        "description": "Average packet loss on SD-WAN link 1",
+        "unit": "%",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 1.0,
+    },
+    {
+        "data_source": "sdwan_sla",
+        "field_key": "avg_packet_loss_link2",
+        "display_name": "SD-WAN Link 2 Packet Loss",
+        "description": "Average packet loss on SD-WAN link 2",
+        "unit": "%",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 1.0,
+    },
+    {
+        "data_source": "sdwan_sla",
+        "field_key": "avg_latency_link1",
+        "display_name": "SD-WAN Link 1 Latency",
+        "description": "Average latency on SD-WAN link 1",
+        "unit": "ms",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 100.0,
+    },
+    {
+        "data_source": "sdwan_sla",
+        "field_key": "avg_latency_link2",
+        "display_name": "SD-WAN Link 2 Latency",
+        "description": "Average latency on SD-WAN link 2",
+        "unit": "ms",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 100.0,
+    },
+    # vpn_ssl
+    {
+        "data_source": "vpn_ssl",
+        "field_key": "active_sslvpn_users_count",
+        "display_name": "SSL VPN Active Users",
+        "description": "Number of active SSL VPN users",
+        "unit": "count",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 100.0,
+    },
+    # vpn_ipsec
+    {
+        "data_source": "vpn_ipsec",
+        "field_key": "active_ipsec_users_count",
+        "display_name": "IPsec Active Tunnels",
+        "description": "Number of active IPsec tunnels",
+        "unit": "count",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": ["<", "<="],
+        "example_threshold": 1.0,
+    },
+    # appid_flow - traffic fields
+    {
+        "data_source": "appid_flow",
+        "field_key": "total_throughput",
+        "display_name": "Traffic Internet (WAN aggregate)",
+        "description": "Total internet throughput",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max", "sum"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 1000.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "flow.client.bytes_out",
+        "display_name": "Traffic Outbound (client → WAN)",
+        "description": "Outbound traffic from client to WAN",
+        "unit": "bytes",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "sum"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 1e9,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "flow.server.bytes_in",
+        "display_name": "Traffic Inbound (WAN → client)",
+        "description": "Inbound traffic from WAN to client",
+        "unit": "bytes",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "sum"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 1e9,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "flow.internal.inter_site_bytes",
+        "display_name": "Traffic Internal - Inter-site",
+        "description": "Inter-site traffic between sites",
+        "unit": "bytes",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "sum"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 5e8,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "flow.internal.intra_lan_bytes",
+        "display_name": "Traffic Internal - Intra-LAN",
+        "description": "Local LAN traffic within site",
+        "unit": "bytes",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "sum"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 5e8,
+    },
+]
+
+
+async def seed_field_catalog() -> int:
+    """Insert seed field catalog rows if empty.
+
+    Returns the number of rows inserted.
+    """
+    from app.db.models import AlertFieldCatalog
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(AlertFieldCatalog).limit(1))
+        existing = result.scalar_one_or_none()
+
+        if existing is not None:
+            return 0
+
+        count = 0
+        for data in SEED_FIELD_CATALOG:
+            catalog = AlertFieldCatalog(**data)
+            db.add(catalog)
+            await db.flush()
+            count += 1
+
+        await db.commit()
+        logger.info("Seeded %d field catalog rows", count)
+        return count
+
+

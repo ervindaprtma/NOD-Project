@@ -81,32 +81,21 @@ def create_refresh_token(
     return token, jti, expires_at
 
 
-class JWTError(jwt.PyJWTError):
-    """Compat shim for code that catches jose.JWTError."""
-
-
 def decode_token(token: str) -> dict[str, Any]:
-    """
-    Decode and validate a JWT token.
-    Raises JWTError on invalid/expired token.
-    """
-    try:
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET,
-            algorithms=[settings.JWT_ALGORITHM],
-            options={"require": ["sub", "exp", "jti", "type"]},
-        )
-        return payload
-    except jwt.PyJWTError as e:
-        raise JWTError(str(e)) from e
+    """Decode and validate a JWT token. Raises jwt.PyJWTError on failure."""
+    return jwt.decode(
+        token,
+        settings.JWT_SECRET,
+        algorithms=[settings.JWT_ALGORITHM],
+        options={"require": ["sub", "exp", "jti", "type"]},
+    )
 
 
 def decode_token_optional(token: str) -> Optional[dict[str, Any]]:
     """Decode without raising; returns None on failure."""
     try:
         return decode_token(token)
-    except JWTError:
+    except jwt.PyJWTError:
         return None
 
 

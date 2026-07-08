@@ -157,7 +157,6 @@ async def revoke_user_sessions(
     """Revoke refresh tokens for a user. Body: { jti: "..." } or { revoke_all: true }."""
     from datetime import datetime, timezone
     from app.db.models import RefreshToken
-    from app.main import alert_ws_manager
 
     # Find target user
     result = await db.execute(select(User).where(User.id == user_id))
@@ -217,9 +216,6 @@ async def revoke_user_sessions(
             token.is_revoked = True
             revoked_count += 1
 
-        # Close WebSocket if connected
-        if alert_ws_manager.is_connected(user_id):
-            await alert_ws_manager.disconnect(user_id)
 
         await db.flush()
 

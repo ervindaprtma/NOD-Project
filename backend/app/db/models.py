@@ -121,6 +121,12 @@ class AlertRule(Base):
     notify_when: Mapped[str] = mapped_column(
         String(4), nullable=False, default="any", server_default=text("'any'")
     )  # any | all (composite rule combination logic, P5)
+    notification_mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="stateful", server_default=text("'stateful'")
+    )  # stateful | peak_only (§11.4)
+    renotify_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )  # whether to re-notify while still firing (§11.4)
     data_source: Mapped[str] = mapped_column(
         String(20), nullable=False
     )  # appid_flow, sdwan_sla, ha_resource, vpn_ssl, vpn_ipsec
@@ -142,6 +148,9 @@ class AlertRule(Base):
     template_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), ForeignKey("alert_templates.id", ondelete="SET NULL"), nullable=True
     )
+    notification_template_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("notification_templates.id", ondelete="SET NULL"), nullable=True
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     site_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_by: Mapped[Optional[str]] = mapped_column(
@@ -158,6 +167,7 @@ class AlertRule(Base):
     )
 
     template: Mapped[Optional["AlertTemplate"]] = relationship(back_populates="rules")
+    notification_template: Mapped[Optional["NotificationTemplate"]] = relationship(back_populates="rules")
 
 
 class AlertTemplate(Base):
@@ -196,11 +206,53 @@ class AlertTemplate(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_user_created: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    default_notification_mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="stateful", server_default=text("'stateful'")
+    )  # stateful | peak_only
+    locks_notification_mode: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )  # whether to lock mode for this template
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
 
     rules: Mapped[list["AlertRule"]] = relationship(back_populates="template")
+
+
+class NotificationTemplate(Base):
+    """Message-format templates for alert notifications (§11.1).
+
+    Split from AlertTemplate — this owns subject/body/line templates only.
+    Rule-shape templates (data_source, metric_field, etc.) stay in AlertTemplate.
+    """
+    __tablename__ = "notification_templates"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    subject_template: Mapped[str] = mapped_column(
+        Text, nullable=False, default="Alert: {{ rule.name }}"
+    )
+    body_template: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    line_template: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_user_created: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("now()"),
+        onupdate=_utcnow,
+        nullable=False,
+    )
+
+    rules: Mapped[list["AlertRule"]] = relationship(back_populates="notification_template")
 
 
 class AlertLog(Base):
@@ -251,6 +303,41 @@ class AlertState(Base):
         server_default=text("now()"),
         onupdate=_utcnow,
         nullable=False,
+    )
+
+
+class AlertFieldCatalog(Base):
+    """Field catalog for guided rule creation (§11.2).
+
+    Single source of truth for data_source, field_key, units, and valid
+    aggregations/conditions. Used by Field Reference tab and template-driven
+    rule creation.
+    """
+    __tablename__ = "alert_field_catalog"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    data_source: Mapped[str] = mapped_column(
+        String(20), nullable=False, index=True
+    )  # ha_resource, sdwan_sla, vpn_ssl, vpn_ipsec, appid_flow
+    field_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    unit: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    category: Mapped[str] = mapped_column(
+        String(10), nullable=False
+    )  # state | traffic
+    valid_aggregations: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list
+    )  # e.g. ["avg", "max"]
+    valid_conditions: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list
+    )  # e.g. [">", "<", ">=", "<="]
+    example_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("data_source", "field_key", name="uq_field_catalog"),
     )
 
 

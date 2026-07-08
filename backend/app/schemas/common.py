@@ -21,6 +21,7 @@ class Meta(BaseModel):
     page: Optional[int] = None
     page_size: Optional[int] = None
     query_took_ms: Optional[int] = None
+    warning_rules: Optional[list[dict]] = None  # §11.5: channel disable warning
 
 
 class APIResponse(BaseModel, Generic[T]):
@@ -47,8 +48,4 @@ class APIResponse(BaseModel, Generic[T]):
         )
 
 
-class PaginationParams(BaseModel):
-    page: int = 1
-    page_size: int = 25
-    sort_by: Optional[str] = None
-    sort_dir: Optional[str] = "desc"  # asc | desc
+

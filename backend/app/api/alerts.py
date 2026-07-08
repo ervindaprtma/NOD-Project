@@ -11,7 +11,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import require_role
-from app.db.models import AlertLog, AlertRule, AlertState, AlertTemplate, User
+from app.db.models import AlertFieldCatalog, AlertLog, AlertRule, AlertState, AlertTemplate, User
 from app.db.session import get_db
 from app.services.activity_logger import log_activity
 from app.schemas.alert import (
@@ -22,6 +22,7 @@ from app.schemas.alert import (
     AlertTestResult,
 )
 from app.schemas.common import APIResponse, Meta
+from app.schemas.field_catalog import AlertFieldCatalogRead
 from app.schemas.template import AlertFromTemplateRequest, AlertTemplateRead
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["Alerts"])
@@ -492,3 +493,22 @@ async def get_alert_logs(
         data=[AlertLogRead.model_validate(l) for l in logs],
         meta=Meta(total=total),
     )
+
+
+# ── Field Catalog (§11.2) ───────────────────────────────────────────────
+
+
+@router.get("/fields", response_model=APIResponse[list[AlertFieldCatalogRead]])
+async def get_field_catalog(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("viewer")),
+    data_source: str | None = None,
+) -> APIResponse[list[AlertFieldCatalogRead]]:
+    """FR-11.2: Field catalog for guided rule creation (viewer auth)."""
+    stmt = select(AlertFieldCatalog)
+    if data_source:
+        stmt = stmt.where(AlertFieldCatalog.data_source == data_source)
+
+    result = await db.execute(stmt.order_by(AlertFieldCatalog.field_key))
+    fields = result.scalars().all()
+    return APIResponse.ok(data=[AlertFieldCatalogRead.model_validate(f) for f in fields])

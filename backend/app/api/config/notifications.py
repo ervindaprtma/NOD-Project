@@ -19,7 +19,7 @@ from app.core.security import (
 )
 from app.db.models import NotificationConfig
 from app.db.session import AsyncSessionLocal
-from app.schemas.common import APIResponse
+from app.schemas.common import APIResponse, Meta
 from app.schemas.notification import (
     NotificationConfigRead,
     NotificationConfigUpdate,
@@ -134,8 +134,21 @@ async def upsert_config(
 
     Secrets (api_token, bot_token, password, etc.) are encrypted at rest.
     Only provided fields are updated — missing fields keep their existing values.
+
+    §11.5: When disabling a channel, includes warning in response body.
     """
     async with AsyncSessionLocal() as db:
+        # §11.5: Check for enabled rules referencing this channel before disabling
+        warning_rules = []
+        if body.enabled is False:
+            from app.db.models import AlertRule
+            stmt = select(AlertRule.id, AlertRule.name).where(
+                AlertRule.notify_channels.contains([channel])
+                & (AlertRule.enabled == True)  # noqa: E712
+            )
+            result = await db.execute(stmt)
+            warning_rules = [{"id": r[0], "name": r[1]} for r in result.all()]
+
         cfg = await _get_config(db, channel)
         is_new = cfg is None
 
@@ -157,16 +170,26 @@ async def upsert_config(
         await db.commit()
         await db.refresh(cfg)
 
+        data = NotificationConfigRead(
+            channel=cfg.channel,
+            enabled=cfg.enabled,
+            min_severity=cfg.min_severity,
+            config=_mask_config(cfg.config),
+            recipients=cfg.recipients,
+            updated_by=cfg.updated_by,
+            updated_at=cfg.updated_at,
+        )
+
+        # §11.5: Include warning in response body if rules will lose notifications
+        if warning_rules:
+            return APIResponse.ok(
+                data=data.model_dump(),
+                message=f"Created" if is_new else f"Updated (warning: {len(warning_rules)} rule(s) will lose notifications)",
+                meta=Meta(warning_rules=warning_rules),
+            )
+
         return APIResponse.ok(
-            data=NotificationConfigRead(
-                channel=cfg.channel,
-                enabled=cfg.enabled,
-                min_severity=cfg.min_severity,
-                config=_mask_config(cfg.config),
-                recipients=cfg.recipients,
-                updated_by=cfg.updated_by,
-                updated_at=cfg.updated_at,
-            ),
+            data=data,
             message="Created" if is_new else "Updated",
         )
 
@@ -202,12 +225,13 @@ async def test_config(
 
         decrypted = _decrypt_config(dict(cfg.config), channel)
 
-        from app.services.notifier_helper import send_test_notification
+        from app.services.notifier_helper import send_alert
 
-        success = await send_test_notification(
+        success = await send_alert(
             channel=channel,
             config=decrypted,
-            message=f"🧪 Test notification from NOD Alert System\nChannel: {channel}\nSeverity: {cfg.min_severity}",
+            subject="🧪 NOD Alert Test",
+            body=f"🧪 Test notification from NOD Alert System\nChannel: {channel}\nSeverity: {cfg.min_severity}",
         )
 
         if success:

@@ -73,16 +73,3 @@ async def send_alert(channel: str, config: dict, subject: str, body: str, severi
     if channel == "smtp":
         return await fn(subject=subject, body=body, config=config)
     return await fn(message=body, config=config)
-
-
-async def send_test_notification(channel: str, config: dict, message: str) -> bool:
-    """Send a test notification through the same dispatch path as production
-    alerts so the two never drift. Routes via send_alert() rather than calling
-    ALERT_DISPATCH directly.
-    """
-    return await send_alert(
-        channel=channel,
-        config=config,
-        subject="🧪 NOD Alert Test",
-        body=message,
-    )

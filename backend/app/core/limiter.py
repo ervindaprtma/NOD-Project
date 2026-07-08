@@ -34,15 +34,8 @@ def get_real_client_ip(request: Request) -> str:
     return get_remote_address(request)
 
 
-# Backward-compatible alias for existing limiter key_func
-_get_client_ip = get_real_client_ip
-
-
-# ── Global limiter instance ────────────────────────────────────
-# Uses X-Forwarded-For (set by Nginx) so rate limiting applies to real client
-# IP, not the Docker bridge IP. Without this, all clients share one limit.
 limiter = Limiter(
-    key_func=_get_client_ip,
+    key_func=get_real_client_ip,
     default_limits=[
         f"{settings.RATE_LIMIT_DEFAULT_REQUESTS}/{settings.RATE_LIMIT_DEFAULT_WINDOW}",
     ],

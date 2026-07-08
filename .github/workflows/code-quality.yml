@@ -5,10 +5,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install ruff mypy pip-audit --break-system-packages
+      - run: pip install ruff mypy pip-audit pytest pytest-asyncio --break-system-packages
       - run: ruff check backend/
       - run: mypy backend/app/api/auth.py backend/app/api/alerts.py
       - run: pip-audit -r backend/requirements.txt
+      # §9.10: only the pure tests (no DB, no OS) run in this CI lane. The
+      # 4 integration stubs are @pytest.mark.skip'd with TODOs; they
+      # need a test DB + mocked OpenSearch, which the test runner
+      # doesn't have here.
+      - run: pytest backend/tests/test_secret_roundtrip.py backend/tests/test_severity_gating.py -v
+        working-directory: backend
   frontend:
     runs-on: ubuntu-latest
     steps:
