@@ -6,6 +6,7 @@ const API_BASE = ""; // Proxied through Next.js rewrites
 
 interface FetchOptions extends RequestInit {
   params?: Record<string, string | number | undefined>;
+  timeoutMs?: number;
 }
 
 class ApiError extends Error {
@@ -130,11 +131,16 @@ export async function bootAuthFromCookie(): Promise<string | null> {
   return token;
 }
 
+export const DEFAULT_TIMEOUT_MS = 30000; // 30s for OpenSearch queries
+
 export async function apiFetch<T = unknown>(
   path: string,
-  options: FetchOptions = {}
+  options: FetchOptions = {},
 ): Promise<T> {
-  const { params, ...fetchOpts } = options;
+  const { params, timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOpts } = options;
+
+  const controller = new AbortController();
+  const timeoutId = typeof window !== "undefined" ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
   // Build URL with query params
   let url = `${API_BASE}${path}`;
@@ -159,7 +165,18 @@ export async function apiFetch<T = unknown>(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  let resp = await fetch(url, { ...fetchOpts, headers, credentials: "include" });
+  let resp: Response;
+  try {
+    resp = await fetch(url, { ...fetchOpts, headers, credentials: "include", signal: controller.signal });
+    if (timeoutId) clearTimeout(timeoutId);
+  } catch (e) {
+    if (timeoutId) clearTimeout(timeoutId);
+    const err = e instanceof Error ? e : new Error(String(e));
+    if (err.name === "AbortError") {
+      throw new ApiError(408, "TIMEOUT", `Request timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  }
 
   // Auto-refresh on 401
   if (resp.status === 401) {

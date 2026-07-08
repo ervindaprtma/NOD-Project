@@ -113,14 +113,18 @@ export default function RawDataPage() {
   // Gate the SWR key on operator+ so a viewer never triggers a 403 round-trip.
   const canFetch = token !== null && hasMinRole("operator");
   const { data, error, isLoading } = useSWR<APIResponse<RawFlowRecord[]>>(
-    canFetch ? `/api/v1/traffic/raw?${new URLSearchParams(
-      Object.entries(queryParams)
-        .filter(([, v]) => v !== undefined)
-        .map(([k, v]) => [k, String(v)])
-    ).toString()}` : null,
+    canFetch
+      ? `/api/v1/traffic/raw?${new URLSearchParams(
+          Object.entries(queryParams)
+            .filter(([, v]) => v !== undefined && v !== null)
+            .map(([k, v]) => [k, String(v)]) as [string, string][]
+        ).toString()}`
+      : null,
     swrFetcher,
     { refreshInterval: autoRefresh ? 60000 : 0 }
   );
+
+  const isTimeout = (error as any)?.code === "TIMEOUT";
 
   const records = data?.data || [];
   const total = data?.meta?.total || 0;
@@ -301,8 +305,10 @@ export default function RawDataPage() {
 
       {error && (
         <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-sm">
-          Failed to load raw data.{" "}
-          <button onClick={() => window.location.reload()} className="underline hover:no-underline transition-all">Retry</button>
+          {isTimeout
+            ? `Request timed out. Please retry or reduce the time range.`
+            : `Failed to load raw data.`}
+          <button onClick={() => window.location.reload()} className="underline hover:no-underline transition-all ml-2">Retry</button>
         </div>
       )}
 
