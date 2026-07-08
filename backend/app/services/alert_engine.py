@@ -228,21 +228,6 @@ async def _notify(rule: AlertRule, metric_value: float):
 # ── Main evaluation entry points ────────────────────────────────
 
 
-async def _evaluate_single_rule(rule: AlertRule, group_override: float | list | dict | None = None) -> float | None:
-    """Evaluate one rule, optionally using a pre-fetched group result.
-
-    Deprecated — kept for backwards compatibility / test API usage.
-    New callers should use _run_group_query + _extract_per_rule_value directly.
-    """
-    if group_override is not None:
-        return _extract_per_rule_value(rule, group_override)
-
-    result = await _run_group_query(
-        rule.data_source, rule.site_name, rule.evaluation_window_minutes
-    )
-    return _extract_per_rule_value(rule, result)
-
-
 async def _advance_state_machine(
     rule: AlertRule,
     metric_value: float,
