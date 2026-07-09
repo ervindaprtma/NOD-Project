@@ -196,8 +196,8 @@ export interface RawFlowRecord {
   total_bytes: number;
   bytes_human?: string;
   packets: number;
-  ingress_zone: string;
-  egress_link: string;
+  ingress_interface: string;
+  egress_interface: string;
   correlation_id?: string;
   correlation_direction?: string;
 }

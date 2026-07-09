@@ -103,8 +103,8 @@ class RawFlowRecord(BaseModel):
     total_bytes: int
     bytes_human: Optional[str] = None
     packets: int
-    ingress_zone: str
-    egress_link: str
+    ingress_interface: str
+    egress_interface: str
     path: str  # traffic path: internet, inbound-vip, inter-site, intra-lan
     correlation_id: Optional[str] = None
     correlation_direction: Optional[str] = None
@@ -122,5 +122,5 @@ class RawFlowFilterParams(BaseModel):
     category: Optional[list[str]] = None
     protocol: Optional[list[str]] = None
     dst_port: Optional[int] = None
-    ingress_zone: Optional[list[str]] = None
-    egress_link: Optional[list[str]] = None
+    ingress_interface: Optional[list[str]] = None
+    egress_interface: Optional[list[str]] = None

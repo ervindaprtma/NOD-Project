@@ -628,10 +628,10 @@ async def raw_flows(
         if "dst_port" in filters and filters["dst_port"]:
             vals = filters["dst_port"] if isinstance(filters["dst_port"], list) else [filters["dst_port"]]
             must_filters.append({"terms": {"flow.dst.l4.port.id": vals}})
-        if "ingress_zone" in filters and filters["ingress_zone"]:
-            must_filters.append({"terms": {"flow.in.netif.alias": filters["ingress_zone"]}})
-        if "egress_link" in filters and filters["egress_link"]:
-            must_filters.append({"terms": {"flow.out.netif.alias": filters["egress_link"]}})
+        if "ingress_interface" in filters and filters["ingress_interface"]:
+            must_filters.append({"terms": {"flow.in.netif.alias": filters["ingress_interface"]}})
+        if "egress_interface" in filters and filters["egress_interface"]:
+            must_filters.append({"terms": {"flow.out.netif.alias": filters["egress_interface"]}})
         if "correlation_id" in filters and filters["correlation_id"]:
             must_filters.append({"terms": {"flow.correlation_id": filters["correlation_id"]}})
 
@@ -676,8 +676,8 @@ async def raw_flows(
             "dst_port": src.get("flow.dst.l4.port.id") or 0,
             "total_bytes": (src.get("flow.client.bytes", 0) or 0) + (src.get("flow.server.bytes", 0) or 0),
             "packets": src.get("flow.packets", 0),
-            "ingress_zone": src.get("flow.in.netif.alias", ""),
-            "egress_link": src.get("flow.out.netif.alias", ""),
+            "ingress_interface": src.get("flow.in.netif.alias", ""),
+            "egress_interface": src.get("flow.out.netif.alias", ""),
             "correlation_id": src.get("flow.correlation_id", ""),
             "correlation_direction": src.get("flow.correlation_direction", ""),
             "path": src.get("flow.traffic.path", ""),
