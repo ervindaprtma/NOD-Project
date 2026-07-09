@@ -255,6 +255,8 @@ export default function TrafficInboundPage() {
 
             {/* ═══ ROW 3 — 2 Cards ═══ */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+              <RankedCard title="Ingress Interfaces" loading={summaryLoading} error={!!summaryError}
+                items={(summary?.ingress_breakdown || []).slice(0, 10).map(e => ({ name: e.interface, value: e.total_bytes, mono: true }))} color="emerald" />
               <RankedCard title="Protocol Distribution" loading={summaryLoading} error={!!summaryError}
                 items={(summary?.protocol_dist || []).map(p => ({ name: p.protocol, value: p.total_bytes }))} color="cyan" />
               <RankedCard title="Egress Interfaces" loading={summaryLoading} error={!!summaryError}

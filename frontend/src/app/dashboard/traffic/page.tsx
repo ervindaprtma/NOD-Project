@@ -490,6 +490,13 @@ export default function TrafficPage() {
                 color="cyan"
               />
               <RankedCard
+                title="Ingress Interfaces"
+                loading={summaryLoading}
+                error={!!summaryError}
+                items={(summary?.ingress_breakdown || []).slice(0, 10).map(e => ({ name: e.interface, value: e.total_bytes, mono: true }))}
+                color="emerald"
+              />
+              <RankedCard
                 title="Egress Interfaces"
                 loading={summaryLoading}
                 error={!!summaryError}

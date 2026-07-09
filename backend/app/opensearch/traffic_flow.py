@@ -163,6 +163,10 @@ async def flow_summary(
                 "terms": {"field": "flow.out.netif.name", "size": 10, "order": {"total_bytes": "desc"}},
                 "aggs": _bytes_sum(),
             },
+            "ingress_breakdown": {
+                "terms": {"field": "flow.in.netif.name", "size": 10, "order": {"total_bytes": "desc"}},
+                "aggs": _bytes_sum(),
+            },
             # Unique session count for the timeframe (cardinality of connection_id)
             "session_count": {"cardinality": {"field": "flow.connection_id"}},
         },
@@ -231,6 +235,10 @@ async def flow_summary(
         "egress_breakdown": [
             {"interface": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
             for b in _buckets("egress_breakdown")
+        ],
+        "ingress_breakdown": [
+            {"interface": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
+            for b in _buckets("ingress_breakdown")
         ],
     }
 

@@ -63,6 +63,7 @@ class TrafficInboundSummaryResponse(BaseModel):
     top_servers: list[TopServerItem]
     protocol_dist: list[ProtocolDistItem]
     egress_breakdown: list[EgressBreakdownItem]
+    ingress_breakdown: list[EgressBreakdownItem]
 
 
 # ── CHART RESPONSE ───────────────────────────────────────────────

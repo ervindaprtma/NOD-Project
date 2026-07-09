@@ -156,6 +156,10 @@ async def flow_summary(
                 "terms": {"field": "l4.proto.name", "size": 10, "order": {"total_bytes": "desc"}},
                 "aggs": _bytes_sum(),
             },
+            "ingress_breakdown": {
+                "terms": {"field": "flow.in.netif.name", "size": 10, "order": {"total_bytes": "desc"}},
+                "aggs": _bytes_sum(),
+            },
             "egress_breakdown": {
                 "terms": {"field": "flow.out.netif.name", "size": 10, "order": {"total_bytes": "desc"}},
                 "aggs": _bytes_sum(),
@@ -213,6 +217,10 @@ async def flow_summary(
         "protocol_dist": [
             {"protocol": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
             for b in _buckets("protocol_dist")
+        ],
+        "ingress_breakdown": [
+            {"interface": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
+            for b in _buckets("ingress_breakdown")
         ],
         "egress_breakdown": [
             {"interface": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
