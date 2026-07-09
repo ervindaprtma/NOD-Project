@@ -72,6 +72,8 @@ def _base_filters(
     direction: str = "", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    ingress_interface: str = "",
+    egress_interface: str = "",
 ) -> list[dict]:
     filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
     if path_filter:
@@ -95,6 +97,10 @@ def _base_filters(
     if dst_port is not None:
         filters.append({"term": {"flow.dst.l4.port.id": dst_port}})
     f = _multi_wildcard("flow.dst.as.org", dst_as_org)
+    if f: filters.append(f)
+    f = _multi_term("flow.in.netif.name", ingress_interface)
+    if f: filters.append(f)
+    f = _multi_term("flow.out.netif.name", egress_interface)
     if f: filters.append(f)
     return filters
 

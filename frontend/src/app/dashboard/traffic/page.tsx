@@ -48,6 +48,8 @@ interface FilterState {
   protocol: string[];
   dst_port: string[];
   dst_as_org: string[];
+  ingress_interface: string[];
+  egress_interface: string[];
 }
 
 const defaultFilters: FilterState = {
@@ -58,6 +60,8 @@ const defaultFilters: FilterState = {
   protocol: [],
   dst_port: [],
   dst_as_org: [],
+  ingress_interface: [],
+  egress_interface: [],
 };
 
 function countActiveFilters(f: FilterState): number {
@@ -134,6 +138,8 @@ export default function TrafficPage() {
     if (filters.protocol.length > 0) parts.push(`protocol=${encodeURIComponent(filters.protocol.join(","))}`);
     if (filters.dst_port.length > 0) parts.push(`dst_port=${encodeURIComponent(filters.dst_port.join(","))}`);
     if (filters.dst_as_org.length > 0) parts.push(`dst_as_org=${encodeURIComponent(filters.dst_as_org.join(","))}`);
+    if (filters.ingress_interface.length > 0) parts.push(`ingress_interface=${encodeURIComponent(filters.ingress_interface.join(","))}`);
+    if (filters.egress_interface.length > 0) parts.push(`egress_interface=${encodeURIComponent(filters.egress_interface.join(","))}`);
     return parts.length > 0 ? "&" + parts.join("&") : "";
   }, [filters]);
 
@@ -400,6 +406,10 @@ export default function TrafficPage() {
                 onChange={(v) => setDraftFilters({ ...draftFilters, dst_port: v })} />
               <TagFilterField label="Destination AS" values={draftFilters.dst_as_org}
                 onChange={(v) => setDraftFilters({ ...draftFilters, dst_as_org: v })} />
+              <TagFilterField label="Ingress Interface" values={draftFilters.ingress_interface}
+                onChange={(v) => setDraftFilters({ ...draftFilters, ingress_interface: v })} mono />
+              <TagFilterField label="Egress Interface" values={draftFilters.egress_interface}
+                onChange={(v) => setDraftFilters({ ...draftFilters, egress_interface: v })} mono />
             </div>
             <div className="flex items-center gap-2 mt-3">
               <button onClick={applyFilters}

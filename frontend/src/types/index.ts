@@ -218,6 +218,7 @@ export interface TrafficFlowSummary {
   top_dst_as_org: TrafficFlowASOrgItem[]; top_dst_as_country: TrafficFlowASCountryItem[];
   top_clients: TrafficFlowClientItem[]; top_servers: TrafficFlowServerItem[];
   protocol_dist: TrafficFlowProtocolItem[]; egress_breakdown: TrafficFlowEgressItem[];
+  ingress_breakdown: TrafficFlowEgressItem[];
   top_src_as_org: TrafficFlowSrcASOrgItem[];
 }
 export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; global_speed_by_app?: Record<string, number>; }
@@ -443,6 +444,7 @@ export interface TrafficInboundSummary {
   top_servers: TrafficFlowServerItem[];
   protocol_dist: { protocol: string; total_bytes: number }[];
   egress_breakdown: TrafficFlowEgressItem[];
+  ingress_breakdown: TrafficFlowEgressItem[];
 }
 export interface TrafficInboundChartData { chart_data: Record<string, any>[]; service_names: string[]; }
 export interface TrafficInboundTableRecord { client_ip: string; server_ip: string; service: string; bytes: number; packets: number; sessions: number; }

@@ -34,9 +34,11 @@ interface FilterState {
   protocol: string[];
   dst_port: string[];
   src_as_org: string[];
+  ingress_interface: string[];
+  egress_interface: string[];
 }
 
-const defaultFilters: FilterState = { application: [], client_ip: [], server_ip: [], protocol: [], dst_port: [], src_as_org: [] };
+const defaultFilters: FilterState = { application: [], client_ip: [], server_ip: [], protocol: [], dst_port: [], src_as_org: [], ingress_interface: [], egress_interface: [] };
 
 function countActiveFilters(f: FilterState): number {
   let n = 0;
@@ -91,6 +93,8 @@ export default function TrafficInboundPage() {
     if (filters.protocol.length > 0) parts.push(`protocol=${encodeURIComponent(filters.protocol.join(","))}`);
     if (filters.dst_port.length > 0) parts.push(`dst_port=${encodeURIComponent(filters.dst_port.join(","))}`);
     if (filters.src_as_org.length > 0) parts.push(`src_as_org=${encodeURIComponent(filters.src_as_org.join(","))}`);
+    if (filters.ingress_interface.length > 0) parts.push(`ingress_interface=${encodeURIComponent(filters.ingress_interface.join(","))}`);
+    if (filters.egress_interface.length > 0) parts.push(`egress_interface=${encodeURIComponent(filters.egress_interface.join(","))}`);
     return parts.length > 0 ? "&" + parts.join("&") : "";
   }, [filters]);
 
@@ -214,6 +218,8 @@ export default function TrafficInboundPage() {
               <TagFilterField label="Protocol" values={draftFilters.protocol} onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })} />
               <TagFilterField label="Dst Port" values={draftFilters.dst_port} onChange={(v) => setDraftFilters({ ...draftFilters, dst_port: v })} />
               <TagFilterField label="Source AS" values={draftFilters.src_as_org} onChange={(v) => setDraftFilters({ ...draftFilters, src_as_org: v })} />
+              <TagFilterField label="Ingress Interface" values={draftFilters.ingress_interface} onChange={(v) => setDraftFilters({ ...draftFilters, ingress_interface: v })} mono />
+              <TagFilterField label="Egress Interface" values={draftFilters.egress_interface} onChange={(v) => setDraftFilters({ ...draftFilters, egress_interface: v })} mono />
             </div>
             <div className="flex items-center gap-2 mt-3">
               <button onClick={applyFilters} className="px-4 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors">Apply</button>

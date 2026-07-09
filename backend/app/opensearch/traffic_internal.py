@@ -117,6 +117,8 @@ def _base_filters(
     service_filter: str = "", client_ip: str = "", server_ip: str = "",
     protocol: str = "", dst_port: int | None = None,
     traffic_path: str = "all",
+    ingress_interface: str = "",
+    egress_interface: str = "",
 ) -> list[dict]:
     filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name), _internal_path_filter(traffic_path)]
     if service_filter:
@@ -135,6 +137,10 @@ def _base_filters(
     if f: filters.append(f)
     if dst_port is not None:
         filters.append({"term": {"flow.dst.l4.port.id": dst_port}})
+    f = _multi_term("flow.in.netif.name", ingress_interface)
+    if f: filters.append(f)
+    f = _multi_term("flow.out.netif.name", egress_interface)
+    if f: filters.append(f)
     return filters
 
 
