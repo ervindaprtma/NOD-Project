@@ -17,12 +17,12 @@ const SITE_LABELS: Record<string, string> = { "Site_FGT-DC": "DC", "Site_FGT-DRC
 const TRAFFIC_PATHS = ["all", "intra-lan", "inter-site"] as const;
 const TRAFFIC_PATH_LABELS: Record<string, string> = { "all": "All Paths", "intra-lan": "Intra-LAN", "inter-site": "Inter-Site" };
 
-interface FilterState { application: string[]; client_ip: string[]; server_ip: string[]; protocol: string[]; dst_port: string[]; }
-const defaultFilters: FilterState = { application: [], client_ip: [], server_ip: [], protocol: [], dst_port: [] };
+interface FilterState { application: string[]; client_ip: string[]; server_ip: string[]; protocol: string[]; dst_port: string[]; ingress_interface: string[]; egress_interface: string[]; }
+const defaultFilters: FilterState = { application: [], client_ip: [], server_ip: [], protocol: [], dst_port: [], ingress_interface: [], egress_interface: [] };
 
 function countActiveFilters(f: FilterState): number {
   let n = 0;
-  if (f.application.length > 0) n++; if (f.client_ip.length > 0) n++; if (f.server_ip.length > 0) n++; if (f.protocol.length > 0) n++; if (f.dst_port.length > 0) n++;
+  if (f.application.length > 0) n++; if (f.client_ip.length > 0) n++; if (f.server_ip.length > 0) n++; if (f.protocol.length > 0) n++; if (f.dst_port.length > 0) n++; if (f.ingress_interface.length > 0) n++; if (f.egress_interface.length > 0) n++;
   return n;
 }
 
@@ -68,6 +68,8 @@ export default function TrafficInternalPage() {
     if (filters.server_ip.length > 0) parts.push(`server_ip=${encodeURIComponent(filters.server_ip.join(","))}`);
     if (filters.protocol.length > 0) parts.push(`protocol=${encodeURIComponent(filters.protocol.join(","))}`);
     if (filters.dst_port.length > 0) parts.push(`dst_port=${encodeURIComponent(filters.dst_port.join(","))}`);
+    if (filters.ingress_interface.length > 0) parts.push(`ingress_interface=${encodeURIComponent(filters.ingress_interface.join(","))}`);
+    if (filters.egress_interface.length > 0) parts.push(`egress_interface=${encodeURIComponent(filters.egress_interface.join(","))}`);
     return "&" + parts.join("&");
   }, [filters, trafficPath]);
 
@@ -174,6 +176,8 @@ export default function TrafficInternalPage() {
               <TagFilterField label="Server IP" values={draftFilters.server_ip} onChange={(v) => setDraftFilters({ ...draftFilters, server_ip: v })} mono />
               <TagFilterField label="Protocol" values={draftFilters.protocol} onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })} />
               <TagFilterField label="Dst Port" values={draftFilters.dst_port} onChange={(v) => setDraftFilters({ ...draftFilters, dst_port: v })} />
+              <TagFilterField label="Ingress Interface" values={draftFilters.ingress_interface} onChange={(v) => setDraftFilters({ ...draftFilters, ingress_interface: v })} mono />
+              <TagFilterField label="Egress Interface" values={draftFilters.egress_interface} onChange={(v) => setDraftFilters({ ...draftFilters, egress_interface: v })} mono />
             </div>
             <div className="flex items-center gap-2 mt-3">
               <button onClick={applyFilters} className="px-4 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors">Apply</button>

@@ -117,6 +117,8 @@ def _base_filters(
     service_filter: str = "", client_ip: str = "", server_ip: str = "",
     protocol: str = "", dst_port: int | None = None,
     traffic_path: str = "all",
+    ingress_interface: str = "",
+    egress_interface: str = "",
 ) -> list[dict]:
     filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name), _internal_path_filter(traffic_path)]
     if service_filter:
@@ -135,12 +137,15 @@ def _base_filters(
     if f: filters.append(f)
     if dst_port is not None:
         filters.append({"term": {"flow.dst.l4.port.id": dst_port}})
+    f = _multi_term("flow.in.netif.name", ingress_interface)
+    if f: filters.append(f)
+    f = _multi_term("flow.out.netif.name", egress_interface)
+    if f: filters.append(f)
     return filters
 
 
 def _bytes_sum(name: str = "total_bytes") -> dict:
     return {name: {"sum": {"field": "flow.bytes"}}}
-
 
 # ─────────────────────────────────────────────────────────────────
 # Summary
@@ -152,13 +157,15 @@ async def flow_summary(
     site_name: str = "Site_FGT_Office", app_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, traffic_path: str = "all",
+    ingress_interface: str = "",
+    egress_interface: str = "",
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path, ingress_interface=ingress_interface, egress_interface=egress_interface)}},
         "aggs": {
             "grand_total_bytes": {"sum": {"field": "flow.bytes"}},
             "session_count": {"cardinality": {"field": "flow.connection_id"}},

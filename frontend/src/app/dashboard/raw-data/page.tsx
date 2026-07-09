@@ -20,8 +20,8 @@ interface FilterState {
   category: string[];
   protocol: string[];
   dst_port: string[];
-  ingress_zone: string[];
-  egress_link: string[];
+  ingress_interface: string[];
+  egress_interface: string[];
   correlation_id: string[];
 }
 
@@ -32,8 +32,8 @@ const defaultFilters: FilterState = {
   category: [],
   protocol: [],
   dst_port: [],
-  ingress_zone: [],
-  egress_link: [],
+  ingress_interface: [],
+  egress_interface: [],
   correlation_id: [],
 };
 
@@ -66,7 +66,7 @@ export default function RawDataPage() {
   const [visibleColumns, setVisibleColumns] = useState({
     timestamp: true, client_ip: true, server_ip: true, application: true,
     category: true, protocol: true, dst_port: true, total_bytes: true,
-    packets: true, ingress_zone: true, egress_link: true,
+    packets: true, ingress_interface: true, egress_interface: true,
     correlation_id: true, correlation_direction: true, path: false,
   });
 
@@ -93,8 +93,8 @@ export default function RawDataPage() {
     if (filters.category.length > 0) p.category = filters.category.join(",");
     if (filters.protocol.length > 0) p.protocol = filters.protocol.join(",");
     if (filters.dst_port.length > 0) p.dst_port = filters.dst_port.join(",");
-    if (filters.ingress_zone.length > 0) p.ingress_zone = filters.ingress_zone.join(",");
-    if (filters.egress_link.length > 0) p.egress_link = filters.egress_link.join(",");
+    if (filters.ingress_interface.length > 0) p.ingress_interface = filters.ingress_interface.join(",");
+    if (filters.egress_interface.length > 0) p.egress_interface = filters.egress_interface.join(",");
     if (filters.correlation_id.length > 0) p.correlation_id = filters.correlation_id.join(",");
     return p;
   }, [gteMs, lteMs, pageSize, currentCursor, filters, siteName, pathFilter, direction]);
@@ -193,8 +193,8 @@ export default function RawDataPage() {
     { key: "dst_port", label: "Dst Port", visible: visibleColumns.dst_port, sortable: false },
     { key: "total_bytes", label: "Total Bytes", visible: visibleColumns.total_bytes, sortable: false },
     { key: "packets", label: "Packets", visible: visibleColumns.packets, sortable: false },
-    { key: "ingress_zone", label: "Ingress Zone", visible: visibleColumns.ingress_zone, sortable: false },
-    { key: "egress_link", label: "Egress Link", visible: visibleColumns.egress_link, sortable: false },
+    { key: "ingress_interface", label: "Ingress Interface", visible: visibleColumns.ingress_interface, sortable: false },
+    { key: "egress_interface", label: "Egress Interface", visible: visibleColumns.egress_interface, sortable: false },
     { key: "correlation_id", label: "Correlation ID", visible: visibleColumns.correlation_id, sortable: false },
     { key: "correlation_direction", label: "Direction", visible: visibleColumns.correlation_direction, sortable: false },
     { key: "path", label: "Traffic Path", visible: visibleColumns.path, sortable: false },
@@ -359,11 +359,11 @@ export default function RawDataPage() {
             <TagFilterField label="Dst Port" values={draftFilters.dst_port}
               onChange={(v) => setDraftFilters({ ...draftFilters, dst_port: v })}
               placeholder="e.g. 443" />
-            <TagFilterField label="Ingress Zone" values={draftFilters.ingress_zone}
-              onChange={(v) => setDraftFilters({ ...draftFilters, ingress_zone: v })}
+            <TagFilterField label="Ingress Interface" values={draftFilters.ingress_interface}
+              onChange={(v) => setDraftFilters({ ...draftFilters, ingress_interface: v })}
               placeholder="e.g. port1" />
-            <TagFilterField label="Egress Link" values={draftFilters.egress_link}
-              onChange={(v) => setDraftFilters({ ...draftFilters, egress_link: v })}
+            <TagFilterField label="Egress Interface" values={draftFilters.egress_interface}
+              onChange={(v) => setDraftFilters({ ...draftFilters, egress_interface: v })}
               placeholder="e.g. wan1" />
             <TagFilterField label="Correlation ID" values={draftFilters.correlation_id}
               onChange={(v) => setDraftFilters({ ...draftFilters, correlation_id: v })} mono

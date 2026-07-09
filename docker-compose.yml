@@ -16,6 +16,11 @@ services:
     restart: unless-stopped
     networks:
       - nod_net
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   frontend:
     build:
@@ -38,6 +43,11 @@ services:
           cpus: "1.0"
     networks:
       - nod_net
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   backend:
     build:
@@ -67,6 +77,11 @@ services:
       - ./logs:/app/logs
     networks:
       - nod_net
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   db:
     image: postgres:15-alpine
@@ -91,6 +106,11 @@ services:
       retries: 5
     networks:
       - nod_net
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "3"
 
 volumes:
   postgres_data:

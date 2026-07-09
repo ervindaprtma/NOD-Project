@@ -34,14 +34,17 @@ interface FilterState {
   protocol: string[];
   dst_port: string[];
   src_as_org: string[];
+  ingress_interface: string[];
+  egress_interface: string[];
 }
 
-const defaultFilters: FilterState = { application: [], client_ip: [], server_ip: [], protocol: [], dst_port: [], src_as_org: [] };
+const defaultFilters: FilterState = { application: [], client_ip: [], server_ip: [], protocol: [], dst_port: [], src_as_org: [], ingress_interface: [], egress_interface: [] };
 
 function countActiveFilters(f: FilterState): number {
   let n = 0;
   if (f.application.length > 0) n++; if (f.client_ip.length > 0) n++; if (f.server_ip.length > 0) n++;
   if (f.protocol.length > 0) n++; if (f.dst_port.length > 0) n++; if (f.src_as_org.length > 0) n++;
+  if (f.ingress_interface.length > 0) n++; if (f.egress_interface.length > 0) n++;
   return n;
 }
 
@@ -91,6 +94,8 @@ export default function TrafficInboundPage() {
     if (filters.protocol.length > 0) parts.push(`protocol=${encodeURIComponent(filters.protocol.join(","))}`);
     if (filters.dst_port.length > 0) parts.push(`dst_port=${encodeURIComponent(filters.dst_port.join(","))}`);
     if (filters.src_as_org.length > 0) parts.push(`src_as_org=${encodeURIComponent(filters.src_as_org.join(","))}`);
+    if (filters.ingress_interface.length > 0) parts.push(`ingress_interface=${encodeURIComponent(filters.ingress_interface.join(","))}`);
+    if (filters.egress_interface.length > 0) parts.push(`egress_interface=${encodeURIComponent(filters.egress_interface.join(","))}`);
     return parts.length > 0 ? "&" + parts.join("&") : "";
   }, [filters]);
 
@@ -214,6 +219,8 @@ export default function TrafficInboundPage() {
               <TagFilterField label="Protocol" values={draftFilters.protocol} onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })} />
               <TagFilterField label="Dst Port" values={draftFilters.dst_port} onChange={(v) => setDraftFilters({ ...draftFilters, dst_port: v })} />
               <TagFilterField label="Source AS" values={draftFilters.src_as_org} onChange={(v) => setDraftFilters({ ...draftFilters, src_as_org: v })} />
+              <TagFilterField label="Ingress Interface" values={draftFilters.ingress_interface} onChange={(v) => setDraftFilters({ ...draftFilters, ingress_interface: v })} mono />
+              <TagFilterField label="Egress Interface" values={draftFilters.egress_interface} onChange={(v) => setDraftFilters({ ...draftFilters, egress_interface: v })} mono />
             </div>
             <div className="flex items-center gap-2 mt-3">
               <button onClick={applyFilters} className="px-4 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors">Apply</button>
@@ -253,15 +260,21 @@ export default function TrafficInboundPage() {
                 items={(summary?.top_src_as_country || []).slice(0, 10).map(c => ({ name: `${flagEmoji(c.flag_code)} ${c.country}`, value: c.total_bytes }))} color="indigo" />
             </div>
 
-            {/* ═══ ROW 3 — 2 Cards ═══ */}
+            {/* ═══ ROW 3 — Ingress + Egress ═══ */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-              <RankedCard title="Protocol Distribution" loading={summaryLoading} error={!!summaryError}
-                items={(summary?.protocol_dist || []).map(p => ({ name: p.protocol, value: p.total_bytes }))} color="cyan" />
+              <RankedCard title="Ingress Interfaces" loading={summaryLoading} error={!!summaryError}
+                items={(summary?.ingress_breakdown || []).slice(0, 10).map(e => ({ name: e.interface, value: e.total_bytes, mono: true }))} color="emerald" />
               <RankedCard title="Egress Interfaces" loading={summaryLoading} error={!!summaryError}
                 items={(summary?.egress_breakdown || []).slice(0, 10).map(e => ({ name: e.interface, value: e.total_bytes, mono: true }))} color="orange" />
             </div>
 
-            {/* ═══ ROW 4 — Charts ═══ */}
+            {/* ═══ ROW 4 — Protocol ═══ */}
+            <div className="mb-6">
+              <RankedCard title="Protocol Distribution" loading={summaryLoading} error={!!summaryError}
+                items={(summary?.protocol_dist || []).map(p => ({ name: p.protocol, value: p.total_bytes }))} color="cyan" wide />
+            </div>
+
+            {/* ═══ ROW 5 — Charts ═══ */}
             <div className="space-y-4 mb-6">
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
                 <h2 className="text-lg font-semibold mb-3">Total Throughput Over Time</h2>
@@ -280,7 +293,7 @@ export default function TrafficInboundPage() {
               </div>
             </div>
 
-            {/* ═══ ROW 5 — Table ═══ */}
+            {/* ═══ ROW 6 — Table ═══ */}
             <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
               <h2 className="text-lg font-semibold mb-3">Flow Records</h2>
               {tableLoading ? (

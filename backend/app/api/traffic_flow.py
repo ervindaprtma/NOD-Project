@@ -41,6 +41,8 @@ async def traffic_flow_summary(
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
     dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
@@ -49,6 +51,7 @@ async def traffic_flow_summary(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = Meta(query_took_ms=elapsed)
@@ -58,7 +61,7 @@ async def traffic_flow_summary(
             "top_apps": [], "app_categories": [],
             "top_dst_as_org": [], "top_dst_as_country": [],
             "top_clients": [], "top_servers": [],
-            "protocol_dist": [], "egress_breakdown": [],
+            "protocol_dist": [], "egress_breakdown": [], "ingress_breakdown": [],
         }
         logger.warning(f"summary empty result for {site_name} ({elapsed}ms): {err}")
         return APIResponse.ok(data=TrafficSummaryResponse(**empty), meta=meta)

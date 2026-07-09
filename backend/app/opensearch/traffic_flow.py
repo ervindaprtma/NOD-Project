@@ -72,6 +72,8 @@ def _base_filters(
     direction: str = "", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    ingress_interface: str = "",
+    egress_interface: str = "",
 ) -> list[dict]:
     filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
     if path_filter:
@@ -96,6 +98,10 @@ def _base_filters(
         filters.append({"term": {"flow.dst.l4.port.id": dst_port}})
     f = _multi_wildcard("flow.dst.as.org", dst_as_org)
     if f: filters.append(f)
+    f = _multi_term("flow.in.netif.name", ingress_interface)
+    if f: filters.append(f)
+    f = _multi_term("flow.out.netif.name", egress_interface)
+    if f: filters.append(f)
     return filters
 
 
@@ -114,13 +120,15 @@ async def flow_summary(
     app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    ingress_interface: str = "",
+    egress_interface: str = "",
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface)}},
         "aggs": {
             "grand_total_bytes": {"sum": {"field": "flow.bytes"}},
             "top_apps": {
@@ -161,6 +169,10 @@ async def flow_summary(
             },
             "egress_breakdown": {
                 "terms": {"field": "flow.out.netif.name", "size": 10, "order": {"total_bytes": "desc"}},
+                "aggs": _bytes_sum(),
+            },
+            "ingress_breakdown": {
+                "terms": {"field": "flow.in.netif.name", "size": 10, "order": {"total_bytes": "desc"}},
                 "aggs": _bytes_sum(),
             },
             # Unique session count for the timeframe (cardinality of connection_id)
@@ -231,6 +243,10 @@ async def flow_summary(
         "egress_breakdown": [
             {"interface": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
             for b in _buckets("egress_breakdown")
+        ],
+        "ingress_breakdown": [
+            {"interface": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
+            for b in _buckets("ingress_breakdown")
         ],
     }
 

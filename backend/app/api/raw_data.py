@@ -43,8 +43,8 @@ async def get_raw_flows(
     category: Optional[str] = Query(default=None, description="Comma-separated categories"),
     protocol: Optional[str] = Query(default=None, description="Comma-separated protocols"),
     dst_port: Optional[str] = Query(default=None, description="Destination port(s) — single value or comma-separated list (e.g. 80,443,8080)"),
-    ingress_zone: Optional[str] = Query(default=None),
-    egress_link: Optional[str] = Query(default=None),
+    ingress_interface: str = Query(default=None),
+    egress_interface: str = Query(default=None),
     correlation_id: Optional[str] = Query(default=None, description="Comma-separated correlation IDs"),
     site_name: str = Query(default="Site_FGT-DC", description="Site: Site_FGT-DC, Site_FGT-DRC, Site_FGT_Office"),
     path_filter: str = Query(default="internet", description="Traffic path: internet, inbound-vip, inter-site, or intra-lan"),
@@ -80,10 +80,10 @@ async def get_raw_flows(
         ports = [int(p.strip()) for p in str(dst_port).split(",") if p.strip()]
         if ports:
             filters["dst_port"] = ports
-    if ingress_zone:
-        filters["ingress_zone"] = [z.strip() for z in ingress_zone.split(",") if z.strip()]
-    if egress_link:
-        filters["egress_link"] = [l.strip() for l in egress_link.split(",") if l.strip()]
+    if ingress_interface:
+        filters["ingress_interface"] = [z.strip() for z in ingress_interface.split(",") if z.strip()]
+    if egress_interface:
+        filters["egress_interface"] = [l.strip() for l in egress_interface.split(",") if l.strip()]
     if correlation_id:
         filters["correlation_id"] = [c.strip() for c in correlation_id.split(",") if c.strip()]
 
@@ -119,8 +119,8 @@ async def get_raw_flows(
             total_bytes=r["total_bytes"],
             bytes_human=_fmt(r["total_bytes"]),
             packets=r["packets"],
-            ingress_zone=r["ingress_zone"],
-            egress_link=r["egress_link"],
+            ingress_interface=r["ingress_interface"],
+            egress_interface=r["egress_interface"],
             path=r.get("path", path_filter),
             correlation_id=r.get("correlation_id"),
             correlation_direction=r.get("correlation_direction"),
