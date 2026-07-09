@@ -12,6 +12,7 @@ export interface APIResponse<T = unknown> {
     page?: number;
     page_size?: number;
     query_took_ms?: number;
+    search_after?: (string | number)[] | null;  // cursor for search_after pagination
   } | null;
   error: {
     code: string;

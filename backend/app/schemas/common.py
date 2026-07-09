@@ -22,6 +22,7 @@ class Meta(BaseModel):
     page_size: Optional[int] = None
     query_took_ms: Optional[int] = None
     warning_rules: Optional[list[dict]] = None  # §11.5: channel disable warning
+    search_after: Optional[list] = None  # cursor for search_after pagination
 
 
 class APIResponse(BaseModel, Generic[T]):

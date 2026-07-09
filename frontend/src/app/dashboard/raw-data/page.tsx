@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo } from "react";
 import useSWR from "swr";
 import { swrFetcher, getAccessToken, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -8,17 +8,18 @@ import { TIME_PRESETS, formatBytes, getDefaultTimeRange } from "@/lib/constants"
 import { TagFilterField } from "@/components/TagFilterField";
 import type { RawFlowRecord, APIResponse } from "@/types";
 
-const PAGE_SIZES = [25, 50, 100];
+// ── Constants ────────────────────────────────────────────────────
+const PAGE_SIZES = [25, 50, 100, 250, 500];
+const MAX_RECORDS = 10_000; // Q-08: search_after cap
 
-// All filters are multi-value (string[]), consistent with the Traffic* pages.
-// Backend accepts comma-separated values; we join on send and split on receive.
+// ── Filter types (multi-value, consistent with Traffic* pages) ───
 interface FilterState {
   client_ip: string[];
   server_ip: string[];
   application: string[];
   category: string[];
   protocol: string[];
-  dst_port: string[];  // stored as strings, sent as "80,443,8080"
+  dst_port: string[];
   ingress_zone: string[];
   egress_link: string[];
   correlation_id: string[];
@@ -37,66 +38,55 @@ const defaultFilters: FilterState = {
 };
 
 function countActiveFilters(f: FilterState): number {
-  return (
-    f.client_ip.length +
-    f.server_ip.length +
-    f.application.length +
-    f.category.length +
-    f.protocol.length +
-    f.dst_port.length +
-    f.ingress_zone.length +
-    f.egress_link.length +
-    f.correlation_id.length
-  );
+  return Object.values(f).reduce((n, arr) => n + arr.length, 0);
 }
 
-interface SortState {
-  column: string;
-  dir: "asc" | "desc";
-}
-
+// ── Component ────────────────────────────────────────────────────
 export default function RawDataPage() {
   const defaultRange = getDefaultTimeRange();
   const [gteMs, setGteMs] = useState(defaultRange.gte_ms);
   const [lteMs, setLteMs] = useState(defaultRange.lte_ms);
   const [selectedPreset, setSelectedPreset] = useState("15m");
-  const [autoRefresh, setAutoRefresh] = useState(false); // default OFF for raw data
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [pageSize, setPageSize] = useState(25);
   const [filters, setFilters] = useState<FilterState>(defaultFilters);
   const [draftFilters, setDraftFilters] = useState<FilterState>(defaultFilters);
-  const [sort, setSort] = useState<SortState>({ column: "@timestamp", dir: "desc" });
   const [showFilters, setShowFilters] = useState(false);
-  const [cursorStack, setCursorStack] = useState<Array<[number, string]>>([]);
-  const [currentCursor, setCurrentCursor] = useState<[number, string] | null>(null);
+  const [siteName, setSiteName] = useState("Site_FGT-DC");
+  const [pathFilter, setPathFilter] = useState("internet");
+  const [direction, setDirection] = useState(""); // upload, download
+
+  // ── Pagination state (search_after cursor stack) ──────────────
+  const [cursorStack, setCursorStack] = useState<(number | string)[][]>([]);
+  // currentCursor is the search_after array from the PREVIOUS page's response
+  const [currentCursor, setCurrentCursor] = useState<(number | string)[] | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
+
+  // ── Column visibility ─────────────────────────────────────────
   const [visibleColumns, setVisibleColumns] = useState({
     timestamp: true, client_ip: true, server_ip: true, application: true,
     category: true, protocol: true, dst_port: true, total_bytes: true,
     packets: true, ingress_zone: true, egress_link: true,
     correlation_id: true, correlation_direction: true, path: false,
   });
-  const [siteName, setSiteName] = useState("Site_FGT-DC");
-  const [pathFilter, setPathFilter] = useState("internet"); // internet, inbound-vip, inter-site, intra-lan
-  const [direction, setDirection] = useState(""); // upload, download
 
-  // Build query params
+  // ── Build query params ────────────────────────────────────────
   const queryParams = useMemo(() => {
     const p: Record<string, string | number | undefined> = {
       gte_ms: gteMs,
       lte_ms: lteMs,
       page_size: pageSize,
-      sort_by: sort.column,
-      sort_dir: sort.dir,
+      sort_by: "@timestamp",
+      sort_dir: "desc",
       site_name: siteName,
       path_filter: pathFilter,
     };
     if (direction) p.direction = direction;
-    if (currentCursor) {
+    // search_after cursor from previous response
+    if (currentCursor && currentCursor.length >= 2) {
       p.search_after_timestamp = currentCursor[0];
-      p.search_after_id = currentCursor[1];
+      p.search_after_id = String(currentCursor[1]);
     }
-    // Multi-value filters: join as comma-separated string (backend splits).
-    // URLSearchParams handles the encoding for us.
     if (filters.client_ip.length > 0) p.client_ip = filters.client_ip.join(",");
     if (filters.server_ip.length > 0) p.server_ip = filters.server_ip.join(",");
     if (filters.application.length > 0) p.application = filters.application.join(",");
@@ -107,11 +97,12 @@ export default function RawDataPage() {
     if (filters.egress_link.length > 0) p.egress_link = filters.egress_link.join(",");
     if (filters.correlation_id.length > 0) p.correlation_id = filters.correlation_id.join(",");
     return p;
-  }, [gteMs, lteMs, pageSize, sort, currentCursor, filters, siteName, pathFilter, direction]);
+  }, [gteMs, lteMs, pageSize, currentCursor, filters, siteName, pathFilter, direction]);
 
+  // ── SWR fetch ─────────────────────────────────────────────────
   const token = typeof window !== "undefined" ? getAccessToken() : null;
-  // Gate the SWR key on operator+ so a viewer never triggers a 403 round-trip.
   const canFetch = token !== null && hasMinRole("operator");
+
   const { data, error, isLoading } = useSWR<APIResponse<RawFlowRecord[]>>(
     canFetch
       ? `/api/v1/traffic/raw?${new URLSearchParams(
@@ -121,19 +112,17 @@ export default function RawDataPage() {
         ).toString()}`
       : null,
     swrFetcher,
-    { refreshInterval: autoRefresh ? 60000 : 0 }
+    { refreshInterval: autoRefresh ? 60_000 : 0 }
   );
 
   const isTimeout = (error as any)?.code === "TIMEOUT";
-
   const records = data?.data || [];
   const total = data?.meta?.total || 0;
   const queryTook = data?.meta?.query_took_ms;
+  // The search_after cursor returned by the API (includes _id tiebreaker)
+  const nextCursor = (data?.meta?.search_after as (number | string)[] | null) || null;
 
-  // ── Privilege guard ──────────────────────────────────────────
-  // The backend /api/v1/traffic/raw requires operator+ (raw_data.py:51).
-  // A viewer who lands on this page should see a friendly notice,
-  // not a broken empty table from a 403 response.
+  // ── Privilege guard ───────────────────────────────────────────
   if (!hasMinRole("operator")) {
     return (
       <div className="space-y-4">
@@ -149,38 +138,39 @@ export default function RawDataPage() {
     );
   }
 
+  // ── Handlers ──────────────────────────────────────────────────
   function handlePreset(seconds: number, label: string) {
     const now = Date.now();
     setGteMs(now - seconds * 1000);
     setLteMs(now);
     setSelectedPreset(label);
     setAutoRefresh(true);
+    resetPagination();
   }
 
   function applyFilters() {
     setFilters({ ...draftFilters });
-    setCurrentCursor(null);
-    setCursorStack([]);
-    setPageIndex(0);
+    resetPagination();
   }
 
   function clearFilters() {
     setDraftFilters(defaultFilters);
     setFilters(defaultFilters);
+    resetPagination();
+  }
+
+  function resetPagination() {
     setCurrentCursor(null);
     setCursorStack([]);
     setPageIndex(0);
   }
 
   function nextPage() {
-    if (records.length < pageSize) return; // no more pages
-    const last = records[records.length - 1];
-    const newCursor: [number, string] = [
-      new Date(last.timestamp).getTime(),
-      "", // _id not exposed in API response; will use timestamp only
-    ];
-    setCursorStack([...cursorStack, currentCursor || [0, ""]]);
-    setCurrentCursor(newCursor);
+    // Q-08: enforce 10k cap
+    const recordsScanned = pageIndex * pageSize + records.length;
+    if (records.length < pageSize || !nextCursor || recordsScanned >= MAX_RECORDS) return;
+    setCursorStack([...cursorStack, currentCursor || []]);
+    setCurrentCursor(nextCursor);
     setPageIndex(pageIndex + 1);
   }
 
@@ -188,32 +178,21 @@ export default function RawDataPage() {
     if (cursorStack.length === 0) return;
     const prev = cursorStack[cursorStack.length - 1];
     setCursorStack(cursorStack.slice(0, -1));
-    setCurrentCursor(prev[0] !== 0 ? prev : null);
+    setCurrentCursor(prev.length > 0 ? prev : null);
     setPageIndex(Math.max(0, pageIndex - 1));
   }
 
-  function toggleSort(column: string) {
-    if (sort.column === column) {
-      setSort({ column, dir: sort.dir === "asc" ? "desc" : "asc" });
-    } else {
-      setSort({ column, dir: "desc" });
-    }
-    setCurrentCursor(null);
-    setCursorStack([]);
-    setPageIndex(0);
-  }
-
-  // Column definitions
+  // ── Column definitions ────────────────────────────────────────
   const columns = [
-    { key: "timestamp", label: "Timestamp", visible: visibleColumns.timestamp, sortable: true },
-    { key: "client_ip", label: "Client IP", visible: visibleColumns.client_ip, sortable: true },
-    { key: "server_ip", label: "Server IP", visible: visibleColumns.server_ip, sortable: true },
-    { key: "application", label: "Application", visible: visibleColumns.application, sortable: true },
-    { key: "category", label: "Category", visible: visibleColumns.category, sortable: true },
+    { key: "timestamp", label: "Timestamp", visible: visibleColumns.timestamp, sortable: false },
+    { key: "client_ip", label: "Client IP", visible: visibleColumns.client_ip, sortable: false },
+    { key: "server_ip", label: "Server IP", visible: visibleColumns.server_ip, sortable: false },
+    { key: "application", label: "Application", visible: visibleColumns.application, sortable: false },
+    { key: "category", label: "Category", visible: visibleColumns.category, sortable: false },
     { key: "protocol", label: "Protocol", visible: visibleColumns.protocol, sortable: false },
-    { key: "dst_port", label: "Dst Port", visible: visibleColumns.dst_port, sortable: true },
-    { key: "total_bytes", label: "Total Bytes", visible: visibleColumns.total_bytes, sortable: true },
-    { key: "packets", label: "Packets", visible: visibleColumns.packets, sortable: true },
+    { key: "dst_port", label: "Dst Port", visible: visibleColumns.dst_port, sortable: false },
+    { key: "total_bytes", label: "Total Bytes", visible: visibleColumns.total_bytes, sortable: false },
+    { key: "packets", label: "Packets", visible: visibleColumns.packets, sortable: false },
     { key: "ingress_zone", label: "Ingress Zone", visible: visibleColumns.ingress_zone, sortable: false },
     { key: "egress_link", label: "Egress Link", visible: visibleColumns.egress_link, sortable: false },
     { key: "correlation_id", label: "Correlation ID", visible: visibleColumns.correlation_id, sortable: false },
@@ -223,6 +202,7 @@ export default function RawDataPage() {
 
   const visibleCols = columns.filter((c) => c.visible);
 
+  // ── CSV export ────────────────────────────────────────────────
   function exportCSV() {
     if (records.length === 0) return;
     const headers = visibleCols.map((c) => c.label).join(",");
@@ -245,6 +225,11 @@ export default function RawDataPage() {
     URL.revokeObjectURL(url);
   }
 
+  // ── Pagination controls ───────────────────────────────────────
+  const recordsScanned = pageIndex * pageSize + records.length;
+  const hasMore = records.length >= pageSize && nextCursor && recordsScanned < MAX_RECORDS;
+  const hasPrev = cursorStack.length > 0;
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -253,12 +238,7 @@ export default function RawDataPage() {
         <div className="flex items-center gap-3 flex-wrap">
           <select
             value={siteName}
-            onChange={(e) => {
-              setSiteName(e.target.value);
-              setCurrentCursor(null);
-              setCursorStack([]);
-              setPageIndex(0);
-            }}
+            onChange={(e) => { setSiteName(e.target.value); resetPagination(); }}
             className="px-3 py-1.5 rounded-md border border-border/60 bg-background text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
           >
             <option value="Site_FGT-DC">Site_FGT-DC</option>
@@ -267,12 +247,7 @@ export default function RawDataPage() {
           </select>
           <select
             value={pathFilter}
-            onChange={(e) => {
-              setPathFilter(e.target.value);
-              setCurrentCursor(null);
-              setCursorStack([]);
-              setPageIndex(0);
-            }}
+            onChange={(e) => { setPathFilter(e.target.value); resetPagination(); }}
             className="px-3 py-1.5 rounded-md border border-border/60 bg-background text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
             title="Traffic path"
           >
@@ -303,11 +278,12 @@ export default function RawDataPage() {
         </div>
       </div>
 
+      {/* Error / timeout banner */}
       {error && (
         <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-sm">
           {isTimeout
-            ? `Request timed out. Please retry or reduce the time range.`
-            : `Failed to load raw data.`}
+            ? "Request timed out. Please retry or reduce the time range."
+            : "Failed to load raw data."}
           <button onClick={() => window.location.reload()} className="underline hover:no-underline transition-all ml-2">Retry</button>
         </div>
       )}
@@ -317,12 +293,7 @@ export default function RawDataPage() {
         <div className="flex items-center gap-3">
           <select
             value={pageSize}
-            onChange={(e) => {
-              setPageSize(Number(e.target.value));
-              setCurrentCursor(null);
-              setCursorStack([]);
-              setPageIndex(0);
-            }}
+            onChange={(e) => { setPageSize(Number(e.target.value)); resetPagination(); }}
             className="px-2 py-1 text-xs rounded border bg-background"
           >
             {PAGE_SIZES.map((s) => (
@@ -366,7 +337,7 @@ export default function RawDataPage() {
         </span>
       </div>
 
-      {/* Filter panel — multi-value tag inputs (consistent with Traffic* pages) */}
+      {/* Filter panel */}
       {showFilters && (
         <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -418,25 +389,16 @@ export default function RawDataPage() {
                 {visibleCols.map((col) => (
                   <th
                     key={col.key}
-                    className={cn(
-                      "text-left py-2.5 px-3 font-medium text-muted-foreground whitespace-nowrap",
-                      col.sortable && "cursor-pointer hover:text-foreground select-none"
-                    )}
-                    onClick={() => col.sortable && toggleSort(col.key)}
+                    className="text-left py-2.5 px-3 font-medium text-muted-foreground whitespace-nowrap"
                   >
-                    <span className="flex items-center gap-1">
-                      {col.label}
-                      {col.sortable && sort.column === col.key && (
-                        <span className="text-primary">{sort.dir === "asc" ? "↑" : "↓"}</span>
-                      )}
-                    </span>
+                    {col.label}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
-                Array.from({ length: pageSize }).map((_, i) => (
+                Array.from({ length: Math.min(pageSize, 50) }).map((_, i) => (
                   <tr key={i} className="border-b last:border-0 animate-pulse">
                     {visibleCols.map((col) => (
                       <td key={col.key} className="py-3 px-3">
@@ -445,7 +407,7 @@ export default function RawDataPage() {
                     ))}
                   </tr>
                 ))
-              ) : records.length === 0 && !isLoading ? (
+              ) : records.length === 0 ? (
                 <tr>
                   <td colSpan={visibleCols.length} className="py-12 text-center text-muted-foreground">
                     No data can be see, because not have data on index.
@@ -544,7 +506,7 @@ export default function RawDataPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={prevPage}
-              disabled={cursorStack.length === 0}
+              disabled={!hasPrev}
               className="px-2 py-1 text-xs rounded border bg-background disabled:opacity-30 disabled:cursor-not-allowed hover:bg-muted"
             >
               ← Previous
@@ -552,14 +514,19 @@ export default function RawDataPage() {
             <span className="text-xs text-muted-foreground">Page {pageIndex + 1}</span>
             <button
               onClick={nextPage}
-              disabled={records.length < pageSize}
+              disabled={!hasMore}
               className="px-2 py-1 text-xs rounded border bg-background disabled:opacity-30 disabled:cursor-not-allowed hover:bg-muted"
             >
               Next →
             </button>
           </div>
           <span className="text-[10px] text-muted-foreground">
-            Showing {records.length} of ~{total.toLocaleString()} records
+            {records.length > 0
+              ? `Showing ${recordsScanned - records.length + 1}–${recordsScanned} of ~${total.toLocaleString()}`
+              : "No records"}
+            {recordsScanned >= MAX_RECORDS && (
+              <span className="ml-2 text-amber-600">(10k limit reached)</span>
+            )}
           </span>
         </div>
       </div>
