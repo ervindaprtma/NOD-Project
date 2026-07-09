@@ -73,6 +73,8 @@ function countActiveFilters(f: FilterState): number {
   if (f.protocol.length > 0) n++;
   if (f.dst_port.length > 0) n++;
   if (f.dst_as_org.length > 0) n++;
+  if (f.ingress_interface.length > 0) n++;
+  if (f.egress_interface.length > 0) n++;
   return n;
 }
 

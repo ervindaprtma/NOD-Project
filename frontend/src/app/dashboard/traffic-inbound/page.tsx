@@ -44,6 +44,7 @@ function countActiveFilters(f: FilterState): number {
   let n = 0;
   if (f.application.length > 0) n++; if (f.client_ip.length > 0) n++; if (f.server_ip.length > 0) n++;
   if (f.protocol.length > 0) n++; if (f.dst_port.length > 0) n++; if (f.src_as_org.length > 0) n++;
+  if (f.ingress_interface.length > 0) n++; if (f.egress_interface.length > 0) n++;
   return n;
 }
 

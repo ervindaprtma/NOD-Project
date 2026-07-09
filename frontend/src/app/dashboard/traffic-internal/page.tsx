@@ -17,12 +17,12 @@ const SITE_LABELS: Record<string, string> = { "Site_FGT-DC": "DC", "Site_FGT-DRC
 const TRAFFIC_PATHS = ["all", "intra-lan", "inter-site"] as const;
 const TRAFFIC_PATH_LABELS: Record<string, string> = { "all": "All Paths", "intra-lan": "Intra-LAN", "inter-site": "Inter-Site" };
 
-interface FilterState { application: string[]; client_ip: string[]; server_ip: string[]; protocol: string[]; dst_port: string[]; }
-const defaultFilters: FilterState = { application: [], client_ip: [], server_ip: [], protocol: [], dst_port: [] };
+interface FilterState { application: string[]; client_ip: string[]; server_ip: string[]; protocol: string[]; dst_port: string[]; ingress_interface: string[]; egress_interface: string[]; }
+const defaultFilters: FilterState = { application: [], client_ip: [], server_ip: [], protocol: [], dst_port: [], ingress_interface: [], egress_interface: [] };
 
 function countActiveFilters(f: FilterState): number {
   let n = 0;
-  if (f.application.length > 0) n++; if (f.client_ip.length > 0) n++; if (f.server_ip.length > 0) n++; if (f.protocol.length > 0) n++; if (f.dst_port.length > 0) n++;
+  if (f.application.length > 0) n++; if (f.client_ip.length > 0) n++; if (f.server_ip.length > 0) n++; if (f.protocol.length > 0) n++; if (f.dst_port.length > 0) n++; if (f.ingress_interface.length > 0) n++; if (f.egress_interface.length > 0) n++;
   return n;
 }
 
