@@ -260,17 +260,21 @@ export default function TrafficInboundPage() {
                 items={(summary?.top_src_as_country || []).slice(0, 10).map(c => ({ name: `${flagEmoji(c.flag_code)} ${c.country}`, value: c.total_bytes }))} color="indigo" />
             </div>
 
-            {/* ═══ ROW 3 — 2 Cards ═══ */}
+            {/* ═══ ROW 3 — Ingress + Egress ═══ */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
               <RankedCard title="Ingress Interfaces" loading={summaryLoading} error={!!summaryError}
                 items={(summary?.ingress_breakdown || []).slice(0, 10).map(e => ({ name: e.interface, value: e.total_bytes, mono: true }))} color="emerald" />
-              <RankedCard title="Protocol Distribution" loading={summaryLoading} error={!!summaryError}
-                items={(summary?.protocol_dist || []).map(p => ({ name: p.protocol, value: p.total_bytes }))} color="cyan" />
               <RankedCard title="Egress Interfaces" loading={summaryLoading} error={!!summaryError}
                 items={(summary?.egress_breakdown || []).slice(0, 10).map(e => ({ name: e.interface, value: e.total_bytes, mono: true }))} color="orange" />
             </div>
 
-            {/* ═══ ROW 4 — Charts ═══ */}
+            {/* ═══ ROW 4 — Protocol ═══ */}
+            <div className="mb-6">
+              <RankedCard title="Protocol Distribution" loading={summaryLoading} error={!!summaryError}
+                items={(summary?.protocol_dist || []).map(p => ({ name: p.protocol, value: p.total_bytes }))} color="cyan" wide />
+            </div>
+
+            {/* ═══ ROW 5 — Charts ═══ */}
             <div className="space-y-4 mb-6">
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
                 <h2 className="text-lg font-semibold mb-3">Total Throughput Over Time</h2>
@@ -289,7 +293,7 @@ export default function TrafficInboundPage() {
               </div>
             </div>
 
-            {/* ═══ ROW 5 — Table ═══ */}
+            {/* ═══ ROW 6 — Table ═══ */}
             <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
               <h2 className="text-lg font-semibold mb-3">Flow Records</h2>
               {tableLoading ? (
