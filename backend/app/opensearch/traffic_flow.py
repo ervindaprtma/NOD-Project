@@ -120,13 +120,15 @@ async def flow_summary(
     app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    ingress_interface: str = "",
+    egress_interface: str = "",
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface)}},
         "aggs": {
             "grand_total_bytes": {"sum": {"field": "flow.bytes"}},
             "top_apps": {
