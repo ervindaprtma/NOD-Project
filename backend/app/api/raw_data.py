@@ -134,5 +134,6 @@ async def get_raw_flows(
             total=result["total_hits"],
             page_size=page_size,
             query_took_ms=elapsed,
+            search_after=result.get("search_after"),  # cursor for next page
         ),
     )

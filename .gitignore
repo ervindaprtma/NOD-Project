@@ -54,10 +54,9 @@ test-results/
 # Alembic
 backend/alembic/versions/*.pyc
 
-# Markdown docs (except README and design reports)
+# Markdown docs (only README is tracked)
 *.md
 !README.md
-!FRONTEND_DESIGN_REPORT.md
-!BACKEND_DESIGN_REPORT.md
 *.txt
 !backend/requirements.txt
+
