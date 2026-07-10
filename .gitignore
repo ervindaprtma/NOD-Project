@@ -60,3 +60,6 @@ backend/alembic/versions/*.pyc
 *.txt
 !backend/requirements.txt
 
+
+# Generated code documentation
+docs/

@@ -105,6 +105,7 @@ class RawFlowRecord(BaseModel):
     packets: int
     ingress_interface: str
     egress_interface: str
+    classification: str = "unresolved"  # dpi_verified | port_inferred | port_suspicious | unresolved
     path: str  # traffic path: internet, inbound-vip, inter-site, intra-lan
     correlation_id: Optional[str] = None
     correlation_direction: Optional[str] = None

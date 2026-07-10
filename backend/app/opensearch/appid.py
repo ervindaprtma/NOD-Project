@@ -594,6 +594,7 @@ async def raw_flows(
         "flow.correlation_id",
         "flow.correlation_direction",
         "flow.traffic.path",
+        "flow.application.classification_method",
     ]
 
     must_filters = [_time_range(gte_ms, lte_ms), _tf_site_filter(site_name)]
@@ -680,6 +681,7 @@ async def raw_flows(
             "egress_interface": src.get("flow.out.netif.alias", ""),
             "correlation_id": src.get("flow.correlation_id", ""),
             "correlation_direction": src.get("flow.correlation_direction", ""),
+            "classification": src.get("flow.application.classification_method", ""),
             "path": src.get("flow.traffic.path", ""),
         })
 

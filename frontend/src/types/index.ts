@@ -191,6 +191,7 @@ export interface RawFlowRecord {
   server_ip: string;
   application: string;
   category: string;
+  classification?: string;
   protocol: string;
   dst_port: number;
   total_bytes: number;

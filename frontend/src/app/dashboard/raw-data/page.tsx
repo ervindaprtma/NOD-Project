@@ -65,7 +65,7 @@ export default function RawDataPage() {
   // ── Column visibility ─────────────────────────────────────────
   const [visibleColumns, setVisibleColumns] = useState({
     timestamp: true, client_ip: true, server_ip: true, application: true,
-    category: true, protocol: true, dst_port: true, total_bytes: true,
+    category: true, classification: true, protocol: true, dst_port: true, total_bytes: true,
     packets: true, ingress_interface: true, egress_interface: true,
     correlation_id: true, correlation_direction: true, path: false,
   });
@@ -189,6 +189,7 @@ export default function RawDataPage() {
     { key: "server_ip", label: "Server IP", visible: visibleColumns.server_ip, sortable: false },
     { key: "application", label: "Application", visible: visibleColumns.application, sortable: false },
     { key: "category", label: "Category", visible: visibleColumns.category, sortable: false },
+    { key: "classification", label: "Classification", visible: visibleColumns.classification, sortable: false },
     { key: "protocol", label: "Protocol", visible: visibleColumns.protocol, sortable: false },
     { key: "dst_port", label: "Dst Port", visible: visibleColumns.dst_port, sortable: false },
     { key: "total_bytes", label: "Total Bytes", visible: visibleColumns.total_bytes, sortable: false },

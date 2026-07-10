@@ -124,6 +124,7 @@ async def get_raw_flows(
             path=r.get("path", path_filter),
             correlation_id=r.get("correlation_id"),
             correlation_direction=r.get("correlation_direction"),
+            classification=r.get("classification", ""),
         )
         for r in result["records"]
     ]
