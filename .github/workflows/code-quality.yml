@@ -3,6 +3,11 @@ on: [pull_request]
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # Anything importing app.core.config hits a validator that rejects the empty
+    # JWT_SECRET default, and CI has no .env. Job-level so alembic and pytest share one
+    # definition. Throwaway value — nothing here signs or decrypts anything real.
+    env:
+      JWT_SECRET: ci-only-not-a-real-secret-000000000000
     # Postgres exists solely for the `alembic check` step below — it needs a real
     # database to diff the models against.
     services:
@@ -37,9 +42,6 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://nod_user:ci@localhost:5432/nod_db
-          # alembic imports app.core.config, whose validator rejects the empty default.
-          # Throwaway CI value — nothing here signs or decrypts anything real.
-          JWT_SECRET: ci-only-not-a-real-secret-000000000000
       # §9.10: only the pure tests (no DB, no OS) run in this CI lane. The
       # 4 integration stubs are @pytest.mark.skip'd with TODOs; they
       # need a test DB + mocked OpenSearch, which the test runner
