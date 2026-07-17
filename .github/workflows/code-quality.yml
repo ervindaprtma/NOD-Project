@@ -44,7 +44,10 @@ jobs:
       # 4 integration stubs are @pytest.mark.skip'd with TODOs; they
       # need a test DB + mocked OpenSearch, which the test runner
       # doesn't have here.
-      - run: pytest backend/tests/test_secret_roundtrip.py backend/tests/test_severity_gating.py -v
+      # Paths are relative to working-directory: backend — the `backend/` prefix made
+      # this resolve to backend/backend/tests and exit 4. Never caught because the
+      # step sat behind the failing mypy.
+      - run: pytest tests/test_secret_roundtrip.py tests/test_severity_gating.py -v
         working-directory: backend
   frontend:
     runs-on: ubuntu-latest
