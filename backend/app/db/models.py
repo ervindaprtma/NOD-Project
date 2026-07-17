@@ -433,8 +433,11 @@ class ReportJob(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"
     )  # pending, running, completed, failed, expired
-    created_by: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
+    # Nullable: ondelete=SET NULL cannot fire against a NOT NULL column — deleting any
+    # user who ever ran a report raised NotNullViolation instead. The job outlives its
+    # creator on purpose; an orphaned row is the intended end state.
+    created_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     time_range_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -488,8 +491,9 @@ class ReportSchedule(Base):
     recipient_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     recipient_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
-    created_by: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
+    # Nullable for the same reason as report_jobs.created_by — see there.
+    created_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     last_run_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

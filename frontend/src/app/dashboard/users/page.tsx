@@ -62,6 +62,16 @@ export default function UsersPage() {
     swrFetcher
   );
 
+  // Gate Delete on the session's own role. hasMinRole() reads a module-level token
+  // that is null on first paint and never re-renders when it arrives, so the button
+  // would flicker in for non-superadmins. /me is the authority the backend uses too.
+  const { data: meData } = useSWR<{ data: UserRecord }>(
+    token ? "/api/v1/users/me" : null,
+    swrFetcher
+  );
+  const me = meData?.data;
+  const isSuperadmin = me?.role === "superadmin";
+
   const [showCreate, setShowCreate] = useState(false);
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -104,10 +114,6 @@ export default function UsersPage() {
   }
 
   async function handleDelete(user: UserRecord) {
-    if (user.role === "superadmin") {
-      setToast({ ok: false, msg: "Cannot delete superadmin account." });
-      return;
-    }
     if (!confirm(`PERMANENTLY DELETE user "${user.username}"?\n\nThis action cannot be undone.`)) return;
     try {
       await apiFetch(`/api/v1/users/${user.id}`, { method: "DELETE" });
@@ -251,7 +257,7 @@ export default function UsersPage() {
                             Enable
                           </button>
                         )}
-                        {u.role !== "superadmin" && (
+                        {isSuperadmin && u.id !== me?.id && (
                           <button
                             onClick={() => handleDelete(u)}
                             className="px-2.5 py-1 text-xs border border-red-300 text-red-600 rounded-md hover:bg-red-50 dark:hover:bg-red-950/20"
@@ -484,10 +490,10 @@ function UserFormModal({
     e.preventDefault();
     setError("");
 
-    if (mode === "create") {
-      // Match the backend's _validate_password_complexity rules so users
-      // see the exact error before the request is sent (faster + clearer
-      // than waiting for a 422 round-trip).
+    // Match the backend's _validate_password_complexity rules so users see the
+    // exact error before the request is sent (faster + clearer than waiting for a
+    // 422 round-trip). On edit an empty password means "leave it alone".
+    if (mode === "create" || password) {
       const pwError = validatePasswordComplexity(password);
       if (pwError) {
         setError(pwError);
@@ -504,7 +510,8 @@ function UserFormModal({
           body: JSON.stringify({ username, email, full_name: fullName, role, password }),
         });
       } else {
-        const body: Record<string, any> = { email, full_name: fullName, role };
+        const body: Record<string, any> = { username, email, full_name: fullName, role };
+        if (password) body.password = password;
         await apiFetch(`/api/v1/users/${user!.id}`, {
           method: "PUT",
           body: JSON.stringify(body),
@@ -540,8 +547,7 @@ function UserFormModal({
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
-              disabled={mode === "edit"}
-              className="w-full px-3 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+              className="w-full px-3 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
           <div>
@@ -576,23 +582,26 @@ function UserFormModal({
               ))}
             </select>
           </div>
-          {mode === "create" && (
-            <div>
-              <label className="text-xs font-medium block mb-0.5">Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={8}
-                aria-describedby="password-hint"
-                className="w-full px-3 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-              <p id="password-hint" className="text-[11px] text-muted-foreground mt-1">
-                Min 8 characters with uppercase, lowercase, digit, and special character.
-              </p>
-            </div>
-          )}
+          <div>
+            <label className="text-xs font-medium block mb-0.5">
+              {mode === "create" ? "Password" : "Reset Password"}
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required={mode === "create"}
+              minLength={8}
+              autoComplete="new-password"
+              aria-describedby="password-hint"
+              className="w-full px-3 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <p id="password-hint" className="text-[11px] text-muted-foreground mt-1">
+              {mode === "edit" && "Leave blank to keep the current password. "}
+              Min 8 characters with uppercase, lowercase, digit, and special character.
+              {mode === "edit" && " The user must change it at next login."}
+            </p>
+          </div>
           <div className="flex gap-2 justify-end pt-2">
             <button
               type="button"
