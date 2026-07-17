@@ -13,7 +13,9 @@ import {
 import type {
   TrafficInboundSummary, TrafficInboundChartData,
   TrafficInboundTableData, TrafficInboundTableRecord, SankeyResponse, SankeyNodeExt, SankeyLinkExt,
+  ResponseMeta,
 } from "@/types";
+import { DegradedBanner } from "@/components/panels/DegradedBanner";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { TagFilterField } from "@/components/TagFilterField";
 
@@ -110,11 +112,11 @@ export default function TrafficInboundPage() {
   const sankeyDownloadKey = token
     ? `/api/v1/traffic-inbound/sankey?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&direction=download${filterQS}` : null;
 
-  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ data: TrafficInboundSummary; meta: { query_took_ms?: number } | null }>(summaryKey, swrFetcher, { refreshInterval: 0 });
-  const { data: chartEnv, error: chartError, isLoading: chartLoading } = useSWR<{ data: TrafficInboundChartData }>(chartKey, swrFetcher, { refreshInterval: 0 });
-  const { data: tableEnv, error: tableError, isLoading: tableLoading } = useSWR<{ data: TrafficInboundTableData }>(tableKey, swrFetcher, { refreshInterval: 0 });
-  const { data: sankeyUploadEnv, error: sankeyUploadError, isLoading: sankeyUploadLoading } = useSWR<{ success: boolean; data: SankeyResponse }>(sankeyUploadKey, swrFetcher, { refreshInterval: 0 });
-  const { data: sankeyDownloadEnv, error: sankeyDownloadError, isLoading: sankeyDownloadLoading } = useSWR<{ success: boolean; data: SankeyResponse }>(sankeyDownloadKey, swrFetcher, { refreshInterval: 0 });
+  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ success: boolean; data: TrafficInboundSummary; meta: ResponseMeta | null }>(summaryKey, swrFetcher, { refreshInterval: 0 });
+  const { data: chartEnv, error: chartError, isLoading: chartLoading } = useSWR<{ success: boolean; data: TrafficInboundChartData; meta: ResponseMeta | null }>(chartKey, swrFetcher, { refreshInterval: 0 });
+  const { data: tableEnv, error: tableError, isLoading: tableLoading } = useSWR<{ success: boolean; data: TrafficInboundTableData; meta: ResponseMeta | null }>(tableKey, swrFetcher, { refreshInterval: 0 });
+  const { data: sankeyUploadEnv, error: sankeyUploadError, isLoading: sankeyUploadLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyUploadKey, swrFetcher, { refreshInterval: 0 });
+  const { data: sankeyDownloadEnv, error: sankeyDownloadError, isLoading: sankeyDownloadLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyDownloadKey, swrFetcher, { refreshInterval: 0 });
 
   const summary: TrafficInboundSummary | undefined = summaryEnv?.data;
   const chart: TrafficInboundChartData | undefined = chartEnv?.data;
@@ -228,6 +230,10 @@ export default function TrafficInboundPage() {
             </div>
           </div>
         )}
+      </div>
+
+      <div className="mb-4">
+        <DegradedBanner metas={[summaryEnv?.meta, chartEnv?.meta, tableEnv?.meta]} />
       </div>
 
       <Tabs defaultValue={activeTab === "overview" ? "overview" : "sankey"} onValueChange={(val) => setActiveTab(val as "overview" | "sankey")}>

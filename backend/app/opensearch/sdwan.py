@@ -149,7 +149,7 @@ async def sla_timeline(
                 "date_histogram": {
                     "field": "@timestamp",
                     "fixed_interval": interval,
-                    "min_doc_count": 0,
+                    "min_doc_count": 1,
                 },
                 "aggs": aggs,
             }

@@ -6,7 +6,8 @@ import * as d3Sankey from "d3-sankey";
 import { swrFetcher, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, getDefaultTimeRange, TAB_TRIGGER_CLASS, formatBucketLabelWIB } from "@/lib/constants";
-import type { TrafficInternalSummary, TrafficInternalChartData, TrafficInboundTableData, TrafficInboundTableRecord, SankeyResponse, SankeyNodeExt, SankeyLinkExt } from "@/types";
+import type { TrafficInternalSummary, TrafficInternalChartData, TrafficInternalTableData, TrafficInternalTableRecord, SankeyResponse, SankeyNodeExt, SankeyLinkExt, ResponseMeta } from "@/types";
+import { DegradedBanner } from "@/components/panels/DegradedBanner";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { TagFilterField } from "@/components/TagFilterField";
 import { AreaChart } from "@/components/charts/AreaChart";
@@ -78,14 +79,14 @@ export default function TrafficInternalPage() {
   const tableKey = token ? `/api/v1/traffic-internal/table?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}${filterQS}` : null;
   const sankeyKey = token ? `/api/v1/traffic-internal/sankey?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}${filterQS}` : null;
 
-  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ data: TrafficInternalSummary; meta: { query_took_ms?: number } | null }>(summaryKey, swrFetcher, { refreshInterval: 0 });
-  const { data: chartEnv, error: chartError, isLoading: chartLoading } = useSWR<{ data: TrafficInternalChartData }>(chartKey, swrFetcher, { refreshInterval: 0 });
-  const { data: tableEnv, error: tableError, isLoading: tableLoading } = useSWR<{ data: TrafficInboundTableData }>(tableKey, swrFetcher, { refreshInterval: 0 });
-  const { data: sankeyEnv, error: sankeyError, isLoading: sankeyLoading } = useSWR<{ success: boolean; data: SankeyResponse }>(sankeyKey, swrFetcher, { refreshInterval: 0 });
+  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ success: boolean; data: TrafficInternalSummary; meta: ResponseMeta | null }>(summaryKey, swrFetcher, { refreshInterval: 0 });
+  const { data: chartEnv, error: chartError, isLoading: chartLoading } = useSWR<{ success: boolean; data: TrafficInternalChartData; meta: ResponseMeta | null }>(chartKey, swrFetcher, { refreshInterval: 0 });
+  const { data: tableEnv, error: tableError, isLoading: tableLoading } = useSWR<{ success: boolean; data: TrafficInternalTableData; meta: ResponseMeta | null }>(tableKey, swrFetcher, { refreshInterval: 0 });
+  const { data: sankeyEnv, error: sankeyError, isLoading: sankeyLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyKey, swrFetcher, { refreshInterval: 0 });
 
   const summary: TrafficInternalSummary | undefined = summaryEnv?.data;
   const chart: TrafficInternalChartData | undefined = chartEnv?.data;
-  const table: TrafficInboundTableData | undefined = tableEnv?.data;
+  const table: TrafficInternalTableData | undefined = tableEnv?.data;
   const queryTook = summaryEnv?.meta?.query_took_ms;
   const sankeyData: SankeyResponse | undefined = sankeyEnv?.data;
   const hasError = summaryError || chartError || tableError;
@@ -185,6 +186,10 @@ export default function TrafficInternalPage() {
             </div>
           </div>
         )}
+      </div>
+
+      <div className="mb-4">
+        <DegradedBanner metas={[summaryEnv?.meta, chartEnv?.meta, tableEnv?.meta]} />
       </div>
 
       <Tabs defaultValue="overview">
@@ -336,7 +341,7 @@ function EmptyState({ message }: { message?: string }) {
   return <div className="flex flex-col items-center justify-center py-8 text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 mb-2 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg><p className="text-xs text-center">{message || "No data available"}</p></div>;
 }
 
-function FlowRecordsTable({ records }: { records: TrafficInboundTableRecord[] }) {
+function FlowRecordsTable({ records }: { records: TrafficInternalTableRecord[] }) {
   return <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b text-muted-foreground text-left"><th className="py-2 pr-3 font-medium">Client IP</th><th className="py-2 pr-3 font-medium">Server IP</th><th className="py-2 pr-3 font-medium">Service</th><th className="py-2 pr-3 font-medium text-right">Bytes</th><th className="py-2 pr-3 font-medium text-right">Packets</th><th className="py-2 font-medium text-right">Sessions</th></tr></thead>
     <tbody>{records.map((r, i) => <tr key={i} className="border-b border-muted/50 last:border-0 hover:bg-muted/30 transition-colors"><td className="py-1.5 pr-3 font-mono text-[11px]">{r.client_ip}</td><td className="py-1.5 pr-3 font-mono text-[11px]">{r.server_ip}</td><td className="py-1.5 pr-3 truncate max-w-[150px]">{r.service}</td><td className="py-1.5 pr-3 text-right whitespace-nowrap">{formatBytes(r.bytes)}</td><td className="py-1.5 pr-3 text-right whitespace-nowrap">{r.packets.toLocaleString()}</td><td className="py-1.5 text-right whitespace-nowrap">{r.sessions.toLocaleString()}</td></tr>)}</tbody></table></div>;
 }

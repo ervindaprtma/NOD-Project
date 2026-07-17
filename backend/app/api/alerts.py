@@ -414,7 +414,10 @@ async def test_alert_rule(
             total = await tf_qb.total_throughput(
                 gte_ms=gte_ms, lte_ms=lte_ms
             )
-            metric_value = float(total)
+            if isinstance(total, dict):
+                metric_value = float(total.get("total_bytes", 0))
+            else:
+                metric_value = float(total)
         elif rule.data_source == "sdwan_sla":
             site = rule.site_name or "Site_FGT-DC"
             summary = await sdwan_qb.sla_summary(

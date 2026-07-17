@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import time
+from contextvars import ContextVar
 from typing import Any, Optional
 
 from opensearchpy import AsyncOpenSearch
@@ -25,6 +26,33 @@ from opensearchpy import AsyncOpenSearch
 from app.core.config import get_settings
 
 settings = get_settings()
+
+# ── Degradation tracking ─────────────────────────────────────────
+# safe_search() deliberately never raises: it returns an empty skeleton so one bad
+# query can't 500 a whole page. The cost is that a failed query is indistinguishable
+# from "no traffic" — the UI renders a confident 0 B. Endpoints call
+# track_degradation() to get a sink; every skeleton/partial result below records why
+# it degraded, and the endpoint reports it via Meta so the UI can say
+# "data unavailable" instead of lying with a zero.
+#
+# The sink is a mutable list held in a ContextVar: asyncio child tasks inherit a copy
+# of the context, but the list object itself is shared, so appends made inside
+# concurrently-gathered queries are visible to the endpoint that created it. Requests
+# never see each other's sinks.
+_degraded_sink: ContextVar[Optional[list[str]]] = ContextVar("nod_degraded_sink", default=None)
+
+
+def track_degradation() -> list[str]:
+    """Start collecting degradation reasons for the current request context."""
+    sink: list[str] = []
+    _degraded_sink.set(sink)
+    return sink
+
+
+def _record_degraded(reason: str) -> None:
+    sink = _degraded_sink.get()
+    if sink is not None and len(sink) < 10:
+        sink.append(reason)
 
 # Per-client cache namespacing (keyed by client id(hosts))
 _client_caches: dict[str, dict[str, tuple[float, Any]]] = {}
@@ -152,6 +180,28 @@ async def safe_search(
                     resp_dict["aggregations"] = {}
                 if "hits" not in resp_dict:
                     resp_dict["hits"] = {"total": {"value": 0, "relation": "eq"}, "hits": []}
+                # OpenSearch returns HTTP 200 with PARTIAL results when individual
+                # shards fail (e.g. a terms agg against an index where the field was
+                # dynamically mapped as `text`). Without this check the caller cannot
+                # distinguish a complete answer from a silently undercounted one.
+                shards = resp_dict.get("_shards") or {}
+                failed_shards = shards.get("failed", 0)
+                if failed_shards:
+                    import logging
+                    logger = logging.getLogger("nod.opensearch")
+                    failures = shards.get("failures") or []
+                    detail = "; ".join(
+                        f"{f.get('index')}: {(f.get('reason') or {}).get('reason', '')[:120]}"
+                        for f in failures[:3]
+                    )
+                    logger.error(
+                        f"OpenSearch PARTIAL RESULTS — {failed_shards}/{shards.get('total')} shards failed, "
+                        f"data is undercounted. client={_client_id(client)} index={index} :: {detail}"
+                    )
+                    resp_dict["_shard_failures"] = failed_shards
+                    _record_degraded(
+                        f"partial_results: {failed_shards}/{shards.get('total')} shards failed"
+                    )
                 if cache_key is not None:
                     _cache_set(cache, cache_key, resp_dict)
                 return resp_dict
@@ -159,6 +209,7 @@ async def safe_search(
                 import logging
                 logger = logging.getLogger("nod.opensearch")
                 logger.error(f"OpenSearch query timeout after {timeout_s}s — client={_client_id(client)} index={index}")
+                _record_degraded(f"timeout after {timeout_s}s")
                 return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_timed_out": True}
             except Exception as e:
                 err_str = str(e)
@@ -175,6 +226,10 @@ async def safe_search(
                 import logging
                 logger = logging.getLogger("nod.opensearch")
                 logger.error(f"OpenSearch query error: {type(e).__name__}: {e}")
+                _record_degraded(
+                    "circuit_breaker: cluster out of memory" if is_circuit_breaker
+                    else f"query_error: {type(e).__name__}"
+                )
                 return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_error": err_str[:200]}
 
     # Defensive fallback — every code path above returns, but mypy doesn't

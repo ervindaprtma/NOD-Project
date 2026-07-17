@@ -15,10 +15,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api._safe import safe_query
+from app.api._safe import build_meta, safe_query
 from app.api.auth import get_current_user
+from app.opensearch.query import track_degradation
 from app.opensearch import traffic_flow as tf_qb
-from app.schemas.common import APIResponse, Meta
+from app.schemas.common import APIResponse
 from app.schemas.traffic_flow import (
     TrafficSummaryResponse, TrafficChartResponse,
     TrafficTableResponse, SankeyResponse,
@@ -46,6 +47,7 @@ async def traffic_flow_summary(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
+    degraded = track_degradation()
     data, err = await safe_query(
         tf_qb.flow_summary,
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
@@ -54,12 +56,13 @@ async def traffic_flow_summary(
         ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         # Return empty summary on error
         empty = {
+            "total_bytes": 0, "total_upload": 0, "total_download": 0, "total_sessions": 0,
             "top_apps": [], "app_categories": [],
-            "top_dst_as_org": [], "top_dst_as_country": [],
+            "top_dst_as_org": [], "top_dst_as_country": [], "top_src_as_org": [],
             "top_clients": [], "top_servers": [],
             "protocol_dist": [], "egress_breakdown": [], "ingress_breakdown": [],
         }
@@ -85,6 +88,7 @@ async def traffic_flow_chart(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
+    degraded = track_degradation()
     data, err = await safe_query(
         tf_qb.flow_chart,
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
@@ -93,7 +97,7 @@ async def traffic_flow_chart(
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         logger.warning(f"chart empty result for {site_name} ({elapsed}ms): {err}")
         return APIResponse.ok(
@@ -120,6 +124,7 @@ async def traffic_flow_table(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
+    degraded = track_degradation()
     after_key: Optional[dict] = None
     if after:
         try: after_key = json.loads(after)
@@ -131,7 +136,7 @@ async def traffic_flow_table(
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         logger.warning(f"table empty result for {site_name} ({elapsed}ms): {err}")
         return APIResponse.ok(
@@ -158,6 +163,7 @@ async def traffic_flow_sankey(
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
+    degraded = track_degradation()
     data, err = await safe_query(
         tf_qb.sankey_data,
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
@@ -166,7 +172,7 @@ async def traffic_flow_sankey(
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         logger.warning(f"sankey empty result for {site_name} ({elapsed}ms): {err}")
         empty_sankey = {"nodes": [], "links": [], "as_country_nodes": [], "as_country_links": []}

@@ -62,7 +62,7 @@ async def resource_timeline(
                         "date_histogram": {
                             "field": "@timestamp",
                             "fixed_interval": interval,
-                            "min_doc_count": 0,
+                            "min_doc_count": 1,
                         },
                         "aggs": {
                             "avg_cpu": {"avg": {"field": "ha_member.cpu_usage"}},
@@ -203,7 +203,7 @@ async def session_sparkline(
                         "date_histogram": {
                             "field": "@timestamp",
                             "fixed_interval": interval,
-                            "min_doc_count": 0,
+                            "min_doc_count": 1,
                         },
                         "aggs": {
                             "avg_sessions": {"avg": {"field": "ha_member.session_count"}}
@@ -459,7 +459,7 @@ async def resource_device_timeline(
                 "date_histogram": {
                     "field": "@timestamp",
                     "fixed_interval": interval,
-                    "min_doc_count": 0,
+                    "min_doc_count": 1,
                 },
                 "aggs": {
                     "avg_cpu": {"avg": {"field": f"{measurement}.cpu_usage_percent"}},

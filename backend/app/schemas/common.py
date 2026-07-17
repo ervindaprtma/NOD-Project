@@ -23,6 +23,11 @@ class Meta(BaseModel):
     query_took_ms: Optional[int] = None
     warning_rules: Optional[list[dict]] = None  # §11.5: channel disable warning
     search_after: Optional[list] = None  # cursor for search_after pagination
+    # True when some/all underlying queries failed or returned partial results, so the
+    # numbers in `data` are incomplete or zeroed. The UI must show "data unavailable"
+    # rather than presenting a 0 as a real measurement.
+    degraded: Optional[bool] = None
+    partial_errors: Optional[list[str]] = None
 
 
 class APIResponse(BaseModel, Generic[T]):

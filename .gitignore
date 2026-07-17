@@ -3,6 +3,9 @@
 *.env.local
 *.env.*.local
 
+# Documentation (local only)
+Documentation/
+
 # Node / Frontend
 node_modules/
 .next/
@@ -63,3 +66,4 @@ backend/alembic/versions/*.pyc
 
 # Generated code documentation
 docs/
+Documentation/

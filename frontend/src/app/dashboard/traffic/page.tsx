@@ -20,7 +20,9 @@ import type {
   TrafficFlowTableData,
   TrafficFlowTableRecord,
   SankeyResponse, SankeyNodeExt, SankeyLinkExt,
+  ResponseMeta,
 } from "@/types";
+import { DegradedBanner } from "@/components/panels/DegradedBanner";
 import TimeRangePicker, {
   type CustomTimeRange,
 } from "@/components/panels/TimeRangePicker";
@@ -167,7 +169,7 @@ export default function TrafficPage() {
     data: summaryEnv,
     error: summaryError,
     isLoading: summaryLoading,
-  } = useSWR<{ success: boolean; data: TrafficFlowSummary; meta: { query_took_ms: number } }>(
+  } = useSWR<{ success: boolean; data: TrafficFlowSummary; meta: ResponseMeta | null }>(
     summaryKey, swrFetcher, { refreshInterval: 0 }
   );
 
@@ -175,7 +177,7 @@ export default function TrafficPage() {
     data: chartEnv,
     error: chartError,
     isLoading: chartLoading,
-  } = useSWR<{ data: TrafficFlowChartData }>(
+  } = useSWR<{ success: boolean; data: TrafficFlowChartData; meta: ResponseMeta | null }>(
     chartKey, swrFetcher, { refreshInterval: 0 }
   );
 
@@ -183,7 +185,7 @@ export default function TrafficPage() {
     data: tableEnv,
     error: tableError,
     isLoading: tableLoading,
-  } = useSWR<{ data: TrafficFlowTableData }>(
+  } = useSWR<{ success: boolean; data: TrafficFlowTableData; meta: ResponseMeta | null }>(
     tableKey, swrFetcher, { refreshInterval: 0 }
   );
 
@@ -191,7 +193,7 @@ export default function TrafficPage() {
     data: sankeyUploadEnv,
     error: sankeyUploadError,
     isLoading: sankeyUploadLoading,
-  } = useSWR<{ success: boolean; data: SankeyResponse }>(
+  } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(
     sankeyUploadKey, swrFetcher, { refreshInterval: 0 }
   );
 
@@ -199,7 +201,7 @@ export default function TrafficPage() {
     data: sankeyDownloadEnv,
     error: sankeyDownloadError,
     isLoading: sankeyDownloadLoading,
-  } = useSWR<{ success: boolean; data: SankeyResponse }>(
+  } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(
     sankeyDownloadKey, swrFetcher, { refreshInterval: 0 }
   );
 
@@ -428,6 +430,10 @@ export default function TrafficPage() {
       </div>
 
       {/* ── Tab Navigation ── */}
+      <div className="mb-4">
+        <DegradedBanner metas={[summaryEnv?.meta, chartEnv?.meta, tableEnv?.meta]} />
+      </div>
+
       <Tabs defaultValue={activeTab === "overview" ? "overview" : "sankey"} onValueChange={(v) => setActiveTab(v as "overview" | "sankey")}>
         <TabsList className="mb-6 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex">
           <TabsTrigger value="overview" className={TAB_TRIGGER_CLASS}>Overview</TabsTrigger>

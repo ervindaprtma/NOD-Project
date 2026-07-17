@@ -13,22 +13,16 @@ from typing import Optional
 from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_dc_client, get_drc_client
+from app.opensearch._common import (
+    FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _bytes_sum, _port_to_service, BYTES_DESC,
+)
 from app.opensearch.query import safe_search
-from app.port_service_map import port_to_service
 
-FLOW_INDEX = "fortigate-appid-flow-*"
 SITE_FLOW_MAP: dict[str, tuple[str, str]] = {
     "Site_FGT-DC": ("10.80.150.1", "dc"),
     "Site_FGT-DRC": ("10.90.150.1", "drc"),
     "Site_FGT_Office": ("10.10.10.10", "drc"),
 }
-
-
-def _port_to_service(port_value) -> str:
-    try:
-        return port_to_service(int(port_value))
-    except (ValueError, TypeError):
-        return str(port_value)
 
 
 def _resolve_service_filter(service_filter: str) -> list[int] | None:
@@ -61,10 +55,6 @@ def _get_client(site_name: str = "Site_FGT_Office") -> AsyncOpenSearch:
     return get_dc_client() if endpoint == "dc" else get_drc_client()
 
 
-def _time_range(gte_ms: int, lte_ms: int) -> dict:
-    return {"range": {"@timestamp": {"gte": gte_ms, "lte": lte_ms, "format": "epoch_millis"}}}
-
-
 def _site_filter(site_name: str) -> dict:
     entry = SITE_FLOW_MAP.get(site_name, ("",))
     return {"term": {"flow.export.ip.addr": entry[0] if entry else ""}}
@@ -85,31 +75,6 @@ def _internal_path_filter(traffic_path: str = "all") -> dict:
             "minimum_should_match": 1,
         }
     }
-
-
-def _split_multi(value: str) -> list[str]:
-    """Split comma-separated filter string to list of stripped non-empty values."""
-    return [v.strip() for v in value.split(",") if v.strip()]
-
-
-def _multi_term(field: str, value: str) -> dict | None:
-    """Build a term/terms filter from a comma-separated value string."""
-    vals = _split_multi(value)
-    if not vals:
-        return None
-    if len(vals) == 1:
-        return {"term": {field: vals[0]}}
-    return {"terms": {field: vals}}
-
-
-def _multi_wildcard(field: str, value: str) -> dict | None:
-    """Build a wildcard or bool/should of wildcards from comma-separated value."""
-    vals = _split_multi(value)
-    if not vals:
-        return None
-    if len(vals) == 1:
-        return {"wildcard": {field: f"*{vals[0]}*"}}
-    return {"bool": {"should": [{"wildcard": {field: f"*{v}*"}} for v in vals], "minimum_should_match": 1}}
 
 
 def _base_filters(
@@ -136,16 +101,14 @@ def _base_filters(
     f = _multi_term("l4.proto.name", protocol)
     if f: filters.append(f)
     if dst_port is not None:
-        filters.append({"term": {"flow.dst.l4.port.id": dst_port}})
-    f = _multi_term("flow.in.netif.name", ingress_interface)
+        # Role-based, and consistent with the service_filter above which already
+        # resolves to flow.server.l4.port.id — see traffic_flow._base_filters.
+        filters.append({"term": {"flow.server.l4.port.id": dst_port}})
+    f = _multi_term_any(['flow.in.netif.name', 'flow.in.netif.alias'], ingress_interface)
     if f: filters.append(f)
-    f = _multi_term("flow.out.netif.name", egress_interface)
+    f = _multi_term_any(['flow.out.netif.name', 'flow.out.netif.alias'], egress_interface)
     if f: filters.append(f)
     return filters
-
-
-def _bytes_sum(name: str = "total_bytes") -> dict:
-    return {name: {"sum": {"field": "flow.bytes"}}}
 
 # ─────────────────────────────────────────────────────────────────
 # Summary
@@ -167,30 +130,31 @@ async def flow_summary(
         "size": 0,
         "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path, ingress_interface=ingress_interface, egress_interface=egress_interface)}},
         "aggs": {
-            "grand_total_bytes": {"sum": {"field": "flow.bytes"}},
+            "grand_total_upload": {"sum": {"field": "flow.client.bytes", "missing": 0}},
+            "grand_total_download": {"sum": {"field": "flow.server.bytes", "missing": 0}},
             "session_count": {"cardinality": {"field": "flow.connection_id"}},
             "top_services": {
-                "terms": {"field": "flow.server.l4.port.id", "size": 20, "order": {"total_bytes": "desc"}},
+                "terms": {"field": "flow.server.l4.port.id", "size": 20, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "top_clients": {
-                "terms": {"field": "flow.client.ip.addr", "size": 20, "order": {"total_bytes": "desc"}},
+                "terms": {"field": "flow.client.ip.addr", "size": 20, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "top_servers": {
-                "terms": {"field": "flow.server.ip.addr", "size": 20, "order": {"total_bytes": "desc"}},
+                "terms": {"field": "flow.server.ip.addr", "size": 20, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "ingress_breakdown": {
-                "terms": {"field": "flow.in.netif.name", "size": 10, "order": {"total_bytes": "desc"}},
+                "terms": {"field": "flow.in.netif.name", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "egress_breakdown": {
-                "terms": {"field": "flow.out.netif.name", "size": 10, "order": {"total_bytes": "desc"}},
+                "terms": {"field": "flow.out.netif.name", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "protocol_dist": {
-                "terms": {"field": "l4.proto.name", "size": 10, "order": {"total_bytes": "desc"}},
+                "terms": {"field": "l4.proto.name", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
         },
@@ -208,8 +172,13 @@ async def flow_summary(
     total_service_bytes = _total("top_services") or 1
     duration_s = max((lte_ms - gte_ms) / 1000.0, 1.0)
 
+    grand_upload = int(aggs.get("grand_total_upload", {}).get("value", 0))
+    grand_download = int(aggs.get("grand_total_download", {}).get("value", 0))
+
     return {
-        "total_bytes": int(aggs.get("grand_total_bytes", {}).get("value", 0)),
+        "total_bytes": grand_upload + grand_download,
+        "total_upload": grand_upload,
+        "total_download": grand_download,
         "total_sessions": int(aggs.get("session_count", {}).get("value", 0)),
         "top_services": [
             {"service_name": _port_to_service(b["key"]), "service_port": int(b["key"]) if str(b["key"]).isdigit() else b["key"],
@@ -219,11 +188,15 @@ async def flow_summary(
             for b in _buckets("top_services")
         ],
         "top_clients": [
-            {"ip": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
+            {"ip": b["key"], "total_bytes": int(b["total_bytes"]["value"]),
+             "upload_bytes": int(b["upload_bytes"]["value"]),
+             "download_bytes": int(b["download_bytes"]["value"])}
             for b in _buckets("top_clients")
         ],
         "top_servers": [
-            {"ip": b["key"], "total_bytes": int(b["total_bytes"]["value"]), "hostname": ""}
+            {"ip": b["key"], "total_bytes": int(b["total_bytes"]["value"]),
+             "upload_bytes": int(b["upload_bytes"]["value"]),
+             "download_bytes": int(b["download_bytes"]["value"]), "hostname": ""}
             for b in _buckets("top_servers")
         ],
         "ingress_breakdown": [
@@ -264,7 +237,7 @@ async def flow_chart(
                 "date_histogram": {"field": "@timestamp", "fixed_interval": interval_str},
                 "aggs": {
                     "top_services": {
-                        "terms": {"field": "flow.server.l4.port.id", "size": min(top_n, 50), "order": {"total_bytes": "desc"}},
+                        "terms": {"field": "flow.server.l4.port.id", "size": min(top_n, 50), "order": BYTES_DESC},
                         "aggs": _bytes_sum(),
                     }
                 },
@@ -370,9 +343,14 @@ async def sankey_data(
     def _top_n(totals: dict[str, int], n: int = 10) -> set[str]:
         return {k for k, _ in sorted(totals.items(), key=lambda x: -x[1])[:n]}
 
-    top_ingress = _top_n(_level_totals(rows, "ingress"))
-    top_services = _top_n(_level_totals(rows, "service"))
-    top_egress = _top_n(_level_totals(rows, "egress"))
+    ingress_totals = _level_totals(rows, "ingress")
+    service_totals = _level_totals(rows, "service")
+    egress_totals = _level_totals(rows, "egress")
+    level_totals = {"ingress": ingress_totals, "service": service_totals, "egress": egress_totals}
+
+    top_ingress = _top_n(ingress_totals)
+    top_services = _top_n(service_totals)
+    top_egress = _top_n(egress_totals)
 
     filtered_rows = [r for r in rows if r["ingress"] in top_ingress and r["service"] in top_services and r["egress"] in top_egress]
 
@@ -383,8 +361,11 @@ async def sankey_data(
         key = (level, label)
         if key not in node_index:
             idx = len(nodes_list)
+            # Value is needed by d3-sankey for node width calculation
+            level_name = ["ingress", "service", "egress"][level]
+            node_value = level_totals[level_name].get(label, 0)
+            nodes_list.append({"id": idx, "label": label, "level": level, "value": node_value})
             node_index[key] = idx
-            nodes_list.append({"id": idx, "label": label, "level": level})
         return node_index[key]
 
     link_map: dict[tuple[int, int], int] = defaultdict(int)
@@ -439,7 +420,14 @@ async def flow_table(
             "flow_table": {
                 "composite": composite_body,
                 "aggs": {
-                    "total_bytes": {"sum": {"field": "flow.bytes"}},
+                    "upload_bytes": {"sum": {"field": "flow.client.bytes", "missing": 0}},
+                    "download_bytes": {"sum": {"field": "flow.server.bytes", "missing": 0}},
+                    "total_bytes": {
+                        "bucket_script": {
+                            "buckets_path": {"up": "upload_bytes", "down": "download_bytes"},
+                            "script": "params.up + params.down"
+                        }
+                    },
                     "total_packets": {"sum": {"field": "flow.packets"}},
                     "session_count": {"cardinality": {"field": "flow.connection_id"}},
                 },
@@ -458,6 +446,8 @@ async def flow_table(
             "server_ip": key.get("server_ip", ""),
             "service": _port_to_service(key.get("service_port", "")),
             "bytes": int(bucket["total_bytes"]["value"]),
+            "upload_bytes": int(bucket["upload_bytes"]["value"]),
+            "download_bytes": int(bucket["download_bytes"]["value"]),
             "packets": int(bucket["total_packets"]["value"]),
             "sessions": int(bucket["session_count"]["value"]),
         })

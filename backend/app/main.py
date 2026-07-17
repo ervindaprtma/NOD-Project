@@ -29,7 +29,6 @@ from app.api import (
     reports,
     resources,
     sdwan,
-    traffic,
     traffic_flow,
     traffic_inbound,
     traffic_internal,
@@ -195,7 +194,6 @@ async def trace_and_log_middleware(request: Request, call_next: Callable):
 
 app.include_router(auth.router)
 app.include_router(overview.router)
-app.include_router(traffic.router)
 app.include_router(traffic_flow.router)
 app.include_router(traffic_inbound.router)
 app.include_router(traffic_internal.router)

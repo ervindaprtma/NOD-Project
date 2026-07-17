@@ -101,9 +101,10 @@ async def _run_group_query(
             return await ha_qb.current_device_status(gte_ms=gte_ms, lte_ms=lte_ms)
 
         if data_source == "appid_flow":
-            from app.opensearch import appid as appid_qb
+            from app.opensearch import traffic_flow as tf_qb
 
-            return await appid_qb.total_bytes(gte_ms=gte_ms, lte_ms=lte_ms)
+            result = await tf_qb.total_throughput(gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC")
+            return result["total_bytes"] if isinstance(result, dict) else (result or 0)
 
         if data_source == "sdwan_sla":
             from app.opensearch import sdwan as sdwan_qb
