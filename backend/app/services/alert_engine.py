@@ -72,7 +72,8 @@ def _render_template(text: str, ctx: dict) -> str:
     referencing only allow-listed vars; re-raises for any other error so
     the engine's existing try/except logs it.
     """
-    return _SANDBOX.from_string(text).render(**ctx)
+    rendered: str = _SANDBOX.from_string(text).render(**ctx)
+    return rendered
 
 
 # ── P1: Group query runner ──────────────────────────────────────

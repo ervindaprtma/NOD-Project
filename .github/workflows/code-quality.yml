@@ -28,8 +28,9 @@ jobs:
       # Schema drift gate. A model column with no migration passes every other check
       # here and then 500s at runtime — that has now happened four times
       # (notification_templates.description, alert_templates.default_notification_mode,
-      # alert_rules.notification_mode + 2 siblings). `upgrade head` proves the
-      # migrations apply cleanly from scratch; `check` proves they match the models.
+      # alert_rules.notification_mode + 2 siblings, report_schedules). `upgrade head`
+      # proves the migrations apply cleanly from scratch; `check` proves they match the
+      # models.
       - run: pip install -r requirements.txt --break-system-packages
         working-directory: backend
       - run: alembic upgrade head && alembic check

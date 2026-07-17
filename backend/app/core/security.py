@@ -49,7 +49,8 @@ def create_access_token(
     if extra_claims:
         to_encode.update(extra_claims)
 
-    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+    token: str = jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+    return token
 
 
 def create_refresh_token(
@@ -119,12 +120,14 @@ def _get_fernet() -> Fernet:
 
 def encrypt_secret(plaintext: str) -> str:
     """Encrypt a secret string at rest. Returns base64-encoded cipher."""
-    return _get_fernet().encrypt(plaintext.encode()).decode()
+    ciphertext: str = _get_fernet().encrypt(plaintext.encode()).decode()
+    return ciphertext
 
 
 def decrypt_secret(ciphertext: str) -> str:
     """Decrypt a secret string previously encrypted with encrypt_secret()."""
-    return _get_fernet().decrypt(ciphertext.encode()).decode()
+    plaintext: str = _get_fernet().decrypt(ciphertext.encode()).decode()
+    return plaintext
 
 
 def mask_secret(value: str, visible_chars: int = 4) -> str:
