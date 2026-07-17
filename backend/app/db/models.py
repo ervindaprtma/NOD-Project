@@ -121,12 +121,6 @@ class AlertRule(Base):
     notify_when: Mapped[str] = mapped_column(
         String(4), nullable=False, default="any", server_default=text("'any'")
     )  # any | all (composite rule combination logic, P5)
-    notification_mode: Mapped[str] = mapped_column(
-        String(10), nullable=False, default="stateful", server_default=text("'stateful'")
-    )  # stateful | peak_only (§11.4)
-    renotify_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )  # whether to re-notify while still firing (§11.4)
     data_source: Mapped[str] = mapped_column(
         String(20), nullable=False
     )  # appid_flow, sdwan_sla, ha_resource, vpn_ssl, vpn_ipsec
@@ -206,12 +200,6 @@ class AlertTemplate(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_user_created: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    default_notification_mode: Mapped[str] = mapped_column(
-        String(10), nullable=False, default="stateful", server_default=text("'stateful'")
-    )  # stateful | peak_only
-    locks_notification_mode: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false")
-    )  # whether to lock mode for this template
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )

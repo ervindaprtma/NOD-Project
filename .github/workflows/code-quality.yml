@@ -3,17 +3,53 @@ on: [pull_request]
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # Anything importing app.core.config hits a validator that rejects the empty
+    # JWT_SECRET default, and CI has no .env. Job-level so alembic and pytest share one
+    # definition. Throwaway value — nothing here signs or decrypts anything real.
+    env:
+      JWT_SECRET: ci-only-not-a-real-secret-000000000000
+    # Postgres exists solely for the `alembic check` step below — it needs a real
+    # database to diff the models against.
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: nod_user
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: nod_db
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - run: pip install ruff mypy pip-audit pytest pytest-asyncio --break-system-packages
       - run: ruff check backend/
       - run: mypy backend/app/api/auth.py backend/app/api/alerts.py backend/app/api/config/notifications.py backend/app/core/security.py backend/app/core/limiter.py backend/app/schemas/common.py backend/app/services/alert_engine.py backend/app/services/notifiers.py backend/app/opensearch/query.py backend/app/opensearch/client.py backend/app/opensearch/traffic_flow.py backend/app/opensearch/ipsec.py backend/app/opensearch/sslvpn.py
       - run: pip-audit -r backend/requirements.txt
+
+      # Schema drift gate. A model column with no migration passes every other check
+      # here and then 500s at runtime — that has now happened four times
+      # (notification_templates.description, alert_templates.default_notification_mode,
+      # alert_rules.notification_mode + 2 siblings, report_schedules). `upgrade head`
+      # proves the migrations apply cleanly from scratch; `check` proves they match the
+      # models.
+      - run: pip install -r requirements.txt --break-system-packages
+        working-directory: backend
+      - run: alembic upgrade head && alembic check
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://nod_user:ci@localhost:5432/nod_db
       # §9.10: only the pure tests (no DB, no OS) run in this CI lane. The
       # 4 integration stubs are @pytest.mark.skip'd with TODOs; they
       # need a test DB + mocked OpenSearch, which the test runner
       # doesn't have here.
-      - run: pytest backend/tests/test_secret_roundtrip.py backend/tests/test_severity_gating.py -v
+      # Paths are relative to working-directory: backend — the `backend/` prefix made
+      # this resolve to backend/backend/tests and exit 4. Never caught because the
+      # step sat behind the failing mypy.
+      - run: pytest tests/test_secret_roundtrip.py tests/test_severity_gating.py -v
         working-directory: backend
   frontend:
     runs-on: ubuntu-latest

@@ -557,7 +557,6 @@ async def build_report_context(
     if report_type in ("R-01", "R-07", "R-08") and (not sections or "traffic_overview" in sections or report_type in ("R-07", "R-08")):
         traffic: dict[str, Any] = {}
         try:
-            from app.opensearch import appid as appid_qb
             from app.opensearch import traffic_flow as tf_qb
 
             # Top Applications — use traffic_flow per-site with path_filter='internet'
@@ -629,16 +628,8 @@ async def build_report_context(
                     tz=ZoneInfo("Asia/Jakarta"),
                 )
 
-            # Total Throughput — prefer per-site total from flow_summary if available
-            try:
-                total_bytes = sd.get("total_bytes", None) if 'sd' in locals() else None
-            except Exception:
-                total_bytes = None
-            if total_bytes is None:
-                try:
-                    total_bytes = await appid_qb.total_throughput(gte_ms=gte_ms, lte_ms=lte_ms)
-                except Exception:
-                    total_bytes = 0
+            # Total Throughput — from per-site flow_summary
+            total_bytes = sd.get("total_bytes", 0) if 'sd' in locals() else 0
             traffic["total_throughput_bytes"] = total_bytes or 0
 
             # Top AS Orgs / Countries / Protocol Distribution
@@ -1388,6 +1379,21 @@ async def build_report_context(
                                 "color": CHART_COLORS[i % len(CHART_COLORS)],
                             }
                             for i, c in enumerate(sd["top_src_as_country"][:10])
+                        ]
+
+                    if sd.get("top_servers"):
+                        max_val = max(
+                            s["total_bytes"] for s in sd["top_servers"][:10]
+                        ) if sd["top_servers"] else 1
+                        site_dict["top_servers"] = [
+                            {
+                                "label": s["ip"],
+                                "value": s["total_bytes"],
+                                "pct": round(s["total_bytes"] / max_val * 100, 1)
+                                if max_val else 0,
+                                "color": CHART_COLORS[i % len(CHART_COLORS)],
+                            }
+                            for i, s in enumerate(sd["top_servers"][:10])
                         ]
 
                     if sd.get("protocol_dist"):

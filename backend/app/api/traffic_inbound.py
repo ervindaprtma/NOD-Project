@@ -20,9 +20,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from app.api.auth import get_current_user
-from app.api._safe import safe_query
+from app.opensearch.query import track_degradation
+from app.api._safe import build_meta, safe_query
 from app.opensearch import traffic_inbound as ti_qb
-from app.schemas.common import APIResponse, Meta
+from app.schemas.common import APIResponse
 from app.schemas.traffic_inbound import (
     TrafficInboundSummaryResponse,
     TrafficInboundChartResponse,
@@ -61,6 +62,7 @@ async def traffic_inbound_summary(
     if site_name not in ALLOWED_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALLOWED_SITES)}")
     t0 = time.monotonic()
+    degraded = track_degradation()
     data, err = await safe_query(
         ti_qb.flow_summary,
         "traffic_inbound.flow_summary",
@@ -70,9 +72,10 @@ async def traffic_inbound_summary(
         ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         empty = {
+            "total_bytes": 0, "total_upload": 0, "total_download": 0, "total_sessions": 0,
             "top_services": [], "top_src_as_org": [], "top_src_as_country": [],
             "top_clients": [], "top_servers": [],
             "protocol_dist": [], "egress_breakdown": [], "ingress_breakdown": [],
@@ -105,6 +108,7 @@ async def traffic_inbound_chart(
     if site_name not in ALLOWED_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALLOWED_SITES)}")
     t0 = time.monotonic()
+    degraded = track_degradation()
     data, err = await safe_query(
         ti_qb.flow_chart,
         "traffic_inbound.flow_chart",
@@ -114,7 +118,7 @@ async def traffic_inbound_chart(
         protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         logger.warning(f"traffic-inbound chart empty for {site_name} ({elapsed}ms): {err}")
         return APIResponse.ok(
@@ -147,6 +151,7 @@ async def traffic_inbound_table(
     if site_name not in ALLOWED_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALLOWED_SITES)}")
     t0 = time.monotonic()
+    degraded = track_degradation()
     after_key: Optional[dict] = None
     if after:
         try:
@@ -162,7 +167,7 @@ async def traffic_inbound_table(
         protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         logger.warning(f"traffic-inbound table empty for {site_name} ({elapsed}ms): {err}")
         return APIResponse.ok(
@@ -195,6 +200,7 @@ async def traffic_inbound_sankey(
     if site_name not in ALLOWED_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALLOWED_SITES)}")
     t0 = time.monotonic()
+    degraded = track_degradation()
     data, err = await safe_query(
         ti_qb.sankey_data,
         "traffic_inbound.sankey_data",
@@ -204,7 +210,7 @@ async def traffic_inbound_sankey(
         protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         empty = {"nodes": [], "links": [], "as_country_nodes": [], "as_country_links": []}
         logger.warning(f"traffic-inbound sankey empty for {site_name} ({elapsed}ms): {err}")

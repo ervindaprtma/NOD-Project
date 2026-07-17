@@ -34,11 +34,15 @@ class TopASCountryItem(BaseModel):
 class TopClientItem(BaseModel):
     ip: str
     total_bytes: int
+    upload_bytes: int = 0
+    download_bytes: int = 0
 
 
 class TopServerItem(BaseModel):
     ip: str
     total_bytes: int
+    upload_bytes: int = 0
+    download_bytes: int = 0
     hostname: str = ""
 
 
@@ -56,6 +60,10 @@ class EgressBreakdownItem(BaseModel):
 
 
 class TrafficInboundSummaryResponse(BaseModel):
+    total_bytes: int = 0
+    total_upload: int = 0
+    total_download: int = 0
+    total_sessions: int = 0
     top_services: list[TopServiceItem]
     top_src_as_org: list[TopASOrgItem]
     top_src_as_country: list[TopASCountryItem]
@@ -82,6 +90,8 @@ class InboundFlowTableRecord(BaseModel):
     server_ip: str
     service: str = "Unknown"
     bytes: int = 0
+    upload_bytes: int = 0
+    download_bytes: int = 0
     packets: int = 0
     sessions: int = 0
 

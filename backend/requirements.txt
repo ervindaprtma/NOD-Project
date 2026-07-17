@@ -37,7 +37,7 @@ plotly>=5.18.0,<6.0.0
 kaleido>=0.2.1,<1.0.0
 
 # Email (async SMTP)
-aiosmtplib>=3.0.0,<4.0.0
+aiosmtplib>=5.1.1,<6.0.0
 
 # Configuration
 pydantic-settings>=2.2.0,<3.0.0
@@ -47,8 +47,8 @@ pydantic[email]>=2.0.0,<3.0.0
 python-json-logger>=2.0.7,<5.0.0
 
 # Testing (dev)
-pytest>=8.0.0,<9.0.0
-pytest-asyncio>=0.23.0,<1.0.0
+pytest>=9.0.3,<10.0.0
+pytest-asyncio>=1.0.0,<2.0.0
 httpx>=0.27.0,<1.0.0
 
 PyYAML>=6.0,<7.0

@@ -4,16 +4,26 @@
 
 // ── API Envelope ───────────────────────────────────────────────
 
+export interface ResponseMeta {
+  total?: number;
+  page?: number;
+  page_size?: number;
+  query_took_ms?: number;
+  search_after?: (string | number)[] | null;  // cursor for search_after pagination
+  /**
+   * Set when an underlying query timed out, tripped the cluster circuit breaker, or
+   * returned partial shard results. The values in `data` are then incomplete or
+   * zeroed — a 0 means "unknown", NOT "no traffic". Render the data as unavailable
+   * rather than presenting it as a measurement.
+   */
+  degraded?: boolean | null;
+  partial_errors?: string[] | null;
+}
+
 export interface APIResponse<T = unknown> {
   success: boolean;
   data: T | null;
-  meta: {
-    total?: number;
-    page?: number;
-    page_size?: number;
-    query_took_ms?: number;
-    search_after?: (string | number)[] | null;  // cursor for search_after pagination
-  } | null;
+  meta: ResponseMeta | null;
   error: {
     code: string;
     message: string;
@@ -138,52 +148,38 @@ export interface TopInboundService {
   bytes_human: string;
 }
 
-// ── Traffic ────────────────────────────────────────────────────
+// ── Traffic Flow v2.0 (PRD) ──────────────────────────────────────
 
-export interface TrafficSummary {
-  top_applications: TopApplication[];
-  categories: { category: string; total_bytes: number; bytes_human: string }[];
-  sankey: SankeyData;
-  throughput_timeline: { timestamp: number; bytes: number }[];
-  top_clients: { ip: string; total_bytes: number; bytes_human: string }[];
-  top_servers: { ip: string; total_bytes: number; bytes_human: string }[];
-  protocols: { protocol: string; total_bytes: number; total_packets: number }[];
-  egress_interfaces: { interface: string; total_bytes: number; bytes_human: string }[];
-}
-
-export interface SankeyData {
-  nodes: { id: string; label: string }[];
-  links: { source: string; target: string; value: number }[];
-  as_country_nodes: { id: string; label: string }[];
-  as_country_links: { source: string; target: string; value: number }[];
-}
-
-export interface ASCountryItem {
-  country: string;
+export interface TrafficFlowAppItem { app_name: string; total_bytes: number; speed_mbps: number; percentage: number; }
+export interface TrafficFlowCategoryItem { category_name: string; total_bytes: number; count: number; }
+export interface TrafficFlowASOrgItem { org_name: string; total_bytes: number; }
+export interface TrafficFlowASCountryItem { country: string; total_bytes: number; flag_code: string; }
+export interface TrafficFlowClientItem { ip: string; total_bytes: number; upload_bytes?: number; download_bytes?: number; }
+export interface TrafficFlowServerItem { ip: string; total_bytes: number; upload_bytes?: number; download_bytes?: number; hostname: string; }
+export interface TrafficFlowProtocolItem { protocol: string; total_bytes: number; percentage: number; }
+export interface TrafficFlowEgressItem { interface: string; total_bytes: number; }
+export interface TrafficFlowSrcASOrgItem { org_name: string; total_bytes: number; }
+export interface TrafficFlowSummary {
   total_bytes: number;
-  bytes_human: string;
+  total_upload: number;
+  total_download: number;
+  total_sessions: number;
+  top_apps: TrafficFlowAppItem[];
+  top_src_as_org: TrafficFlowSrcASOrgItem[];
+  app_categories: TrafficFlowCategoryItem[];
+  top_dst_as_org: TrafficFlowASOrgItem[];
+  top_dst_as_country: TrafficFlowASCountryItem[];
+  top_clients: TrafficFlowClientItem[];
+  top_servers: TrafficFlowServerItem[];
+  protocol_dist: TrafficFlowProtocolItem[];
+  egress_breakdown: TrafficFlowEgressItem[];
+  ingress_breakdown: TrafficFlowEgressItem[];
 }
+export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; global_speed_by_app?: Record<string, number>; }
+export interface TrafficFlowTableRecord { client_ip: string; server_ip: string; app_name: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
+export interface TrafficFlowTableData { records: TrafficFlowTableRecord[]; after_key: any; }
 
-export interface ASOrgItem {
-  as_org: string;
-  as_number: number;
-  total_bytes: number;
-  bytes_human: string;
-  country: string;
-}
-
-export interface TrafficSummary {
-  top_applications: TopApplication[];
-  categories: { category: string; total_bytes: number; bytes_human: string }[];
-  sankey: SankeyData;
-  throughput_timeline: { timestamp: number; bytes: number }[];
-  top_clients: { ip: string; total_bytes: number; bytes_human: string }[];
-  top_servers: { ip: string; total_bytes: number; bytes_human: string }[];
-  protocols: { protocol: string; total_bytes: number; total_packets: number }[];
-  egress_interfaces: { interface: string; total_bytes: number; bytes_human: string }[];
-  top_as_countries: ASCountryItem[];
-  top_as_orgs: ASOrgItem[];
-}
+// ── Raw Flow Record ─────────────────────────────────────────────
 
 export interface RawFlowRecord {
   timestamp: string;
@@ -191,6 +187,7 @@ export interface RawFlowRecord {
   server_ip: string;
   application: string;
   category: string;
+  classification?: string;
   protocol: string;
   dst_port: number;
   total_bytes: number;
@@ -201,29 +198,6 @@ export interface RawFlowRecord {
   correlation_id?: string;
   correlation_direction?: string;
 }
-
-// ── Traffic Flow v2.0 (PRD) ──────────────────────────────────────
-
-export interface TrafficFlowAppItem { app_name: string; total_bytes: number; speed_mbps: number; percentage: number; }
-export interface TrafficFlowCategoryItem { category_name: string; total_bytes: number; count: number; }
-export interface TrafficFlowASOrgItem { org_name: string; total_bytes: number; }
-export interface TrafficFlowASCountryItem { country: string; total_bytes: number; flag_code: string; }
-export interface TrafficFlowClientItem { ip: string; total_bytes: number; }
-export interface TrafficFlowServerItem { ip: string; total_bytes: number; hostname: string; }
-export interface TrafficFlowProtocolItem { protocol: string; total_bytes: number; percentage: number; }
-export interface TrafficFlowEgressItem { interface: string; total_bytes: number; }
-export interface TrafficFlowSrcASOrgItem { org_name: string; total_bytes: number; }
-export interface TrafficFlowSummary {
-  top_apps: TrafficFlowAppItem[]; app_categories: TrafficFlowCategoryItem[];
-  top_dst_as_org: TrafficFlowASOrgItem[]; top_dst_as_country: TrafficFlowASCountryItem[];
-  top_clients: TrafficFlowClientItem[]; top_servers: TrafficFlowServerItem[];
-  protocol_dist: TrafficFlowProtocolItem[]; egress_breakdown: TrafficFlowEgressItem[];
-  ingress_breakdown: TrafficFlowEgressItem[];
-  top_src_as_org: TrafficFlowSrcASOrgItem[];
-}
-export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; global_speed_by_app?: Record<string, number>; }
-export interface TrafficFlowTableRecord { client_ip: string; server_ip: string; app_name: string; bytes: number; packets: number; sessions: number; }
-export interface TrafficFlowTableData { records: TrafficFlowTableRecord[]; after_key: any; }
 
 // ── Interface Stats v2.0 ─────────────────────────────────────────
 
@@ -434,6 +408,10 @@ export interface SankeyLinkExt extends Omit<SankeyLink, "source" | "target"> {
 
 export interface TrafficInboundServiceItem { service_name: string; service_port: number | string; total_bytes: number; speed_mbps: number; percentage: number; }
 export interface TrafficInboundSummary {
+  total_bytes: number;
+  total_upload: number;
+  total_download: number;
+  total_sessions: number;
   top_services: TrafficInboundServiceItem[];
   service_categories?: { category_name: string; total_bytes: number; count: number }[];
   top_dst_as_org?: TrafficFlowASOrgItem[];
@@ -447,12 +425,16 @@ export interface TrafficInboundSummary {
   ingress_breakdown: TrafficFlowEgressItem[];
 }
 export interface TrafficInboundChartData { chart_data: Record<string, any>[]; service_names: string[]; }
-export interface TrafficInboundTableRecord { client_ip: string; server_ip: string; service: string; bytes: number; packets: number; sessions: number; }
+export interface TrafficInboundTableRecord { client_ip: string; server_ip: string; service: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
 export interface TrafficInboundTableData { records: TrafficInboundTableRecord[]; after_key: any; total: number; }
 
 // ── Traffic Internal v2.0 ──────────────────────────────────────────
 
 export interface TrafficInternalSummary {
+  total_bytes: number;
+  total_upload: number;
+  total_download: number;
+  total_sessions: number;
   top_services: TrafficInboundServiceItem[];
   top_clients: TrafficFlowClientItem[];
   top_servers: TrafficFlowServerItem[];
@@ -461,3 +443,5 @@ export interface TrafficInternalSummary {
   protocol_dist: { protocol: string; total_bytes: number }[];
 }
 export interface TrafficInternalChartData { chart_data: Record<string, any>[]; service_names: string[]; }
+export interface TrafficInternalTableRecord { client_ip: string; server_ip: string; service: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
+export interface TrafficInternalTableData { records: TrafficInternalTableRecord[]; after_key: any; }

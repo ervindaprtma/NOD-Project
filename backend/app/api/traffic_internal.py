@@ -15,9 +15,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from app.api.auth import get_current_user
-from app.api._safe import safe_query
+from app.opensearch.query import track_degradation
+from app.api._safe import build_meta, safe_query
 from app.opensearch import traffic_internal as ti_qb
-from app.schemas.common import APIResponse, Meta
+from app.schemas.common import APIResponse
 from app.schemas.traffic_internal import (
     TrafficInternalSummaryResponse,
     TrafficInternalChartResponse,
@@ -49,6 +50,7 @@ async def traffic_internal_summary(
     if site_name not in ALL_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALL_SITES)}")
     t0 = time.monotonic()
+    degraded = track_degradation()
     data, err = await safe_query(
         ti_qb.flow_summary,
         "traffic_internal.flow_summary",
@@ -58,9 +60,10 @@ async def traffic_internal_summary(
         ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         empty = {
+            "total_bytes": 0, "total_upload": 0, "total_download": 0, "total_sessions": 0,
             "top_services": [], "top_clients": [], "top_servers": [],
             "ingress_breakdown": [], "egress_breakdown": [], "protocol_dist": [],
         }
@@ -86,6 +89,7 @@ async def traffic_internal_chart(
     if site_name not in ALL_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALL_SITES)}")
     t0 = time.monotonic()
+    degraded = track_degradation()
     data, err = await safe_query(
         ti_qb.flow_chart,
         "traffic_internal.flow_chart",
@@ -94,7 +98,7 @@ async def traffic_internal_chart(
         protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         logger.warning(f"traffic-internal chart empty for {site_name} ({elapsed}ms): {err}")
         return APIResponse.ok(
@@ -121,6 +125,7 @@ async def traffic_internal_table(
     if site_name not in ALL_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALL_SITES)}")
     t0 = time.monotonic()
+    degraded = track_degradation()
     after_key: Optional[dict] = None
     if after:
         try: after_key = json.loads(after)
@@ -133,7 +138,7 @@ async def traffic_internal_table(
         protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         logger.warning(f"traffic-internal table empty for {site_name} ({elapsed}ms): {err}")
         return APIResponse.ok(
@@ -159,6 +164,7 @@ async def traffic_internal_sankey(
     if site_name not in ALL_SITES:
         return APIResponse.fail("INVALID_SITE", f"Site must be one of: {', '.join(ALL_SITES)}")
     t0 = time.monotonic()
+    degraded = track_degradation()
     data, err = await safe_query(
         ti_qb.sankey_data,
         "traffic_internal.sankey_data",
@@ -167,7 +173,7 @@ async def traffic_internal_sankey(
         protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta = Meta(query_took_ms=elapsed)
+    meta = build_meta(elapsed, degraded, err)
     if data is None:
         empty = {"nodes": [], "links": [], "as_country_nodes": [], "as_country_links": []}
         logger.warning(f"traffic-internal sankey empty for {site_name} ({elapsed}ms): {err}")

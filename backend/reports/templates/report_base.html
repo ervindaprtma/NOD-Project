@@ -1173,7 +1173,7 @@ body {
 
 {% if data.sites %}
 {% for site_name, site_d in data.sites.items() %}
-{% if site_d.throughput_timeline or site_d.top_services or site_d.top_client_as or site_d.top_countries or site_d.protocol_distribution or site_d.egress_breakdown %}
+{% if site_d.throughput_timeline or site_d.top_services or site_d.top_client_as or site_d.top_countries or site_d.top_servers or site_d.protocol_distribution or site_d.egress_breakdown %}
 {% call site_block(site_name) %}
 
 {% if site_d.throughput_timeline and report_type == 'R-08' %}
@@ -1201,6 +1201,13 @@ body {
 <div class="card" style="margin-bottom:10px;">
     <h3>Top Source Countries</h3>
     {{ hbar_list(site_d.top_countries) }}
+</div>
+{% endif %}
+
+{% if site_d.top_servers %}
+<div class="card" style="margin-bottom:10px;">
+    <h3>Top Servers</h3>
+    {{ hbar_list(site_d.top_servers) }}
 </div>
 {% endif %}
 

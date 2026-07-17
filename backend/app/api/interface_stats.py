@@ -54,15 +54,28 @@ def _compute_throughput_timeline(
     Convert cumulative counter per-bucket into Mbps throughput.
     throughputMbps = (max_current - max_prev) × 8 / interval_seconds / 1_000_000
     If delta < 0 (counter reset), return None for that bucket.
+
+    The first bucket with counter values is used as baseline only — it has no
+    prior counter so no delta can be computed, and it is skipped to avoid
+    a misleading zero point at the chart boundary.
     """
     points: list[InterfaceTimelinePoint] = []
     prev_in: Optional[float] = None
     prev_out: Optional[float] = None
+    started: bool = False
 
     for bucket in time_buckets:
         ts = bucket["key"]
         max_in = bucket.get("max_in_octets", {}).get("value")
         max_out = bucket.get("max_out_octets", {}).get("value")
+
+        # First bucket with counter values — seed the baseline, skip emitting
+        if not started:
+            prev_in = max_in
+            prev_out = max_out
+            if max_in is not None or max_out is not None:
+                started = True
+            continue
 
         in_mbps: Optional[float] = None
         out_mbps: Optional[float] = None

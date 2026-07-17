@@ -76,7 +76,8 @@ async def _get_config(db: AsyncSession, channel: str) -> NotificationConfig | No
     result = await db.execute(
         select(NotificationConfig).where(NotificationConfig.channel == channel)
     )
-    return result.scalar_one_or_none()
+    config: NotificationConfig | None = result.scalar_one_or_none()
+    return config
 
 
 # ── Endpoints ─────────────────────────────────────────────────

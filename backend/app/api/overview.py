@@ -17,7 +17,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 
 from app.api.auth import get_current_user
-from app.api._safe import safe_query
+from app.api._safe import build_meta, safe_query
+from app.opensearch.query import track_degradation
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.opensearch import ha as ha_qb
@@ -79,6 +80,7 @@ async def get_overview(
     """FR-01: Returns all overview panels in a single API call.
     All sub-queries are isolated so one failure doesn't crash the page."""
     t0 = time.monotonic()
+    degraded = track_degradation()
     errors: list[str] = []
 
     # Run all independent sub-queries in parallel for speed
@@ -228,7 +230,10 @@ async def get_overview(
     ]
 
     # Total throughput
-    total_bytes = int(total_bytes_raw) if isinstance(total_bytes_raw, (int, float)) else 0
+    if isinstance(total_bytes_raw, dict):
+        total_bytes = int(total_bytes_raw.get("total_bytes", 0))
+    else:
+        total_bytes = int(total_bytes_raw) if isinstance(total_bytes_raw, (int, float)) else 0
 
     # HA status
     ha_status = None
@@ -313,10 +318,13 @@ async def get_overview(
         pass
 
     elapsed = int((time.monotonic() - t0) * 1000)
-    meta: dict = {"query_took_ms": elapsed}
-    if errors:
-        meta["partial_errors"] = errors[:5]  # limit to first 5
-        logger.warning(f"overview partial errors ({len(errors)}): {errors[:3]}")
+    # `errors` covers query functions that raised; `degraded` covers the quieter
+    # failures safe_search() swallows into empty skeletons (timeout, circuit breaker,
+    # partial shard results) which would otherwise render as a real 0.
+    all_reasons = errors + list(degraded)
+    meta = build_meta(elapsed, all_reasons)
+    if all_reasons:
+        logger.warning(f"overview degraded ({len(all_reasons)}): {all_reasons[:3]}")
 
     return APIResponse.ok(
         data=OverviewResponse(

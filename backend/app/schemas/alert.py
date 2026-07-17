@@ -21,8 +21,6 @@ class AlertRuleCreate(BaseModel):
     sustained_for_minutes: int = Field(..., ge=0)
     notify_channels: list[str] = Field(default_factory=list)
     notification_template_id: Optional[str] = None
-    notification_mode: Optional[str] = Field(default="stateful", pattern=r"^(stateful|peak_only)$")
-    renotify_enabled: bool = True
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
     enabled: bool = True
@@ -40,8 +38,6 @@ class AlertRuleUpdate(BaseModel):
     sustained_for_minutes: Optional[int] = Field(default=None, ge=0)
     notify_channels: Optional[list[str]] = None
     notification_template_id: Optional[str] = None
-    notification_mode: Optional[str] = Field(default=None, pattern=r"^(stateful|peak_only)$")
-    renotify_enabled: Optional[bool] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
     enabled: Optional[bool] = None
@@ -61,8 +57,6 @@ class AlertRuleRead(BaseModel):
     notify_channels: list[str]
     template_id: Optional[str] = None
     notification_template_id: Optional[str] = None
-    notification_mode: str
-    renotify_enabled: bool
     enabled: bool
     site_name: Optional[str] = None
     created_by: Optional[str] = None

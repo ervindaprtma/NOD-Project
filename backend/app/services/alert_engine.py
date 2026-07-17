@@ -22,6 +22,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.db.models import AlertLog, AlertRule, AlertState, MaintenanceWindow, NotificationTemplate
 from app.db.session import AsyncSessionLocal
+from app.opensearch.query import degradation_scope
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.sse import sse_broadcast
 
@@ -71,7 +72,8 @@ def _render_template(text: str, ctx: dict) -> str:
     referencing only allow-listed vars; re-raises for any other error so
     the engine's existing try/except logs it.
     """
-    return _SANDBOX.from_string(text).render(**ctx)
+    rendered: str = _SANDBOX.from_string(text).render(**ctx)
+    return rendered
 
 
 # ── P1: Group query runner ──────────────────────────────────────
@@ -87,51 +89,79 @@ async def _run_group_query(
 ) -> float | list | dict | None:
     """Execute ONE OpenSearch query for a rule group.
 
-    Returns a raw result that _extract_per_rule_value can work with.
+    Returns a raw result that _extract_per_rule_value can work with, or None when the
+    result cannot be trusted — callers skip the rule and hold its state rather than
+    evaluate on a bad number.
+
+    safe_search() deliberately never raises: on timeout, circuit breaker, or partial
+    shard results it returns an empty skeleton, which arrives here as a perfectly
+    real-looking 0. Evaluating on that silently converts an infrastructure failure into
+    a wrong answer in both directions — a "throughput < 10 Mbps" rule fires a false
+    outage, and any already-FIRING rule sees 0, fails its condition, and reports a
+    false all-clear. So a degraded read must be "unknown", never "zero".
     """
     now_ms = int(_time.time() * 1000)
     window_ms = window_minutes * 60 * 1000
     gte_ms = now_ms - window_ms
     lte_ms = now_ms
 
-    try:
-        if data_source == "ha_resource":
-            from app.opensearch import ha as ha_qb
+    with degradation_scope() as degraded:
+        try:
+            if data_source == "ha_resource":
+                from app.opensearch import ha as ha_qb
 
-            return await ha_qb.current_device_status(gte_ms=gte_ms, lte_ms=lte_ms)
+                result: float | list | dict | None = await ha_qb.current_device_status(
+                    gte_ms=gte_ms, lte_ms=lte_ms
+                )
 
-        if data_source == "appid_flow":
-            from app.opensearch import appid as appid_qb
+            elif data_source == "appid_flow":
+                from app.opensearch import traffic_flow as tf_qb
 
-            return await appid_qb.total_bytes(gte_ms=gte_ms, lte_ms=lte_ms)
+                throughput = await tf_qb.total_throughput(
+                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC"
+                )
+                result = (
+                    throughput["total_bytes"]
+                    if isinstance(throughput, dict)
+                    else (throughput or 0)
+                )
 
-        if data_source == "sdwan_sla":
-            from app.opensearch import sdwan as sdwan_qb
+            elif data_source == "sdwan_sla":
+                from app.opensearch import sdwan as sdwan_qb
 
-            return await sdwan_qb.sla_summary(
-                gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC"
+                result = await sdwan_qb.sla_summary(
+                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC"
+                )
+
+            elif data_source == "vpn_ssl":
+                from app.opensearch import sslvpn as sslvpn_qb
+
+                result = await sslvpn_qb.active_sslvpn_users_count(
+                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC_SSLVPN"
+                )
+
+            elif data_source == "vpn_ipsec":
+                from app.opensearch import ipsec as ipsec_qb
+
+                result = await ipsec_qb.active_ipsec_users_count(gte_ms=gte_ms, lte_ms=lte_ms)
+
+            else:
+                logger.warning("Unsupported data_source for group query: %s", data_source)
+                return None
+
+        except Exception as e:
+            logger.error("Group query failed for %s (site=%s): %s", data_source, site_name, e)
+            return None
+
+        if degraded:
+            logger.warning(
+                "Skipping rule group %s (site=%s, window=%dmin): data degraded, "
+                "holding state instead of evaluating — %s",
+                data_source, site_name, window_minutes, degraded[:2],
             )
+            return None
 
-        if data_source == "vpn_ssl":
-            from app.opensearch import sslvpn as sslvpn_qb
-
-            return await sslvpn_qb.active_sslvpn_users_count(
-                gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC_SSLVPN"
-            )
-
-        if data_source == "vpn_ipsec":
-            from app.opensearch import ipsec as ipsec_qb
-
-            return await ipsec_qb.active_ipsec_users_count(
-                gte_ms=gte_ms, lte_ms=lte_ms
-            )
-
-        logger.warning("Unsupported data_source for group query: %s", data_source)
-        return None
-
-    except Exception as e:
-        logger.error("Group query failed for %s (site=%s): %s", data_source, site_name, e)
-        return None
+    return result
 
 
 def _extract_per_rule_value(
@@ -323,18 +353,22 @@ async def _advance_state_machine(
                     ))
                     await db.flush()
 
-                # Enqueue notification (batch dispatch, P7)
-                if notify_queue is not None:
-                    notify_queue.append((rule, metric_value))
+                    # Notify only on the PENDING -> FIRING transition. This block used
+                    # to sit one level out, so every tick of the sustain window sent a
+                    # notification: sustained_for_minutes gated the state change but
+                    # not the alerting, turning a 15-minute debounce on a 60s tick into
+                    # ~15 messages before the rule had even fired.
+                    if notify_queue is not None:
+                        notify_queue.append((rule, metric_value))
 
-                # SSE stays per-rule (real-time)
-                await sse_broadcast("alert",
-                    rule_id=rule.id,
-                    rule_name=rule.name,
-                    severity=rule.severity,
-                    metric_value=metric_value,
-                    fired_at=now.isoformat(),
-                )
+                    # SSE stays per-rule (real-time)
+                    await sse_broadcast("alert",
+                        rule_id=rule.id,
+                        rule_name=rule.name,
+                        severity=rule.severity,
+                        metric_value=metric_value,
+                        fired_at=now.isoformat(),
+                    )
 
         elif state.state == "FIRING":
             if state.last_notified_at:

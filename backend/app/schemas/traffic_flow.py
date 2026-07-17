@@ -48,11 +48,15 @@ class TopASCountryItem(BaseModel):
 class TopClientItem(BaseModel):
     ip: str
     total_bytes: int
+    upload_bytes: int = 0
+    download_bytes: int = 0
 
 
 class TopServerItem(BaseModel):
     ip: str
     total_bytes: int
+    upload_bytes: int = 0
+    download_bytes: int = 0
     hostname: str = ""
 
 
@@ -76,12 +80,17 @@ class TopSrcASOrgItem(BaseModel):
 
 
 class TrafficSummaryResponse(BaseModel):
+    total_bytes: int = 0
+    total_upload: int = 0
+    total_download: int = 0
+    total_sessions: int = 0
     top_apps: list[TopAppItem]
     app_categories: list[AppCategoryItem]
     top_dst_as_org: list[TopASOrgItem]
     top_dst_as_country: list[TopASCountryItem]
     top_clients: list[TopClientItem]
     top_servers: list[TopServerItem]
+    top_src_as_org: list[TopSrcASOrgItem] = []
     protocol_dist: list[ProtocolDistItem]
     egress_breakdown: list[EgressBreakdownItem]
     ingress_breakdown: list[EgressBreakdownItem]
@@ -104,6 +113,8 @@ class FlowTableRecord(BaseModel):
     server_ip: str
     app_name: str = "Unknown"
     bytes: int = 0
+    upload_bytes: int = 0
+    download_bytes: int = 0
     packets: int = 0
     sessions: int = 0
 
@@ -111,6 +122,28 @@ class FlowTableRecord(BaseModel):
 class TrafficTableResponse(BaseModel):
     records: list[FlowTableRecord]
     after_key: Optional[dict] = None
+
+
+# ── RAW FLOW RECORD ─────────────────────────────────────────────
+
+
+class RawFlowRecord(BaseModel):
+    timestamp: str  # ISO 8601
+    client_ip: str
+    server_ip: str
+    application: str
+    category: str
+    protocol: str
+    dst_port: int
+    total_bytes: int
+    bytes_human: Optional[str] = None
+    packets: int
+    ingress_interface: str
+    egress_interface: str
+    classification: str = "unresolved"  # dpi_verified | port_inferred | port_suspicious | unresolved
+    path: str  # traffic path: internet, inbound-vip, inter-site, intra-lan
+    correlation_id: Optional[str] = None
+    correlation_direction: Optional[str] = None
 
 
 # ── SANKEY RESPONSE ──────────────────────────────────────────────

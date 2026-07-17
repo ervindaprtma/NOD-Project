@@ -10,9 +10,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from app.api.auth import require_role
-from app.opensearch import appid as appid_qb
-from app.schemas.common import APIResponse, Meta
-from app.schemas.traffic import RawFlowRecord
+from app.api._safe import build_meta
+from app.opensearch import traffic_flow as tf_qb
+from app.opensearch.query import track_degradation
+from app.schemas.common import APIResponse
+from app.schemas.traffic_flow import RawFlowRecord
 
 router = APIRouter(prefix="/api/v1/traffic", tags=["Raw Data"])
 
@@ -58,6 +60,7 @@ async def get_raw_flows(
     Q-08: Page size capped at 500.
     """
     t0 = time.monotonic()
+    degraded = track_degradation()
 
     # Build filters dict — accept comma-separated values for all text fields
     filters: dict = {}
@@ -92,7 +95,7 @@ async def get_raw_flows(
     if search_after_timestamp is not None and search_after_id is not None:
         sa = [search_after_timestamp, search_after_id]
 
-    result = await appid_qb.raw_flows(
+    result = await tf_qb.raw_flows(
         gte_ms=gte_ms,
         lte_ms=lte_ms,
         page_size=page_size,
@@ -124,16 +127,19 @@ async def get_raw_flows(
             path=r.get("path", path_filter),
             correlation_id=r.get("correlation_id"),
             correlation_direction=r.get("correlation_direction"),
+            classification=r.get("classification", ""),
         )
         for r in result["records"]
     ]
 
     return APIResponse.ok(
         data=records,
-        meta=Meta(
+        meta=build_meta(
+            elapsed,
+            degraded,
+            result.get("error"),
             total=result["total_hits"],
             page_size=page_size,
-            query_took_ms=elapsed,
             search_after=result.get("search_after"),  # cursor for next page
         ),
     )
