@@ -18,8 +18,9 @@ import asyncio
 import hashlib
 import json
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from opensearchpy import AsyncOpenSearch
 
@@ -47,6 +48,23 @@ def track_degradation() -> list[str]:
     sink: list[str] = []
     _degraded_sink.set(sink)
     return sink
+
+
+@contextmanager
+def degradation_scope() -> Iterator[list[str]]:
+    """Collect degradation reasons for one nested block, then restore the outer sink.
+
+    Endpoints call track_degradation() once and let it cover the whole request. The
+    alert engine instead needs per-query isolation — it must decide rule-by-rule
+    whether the data is trustworthy — and must not clobber a request's sink if it ever
+    runs inside one. Scoping restores the previous sink on exit.
+    """
+    sink: list[str] = []
+    token = _degraded_sink.set(sink)
+    try:
+        yield sink
+    finally:
+        _degraded_sink.reset(token)
 
 
 def _record_degraded(reason: str) -> None:

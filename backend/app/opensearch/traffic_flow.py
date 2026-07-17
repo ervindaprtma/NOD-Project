@@ -551,8 +551,13 @@ async def total_throughput(
     gte_ms: int = 0,
     lte_ms: int = 0,
     site_name: str = "Site_FGT-DC",
-) -> int:
-    """Return total bytes for the time range."""
+) -> dict[str, int]:
+    """Return {total_bytes, total_upload, total_download} for the time range.
+
+    Annotation was `-> int` while the body returned a dict; both call sites already
+    branch on isinstance(..., dict), so this corrects the signature to match reality
+    rather than changing behaviour.
+    """
     if client is None:
         client = _get_client(site_name)
     body = {
