@@ -25,6 +25,27 @@ from app.services.activity_logger import log_activity
 router = APIRouter(prefix="/api/v1/users", tags=["Users"])
 
 
+async def _reject_duplicate(
+    db: AsyncSession, field: str, value: str, exclude_id: str | None = None
+) -> None:
+    """409 if another user already holds this username/email.
+
+    Both columns are UNIQUE, so without this the DB raises IntegrityError and the
+    client gets a 500 for what is ordinary user error.
+
+    Email compares case-insensitively: the UNIQUE index is case-sensitive, so it
+    would happily store Foo@x.com alongside foo@x.com — two rows, one real mailbox.
+    Username compares exactly, because /auth/login matches it exactly; `Userr` and
+    `userr` really are separate accounts with separate logins.
+    """
+    column = getattr(User, field)
+    match = func.lower(column) == value.lower() if field == "email" else column == value
+    conditions = [match] if exclude_id is None else [match, User.id != exclude_id]
+    result = await db.execute(select(User.id).where(*conditions))
+    if result.scalars().first():
+        raise HTTPException(status_code=409, detail=f"{field.capitalize()} already in use.")
+
+
 # ═══════════════════════════════════════════════════════════════
 # Self-service routes (must be before /{user_id} dynamic route)
 # ═══════════════════════════════════════════════════════════════
@@ -46,6 +67,8 @@ async def update_own_profile(
 ):
     """FR-07: Update own display name. Role and is_active are ignored for self-update."""
     update_data = body.model_dump(exclude_unset=True)
+    if update_data.get("email"):
+        await _reject_duplicate(db, "email", update_data["email"], current_user.id)
     for key, value in update_data.items():
         if key in ("full_name", "email"):
             setattr(current_user, key, value)
@@ -284,13 +307,8 @@ async def create_user(
     current_user=Depends(require_role("admin")),
 ):
     """Create a new user."""
-    result = await db.execute(select(User).where(User.username == body.username))
-    if result.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Username already exists.")
-
-    result = await db.execute(select(User).where(User.email == body.email))
-    if result.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Email already exists.")
+    await _reject_duplicate(db, "username", body.username)
+    await _reject_duplicate(db, "email", body.email)
 
     user = User(
         username=body.username,
@@ -330,6 +348,24 @@ async def update_user(
         raise HTTPException(status_code=403, detail="Cannot modify superadmin account.")
 
     update_data = body.model_dump(exclude_unset=True)
+
+    # Only a superadmin may mint another one. Without this an admin could PUT
+    # role=superadmin on any account — including their own second login — and
+    # walk straight past every superadmin-only guard in this file.
+    if update_data.get("role") == "superadmin" and current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Only a superadmin can grant the superadmin role.")
+
+    for field in ("username", "email"):
+        if update_data.get(field):
+            await _reject_duplicate(db, field, update_data[field], user.id)
+
+    # Pop before the setattr loop: `password` is not a column (the model stores
+    # hashed_password), and it must never reach the `changes` audit payload.
+    new_password = update_data.pop("password", None)
+    if new_password:
+        user.hashed_password = hash_password(new_password)
+        user.must_change_password = True
+
     changes = {}
     for key, value in update_data.items():
         if key == "role" and user.role == "superadmin":
@@ -338,6 +374,8 @@ async def update_user(
         setattr(user, key, value)
         if old_val != value:
             changes[key] = {"old": old_val, "new": value}
+    if new_password:
+        changes["password"] = {"old": "***", "new": "***"}
     await db.flush()
     await db.refresh(user)
 
@@ -355,9 +393,9 @@ async def update_user(
 async def delete_user(
     user_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role("admin")),
+    current_user=Depends(require_role("superadmin")),
 ):
-    """Hard-delete user (admin+). Superadmin cannot be deleted. Self-delete blocked."""
+    """Hard-delete user (superadmin only). Self-delete blocked."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
@@ -366,8 +404,9 @@ async def delete_user(
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account.")
 
-    if user.role == "superadmin" and current_user.role != "superadmin":
-        raise HTTPException(status_code=403, detail="Cannot delete superadmin account.")
+    # No last-superadmin guard needed: this route requires superadmin, self-delete is
+    # blocked above, and update_user refuses to demote a superadmin — so the caller
+    # always survives as one. Add the guard if any of those three change.
 
     username = user.username
     user_role = user.role

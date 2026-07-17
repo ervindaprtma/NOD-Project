@@ -21,7 +21,7 @@ type Tab =
 
 const ALL_TABS: { id: Tab; label: string; adminOnly: boolean }[] = [
   { id: "password", label: "Change Password", adminOnly: false },
-  { id: "profile", label: "Display Name", adminOnly: false },
+  { id: "profile", label: "Profile", adminOnly: false },
   { id: "appearance", label: "Appearance", adminOnly: false },
   { id: "notifications", label: "Notification Channels", adminOnly: true },
   { id: "maintenance", label: "Maintenance Windows", adminOnly: true },
@@ -190,6 +190,7 @@ function ChangePasswordForm() {
 
 function DisplayNameForm() {
   const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -197,9 +198,10 @@ function DisplayNameForm() {
 
   // Load current profile
   useState(() => {
-    apiFetch<{ data: { full_name: string } }>("/api/v1/users/me")
+    apiFetch<{ data: { full_name: string; email: string } }>("/api/v1/users/me")
       .then((resp) => {
         setFullName(resp.data?.full_name || "");
+        setEmail(resp.data?.email || "");
         setLoaded(true);
       })
       .catch(() => setLoaded(true));
@@ -213,11 +215,11 @@ function DisplayNameForm() {
     try {
       await apiFetch("/api/v1/users/me", {
         method: "PUT",
-        body: JSON.stringify({ full_name: fullName }),
+        body: JSON.stringify({ full_name: fullName, email }),
       });
-      setSuccess("Display name updated successfully.");
+      setSuccess("Profile updated successfully.");
     } catch (err: unknown) {
-      setError(getErrorMessage(err, "Failed to update display name."));
+      setError(getErrorMessage(err, "Failed to update profile."));
     } finally {
       setLoading(false);
     }
@@ -229,7 +231,7 @@ function DisplayNameForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <h2 className="text-lg font-semibold">Display Name</h2>
+      <h2 className="text-lg font-semibold">Profile</h2>
 
       {error && <p className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-md">{error}</p>}
       {success && <p className="text-sm text-emerald-600 bg-emerald-50 px-3 py-2 rounded-md dark:bg-emerald-950/20 dark:text-emerald-400">{success}</p>}
@@ -244,12 +246,24 @@ function DisplayNameForm() {
           className="w-full px-3 py-2 border rounded-md text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
       </div>
+      <div>
+        <label className="text-sm font-medium block mb-1" htmlFor="profile-email">Email</label>
+        <input
+          id="profile-email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          placeholder="you@example.com"
+          className="w-full px-3 py-2 border rounded-md text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+        />
+      </div>
       <button
         type="submit"
         disabled={loading}
         className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
       >
-        {loading ? "Saving..." : "Update Display Name"}
+        {loading ? "Saving..." : "Update Profile"}
       </button>
     </form>
   );
