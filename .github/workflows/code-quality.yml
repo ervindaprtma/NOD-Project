@@ -37,6 +37,9 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://nod_user:ci@localhost:5432/nod_db
+          # alembic imports app.core.config, whose validator rejects the empty default.
+          # Throwaway CI value — nothing here signs or decrypts anything real.
+          JWT_SECRET: ci-only-not-a-real-secret-000000000000
       # §9.10: only the pure tests (no DB, no OS) run in this CI lane. The
       # 4 integration stubs are @pytest.mark.skip'd with TODOs; they
       # need a test DB + mocked OpenSearch, which the test runner
