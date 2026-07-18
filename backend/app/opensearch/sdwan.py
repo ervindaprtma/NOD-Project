@@ -11,6 +11,7 @@ from typing import Optional
 from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_dc_client, get_drc_client
+from app.opensearch.query import safe_search
 from app.schemas.sdwan_resource_vpn import (
     SITE_LINK_COUNT,
     SITE_LINK_LABELS,
@@ -99,7 +100,7 @@ async def validate_sla_data(
         "track_total_hits": True,
     }
 
-    resp = await client.search(index=_get_index_for_site(site_name), body=body)
+    resp = await safe_search(client, _get_index_for_site(site_name), body)
     total = resp["hits"]["total"]["value"]
     hits_list = resp["hits"]["hits"]
 
@@ -156,8 +157,8 @@ async def sla_timeline(
         },
     }
 
-    resp = await client.search(index=_get_index_for_site(site_name), body=body)
-    buckets = resp["aggregations"]["timeline"]["buckets"]
+    resp = await safe_search(client, _get_index_for_site(site_name), body)
+    buckets = resp.get("aggregations", {}).get("timeline", {}).get("buckets", [])
 
     # Flatten: one entry per (timestamp, linkN)
     result: list[dict] = []
@@ -215,8 +216,8 @@ async def sdwan_link_status(
         },
     }
 
-    resp = await client.search(index=_get_index_for_site(site_name), body=body)
-    hits = resp["aggregations"]["latest"]["hits"]["hits"]
+    resp = await safe_search(client, _get_index_for_site(site_name), body)
+    hits = resp.get("aggregations", {}).get("latest", {}).get("hits", {}).get("hits", [])
 
     if not hits:
         return []
@@ -276,14 +277,14 @@ async def sla_summary(
         "aggs": aggs,
     }
 
-    resp = await client.search(index=_get_index_for_site(site_name), body=body)
-    a = resp["aggregations"]
+    resp = await safe_search(client, _get_index_for_site(site_name), body)
+    a = resp.get("aggregations", {})
 
     return {
-        "avg_latency": [(a[f"avg_latency_link{i}"]["value"] or 0.0) for i in range(1, n_links + 1)],
-        "max_latency": [(a[f"max_latency_link{i}"]["value"] or 0.0) for i in range(1, n_links + 1)],
-        "avg_jitter": [(a[f"avg_jitter_link{i}"]["value"] or 0.0) for i in range(1, n_links + 1)],
-        "avg_packet_loss": [(a[f"avg_packet_loss_link{i}"]["value"] or 0.0) for i in range(1, n_links + 1)],
+        "avg_latency": [(a.get(f"avg_latency_link{i}", {}).get("value") or 0.0) for i in range(1, n_links + 1)],
+        "max_latency": [(a.get(f"max_latency_link{i}", {}).get("value") or 0.0) for i in range(1, n_links + 1)],
+        "avg_jitter": [(a.get(f"avg_jitter_link{i}", {}).get("value") or 0.0) for i in range(1, n_links + 1)],
+        "avg_packet_loss": [(a.get(f"avg_packet_loss_link{i}", {}).get("value") or 0.0) for i in range(1, n_links + 1)],
         "labels": [labels.get(f"link{i}", f"link{i}") for i in range(1, n_links + 1)],
         "link_types": [types.get(f"link{i}", "WAN") for i in range(1, n_links + 1)],
     }
@@ -350,9 +351,9 @@ async def all_sites_link_status(
                 }
             },
         }
-        resp = await client.search(index=index_pattern, body=body)
+        resp = await safe_search(client, index_pattern, body)
         results: list[dict] = []
-        for bucket in resp["aggregations"]["by_site"]["buckets"]:
+        for bucket in resp.get("aggregations", {}).get("by_site", {}).get("buckets", []):
             sn = bucket["key"]
             hits = bucket["latest"]["hits"]["hits"]
             if not hits:

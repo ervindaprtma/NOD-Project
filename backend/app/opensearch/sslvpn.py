@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Optional
 from opensearchpy import AsyncOpenSearch
 from app.opensearch.client import get_dc_client
+from app.opensearch.query import safe_search
 
 
 def _sslvpn_filters(gte_ms: int, lte_ms: int, site_name: str) -> list[dict]:
@@ -51,8 +52,8 @@ async def active_sslvpn_users_count(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
-    value: int = resp["aggregations"]["active_users"]["value"]
+    resp = await safe_search(client, "telegraf-index*", body)
+    value = resp.get("aggregations", {}).get("active_users", {}).get("value", 0) or 0
     return int(value)
 
 
@@ -99,8 +100,8 @@ async def all_sslvpn_users_count(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
-    value: int = resp["aggregations"]["active_users"]["value"]
+    resp = await safe_search(client, "telegraf-index*", body)
+    value = resp.get("aggregations", {}).get("active_users", {}).get("value", 0) or 0
     return int(value)
 
 
@@ -141,10 +142,10 @@ async def all_sslvpn_users_count_timeline(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
+    resp = await safe_search(client, "telegraf-index*", body)
     return {
         int(bucket["key"]): int(bucket["active_users"]["value"])
-        for bucket in resp["aggregations"]["over_time"]["buckets"]
+        for bucket in resp.get("aggregations", {}).get("over_time", {}).get("buckets", [])
     }
 
 
@@ -192,8 +193,8 @@ async def active_sslvpn_users(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
-    buckets = resp["aggregations"]["by_user"]["buckets"]
+    resp = await safe_search(client, "telegraf-index*", body)
+    buckets = resp.get("aggregations", {}).get("by_user", {}).get("buckets", [])
 
     results = []
     for bucket in buckets:
@@ -245,7 +246,7 @@ async def sslvpn_session_history(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
+    resp = await safe_search(client, "telegraf-index*", body)
     active_cutoff = lte_ms - 60_000
     return [
         {
@@ -256,7 +257,7 @@ async def sslvpn_session_history(
             "bytes_out": int(bucket["bytes_out"]["value"] or 0),
             "status": "active" if int(bucket["last_seen"]["value"]) >= active_cutoff else "ended",
         }
-        for bucket in resp["aggregations"]["by_user"]["buckets"]
+        for bucket in resp.get("aggregations", {}).get("by_user", {}).get("buckets", [])
         if bucket["doc_count"] > 0
     ]
 
@@ -303,9 +304,9 @@ async def user_bandwidth_timeline(
         },
     }
 
-    resp = await client.search(index="telegraf-index*", body=body)
+    resp = await safe_search(client, "telegraf-index*", body)
     results = []
-    for bucket in resp["aggregations"]["over_time"]["buckets"]:
+    for bucket in resp.get("aggregations", {}).get("over_time", {}).get("buckets", []):
         aggs = bucket.get("bytes_in", {})
         aggs_out = bucket.get("bytes_out", {})
         results.append({
