@@ -271,23 +271,36 @@ async def sankey_data(
 ) -> dict:
     """Sankey for inbound VIP traffic.
 
-    Topology (both directions): Src AS Org -> Ingress -> Service -> Egress.
-    Upload weights links by flow.client.bytes, Download by flow.server.bytes,
-    empty direction by their sum. Same model as traffic_internal.sankey_data.
+    Upload (customer->VIP):  AS Org -> Ingress -> Service -> Egress
+    Download (VIP->customer): Ingress -> Service -> Egress -> AS Org
+    Node order is per-direction (cleaner left-to-right view); Upload weights links
+    by flow.client.bytes, Download by flow.server.bytes, empty direction by their
+    sum. No zone filter — path_filter is the separate selector.
     """
     if client is None:
         client = _get_client(site_name)
 
-    # Single topology (path-independent); Upload/Download differ only by which byte
-    # counter weights the links. traffic.path is a separate filter, so direction is
-    # NOT passed to _base_filters (no zone filter).
-    sources = [
-        {"src_as_org": {"terms": {"field": "flow.client.as.org"}}},
-        {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
-        {"service": {"terms": {"field": "flow.server.l4.port.id"}}},
-        {"egress": {"terms": {"field": "flow.out.netif.name"}}},
-    ]
-    level_names = ["src_as_org", "ingress", "service", "egress"]
+    # Per-direction node order only. direction is NOT passed to _base_filters (no zone
+    # filter); path_filter stays the separate selector. AS Org = flow.client.as.org
+    # (the remote customer is the client on an inbound-vip flow).
+    if direction == "download":
+        # Download (VIP->customer): Ingress -> Service -> Egress -> AS Org
+        sources = [
+            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+            {"service": {"terms": {"field": "flow.server.l4.port.id"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+            {"as_org": {"terms": {"field": "flow.client.as.org"}}},
+        ]
+        level_names = ["ingress", "service", "egress", "as_org"]
+    else:
+        # Upload (customer->VIP) and empty: AS Org -> Ingress -> Service -> Egress
+        sources = [
+            {"as_org": {"terms": {"field": "flow.client.as.org"}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+            {"service": {"terms": {"field": "flow.server.l4.port.id"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+        ]
+        level_names = ["as_org", "ingress", "service", "egress"]
 
     body = {
         "size": 0,
@@ -304,7 +317,7 @@ async def sankey_data(
     }
 
     resp = await safe_search(client, FLOW_INDEX, body)
-    buckets = resp["aggregations"]["sankey_flow"]["buckets"]
+    buckets = resp.get("aggregations", {}).get("sankey_flow", {}).get("buckets", [])
 
     # direction selects the byte counter: upload=client.bytes, download=server.bytes,
     # empty=total. Matches traffic_internal.sankey_data.

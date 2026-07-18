@@ -312,8 +312,8 @@ async def sankey_data(
             },
         }
         resp = await safe_search(client, FLOW_INDEX, body)
-        agg = resp["aggregations"]["sankey_flow"]
-        all_buckets.extend(agg["buckets"])
+        agg = resp.get("aggregations", {}).get("sankey_flow", {})
+        all_buckets.extend(agg.get("buckets", []))
         after_key = agg.get("after_key")
         if not after_key:
             break
