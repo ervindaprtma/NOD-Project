@@ -276,8 +276,11 @@ async def sankey_data(
     site_name: str = "Site_FGT_Office",
     app_filter: str = "", client_ip: str = "", server_ip: str = "",
     protocol: str = "", dst_port: int | None = None, traffic_path: str = "all",
+    direction: str = "",
 ) -> dict:
-    """Sankey: Ingress → Service → Egress (3 levels, no direction needed for internal).
+    """Sankey: Ingress → Service → Egress (3 levels).
+    direction="upload" weights by flow.client.bytes, "download" by flow.server.bytes,
+    else total (upload+download). Structure is identical across directions.
     Paginates composite to collect all unique combinations, then filters to top-10 per level."""
     if client is None:
         client = _get_client(site_name)
@@ -309,8 +312,8 @@ async def sankey_data(
             },
         }
         resp = await safe_search(client, FLOW_INDEX, body)
-        agg = resp["aggregations"]["sankey_flow"]
-        all_buckets.extend(agg["buckets"])
+        agg = resp.get("aggregations", {}).get("sankey_flow", {})
+        all_buckets.extend(agg.get("buckets", []))
         after_key = agg.get("after_key")
         if not after_key:
             break
@@ -321,7 +324,8 @@ async def sankey_data(
         port_key = key.get("service", "")
         if port_key == "0" or port_key == 0:
             continue
-        bytes_val = int(bucket["total_bytes"]["value"])
+        metric = {"upload": "upload_bytes", "download": "download_bytes"}.get(direction, "total_bytes")
+        bytes_val = int(bucket[metric]["value"])
         if bytes_val == 0:
             continue
         rows.append({

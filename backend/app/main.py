@@ -4,6 +4,7 @@ Initializes middleware, routers, scheduler, and structured logging.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -239,9 +240,11 @@ async def health_check():
     except Exception:
         status["db"] = "error"
 
-    # Check OpenSearch clusters — non-fatal, log only
+    # Check OpenSearch clusters — non-fatal, log only. Bounded so unreachable
+    # clusters (each ping can block ~30s) can't stall /health past the Docker
+    # healthcheck timeout and wedge the whole stack as "unhealthy".
     try:
-        cluster_status = await check_all_clusters()
+        cluster_status = await asyncio.wait_for(check_all_clusters(), timeout=5)
         for key, is_ok in cluster_status.items():
             status[key] = "ok" if is_ok else "unreachable"
     except Exception:

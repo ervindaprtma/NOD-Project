@@ -77,18 +77,21 @@ export default function TrafficInternalPage() {
   const summaryKey = token ? `/api/v1/traffic-internal/summary?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}${filterQS}` : null;
   const chartKey = token ? `/api/v1/traffic-internal/chart?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&bucket_seconds=${bucketSeconds}${filterQS}` : null;
   const tableKey = token ? `/api/v1/traffic-internal/table?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}${filterQS}` : null;
-  const sankeyKey = token ? `/api/v1/traffic-internal/sankey?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}${filterQS}` : null;
+  const sankeyUploadKey = token ? `/api/v1/traffic-internal/sankey?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&direction=upload${filterQS}` : null;
+  const sankeyDownloadKey = token ? `/api/v1/traffic-internal/sankey?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&direction=download${filterQS}` : null;
 
   const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ success: boolean; data: TrafficInternalSummary; meta: ResponseMeta | null }>(summaryKey, swrFetcher, { refreshInterval: 0 });
   const { data: chartEnv, error: chartError, isLoading: chartLoading } = useSWR<{ success: boolean; data: TrafficInternalChartData; meta: ResponseMeta | null }>(chartKey, swrFetcher, { refreshInterval: 0 });
   const { data: tableEnv, error: tableError, isLoading: tableLoading } = useSWR<{ success: boolean; data: TrafficInternalTableData; meta: ResponseMeta | null }>(tableKey, swrFetcher, { refreshInterval: 0 });
-  const { data: sankeyEnv, error: sankeyError, isLoading: sankeyLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyKey, swrFetcher, { refreshInterval: 0 });
+  const { data: sankeyUploadEnv, error: sankeyUploadError, isLoading: sankeyUploadLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyUploadKey, swrFetcher, { refreshInterval: 0 });
+  const { data: sankeyDownloadEnv, error: sankeyDownloadError, isLoading: sankeyDownloadLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyDownloadKey, swrFetcher, { refreshInterval: 0 });
 
   const summary: TrafficInternalSummary | undefined = summaryEnv?.data;
   const chart: TrafficInternalChartData | undefined = chartEnv?.data;
   const table: TrafficInternalTableData | undefined = tableEnv?.data;
   const queryTook = summaryEnv?.meta?.query_took_ms;
-  const sankeyData: SankeyResponse | undefined = sankeyEnv?.data;
+  const sankeyUploadData: SankeyResponse | undefined = sankeyUploadEnv?.data;
+  const sankeyDownloadData: SankeyResponse | undefined = sankeyDownloadEnv?.data;
   const hasError = summaryError || chartError || tableError;
 
   const [activeTab, setActiveTab] = useState<"overview" | "sankey">("overview");
@@ -249,8 +252,16 @@ export default function TrafficInternalPage() {
           </TabsContent>
 
           <TabsContent value="sankey">
-            <h3 className="text-base font-semibold text-foreground mb-2">Internal Traffic Flow</h3>
-            <SankeyView data={sankeyData} loading={sankeyLoading} error={!!sankeyError} />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div>
+                <h3 className="text-base font-semibold text-foreground mb-2">Upload</h3>
+                <SankeyView data={sankeyUploadData} loading={sankeyUploadLoading} error={!!sankeyUploadError} />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-foreground mb-2">Download</h3>
+                <SankeyView data={sankeyDownloadData} loading={sankeyDownloadLoading} error={!!sankeyDownloadError} />
+              </div>
+            </div>
           </TabsContent>
         </Tabs>
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from opensearchpy import AsyncOpenSearch
 from app.opensearch.client import get_ipsec_client
+from app.opensearch.query import safe_search
 
 
 def _ipsec_filters(gte_ms: int, lte_ms: int) -> list[dict]:
@@ -45,8 +46,8 @@ async def active_ipsec_users_count(
         },
     }
 
-    resp = await client.search(index="ipsec-*", body=body)
-    value: int = resp["aggregations"]["active_users"]["value"]
+    resp = await safe_search(client, "ipsec-*", body)
+    value = resp.get("aggregations", {}).get("active_users", {}).get("value", 0) or 0
     return int(value)
 
 
@@ -74,10 +75,10 @@ async def active_ipsec_users_count_timeline(
         },
     }
 
-    resp = await client.search(index="ipsec-*", body=body)
+    resp = await safe_search(client, "ipsec-*", body)
     return {
         int(bucket["key"]): int(bucket["active_users"]["value"])
-        for bucket in resp["aggregations"]["over_time"]["buckets"]
+        for bucket in resp.get("aggregations", {}).get("over_time", {}).get("buckets", [])
     }
 
 
@@ -124,8 +125,8 @@ async def active_ipsec_users_detail(
         },
     }
 
-    resp = await client.search(index="ipsec-*", body=body)
-    buckets = resp["aggregations"]["by_user"]["buckets"]
+    resp = await safe_search(client, "ipsec-*", body)
+    buckets = resp.get("aggregations", {}).get("by_user", {}).get("buckets", [])
 
     results = []
     for bucket in buckets:
@@ -174,7 +175,7 @@ async def ipsec_session_history(
         },
     }
 
-    resp = await client.search(index="ipsec-*", body=body)
+    resp = await safe_search(client, "ipsec-*", body)
     active_cutoff = lte_ms - 60_000
     return [
         {
@@ -185,6 +186,6 @@ async def ipsec_session_history(
             "bytes_out": int(bucket["bytes_out"]["value"] or 0),
             "status": "active" if int(bucket["last_seen"]["value"]) >= active_cutoff else "ended",
         }
-        for bucket in resp["aggregations"]["by_user"]["buckets"]
+        for bucket in resp.get("aggregations", {}).get("by_user", {}).get("buckets", [])
         if bucket["doc_count"] > 0
     ]
