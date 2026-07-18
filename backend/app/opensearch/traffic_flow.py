@@ -298,36 +298,27 @@ async def sankey_data(
 ) -> dict:
     """Sankey for Internet traffic flow.
 
-    Upload:   Zone → Apps → Egress → Dst AS Org
-    Download: Src AS Org → Ingress → Apps → Zone
+    Topology (both directions): Ingress → Apps → Egress → Dst AS Org.
+    Upload weights links by flow.client.bytes, Download by flow.server.bytes,
+    empty direction by their sum. Same model as traffic_internal.sankey_data.
     """
     if client is None:
         client = _get_client(site_name)
 
-    if direction == "download":
-        # Download: Src AS Org → Ingress → Apps → Egress
-        # The external party is the server on both legs of an `internet` flow, so the
-        # source org of downloaded traffic is server.as.org (client.as.org is us).
-        sources = [
-            {"src_as": {"terms": {"field": "flow.server.as.org"}}},
-            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
-            {"app": {"terms": {"field": "flow.application.name"}}},
-            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
-        ]
-        level_names = ["src_as", "ingress", "app", "egress"]
-    else:
-        # Upload: Ingress → Apps → Egress → Dst AS Org
-        sources = [
-            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
-            {"app": {"terms": {"field": "flow.application.name"}}},
-            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
-            {"as_org": {"terms": {"field": "flow.server.as.org"}}},
-        ]
-        level_names = ["ingress", "app", "egress", "as_org"]
+    # Single topology (path-independent); Upload/Download differ only by which byte
+    # counter weights the links (flow.client.bytes vs flow.server.bytes). traffic.path
+    # is a separate filter, so direction is NOT passed to _base_filters (no zone filter).
+    sources = [
+        {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+        {"app": {"terms": {"field": "flow.application.name"}}},
+        {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+        {"as_org": {"terms": {"field": "flow.server.as.org"}}},
+    ]
+    level_names = ["ingress", "app", "egress", "as_org"]
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, direction, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
+        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
         "aggs": {
             "sankey_flow": {
                 "composite": {
@@ -345,12 +336,16 @@ async def sankey_data(
     resp = await safe_search(client, FLOW_INDEX, body)
     buckets = resp["aggregations"]["sankey_flow"]["buckets"]
 
+    # direction selects the byte counter: upload=client.bytes, download=server.bytes,
+    # empty=both (total). Matches traffic_internal.sankey_data.
+    metric = {"upload": "upload_bytes", "download": "download_bytes"}.get(direction)
     rows: list[dict] = []
     for bucket in buckets:
         key = bucket["key"]
-        upload = int(bucket["upload_bytes"]["value"] or 0)
-        download = int(bucket["download_bytes"]["value"] or 0)
-        bytes_val = upload + download
+        if metric:
+            bytes_val = int(bucket[metric]["value"] or 0)
+        else:
+            bytes_val = int(bucket["upload_bytes"]["value"] or 0) + int(bucket["download_bytes"]["value"] or 0)
         if bytes_val == 0:
             continue
         row = {}
