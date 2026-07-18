@@ -25,7 +25,7 @@ def _fmt(n: int) -> str:
     elif n < 1024**2:
         return f"{n / 1024:.1f} KB"
     elif n < 1024**3:
-        return f"{n / 1024**3:.2f} MB"
+        return f"{n / 1024**2:.2f} MB"
     else:
         return f"{n / 1024**3:.2f} GB"
 
