@@ -461,10 +461,10 @@ async def test_alert_rule(
             # Same per-path summary + extractor the engine uses, so the dry-run
             # value matches what the rule will actually evaluate.
             from app.services.alert_engine import _extract_appid_flow
-            summary = await tf_qb.appid_flow_alert_summary(
+            flow_summary = await tf_qb.appid_flow_alert_summary(
                 gte_ms=gte_ms, lte_ms=lte_ms, site_name=rule.site_name or "Site_FGT-DC"
             )
-            metric_value = _extract_appid_flow(rule.metric_field, summary) if isinstance(summary, dict) else 0.0
+            metric_value = _extract_appid_flow(rule.metric_field, flow_summary) if isinstance(flow_summary, dict) else 0.0
         elif rule.data_source == "sdwan_sla":
             site = rule.site_name or "Site_FGT-DC"
             summary = await sdwan_qb.sla_summary(
@@ -491,12 +491,12 @@ async def test_alert_rule(
             # Same summary + extractor the engine uses, so the dry-run matches live.
             from app.opensearch import interface_stats as if_qb
             from app.services.alert_engine import _extract_interface_stats
-            summary = await if_qb.interface_stats_summary(
+            iface_summary = await if_qb.interface_stats_summary(
                 gte_ms=gte_ms, lte_ms=lte_ms, site_name=rule.site_name or "Site_FGT-DC"
             )
             metric_value = _extract_interface_stats(
-                rule.metric_field, rule.target_key, rule.aggregation, summary
-            ) if isinstance(summary, dict) else 0.0
+                rule.metric_field, rule.target_key, rule.aggregation, iface_summary
+            ) if isinstance(iface_summary, dict) else 0.0
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
