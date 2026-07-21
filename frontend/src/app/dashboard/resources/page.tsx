@@ -622,6 +622,16 @@ export default function ResourcesPage() {
   );
 }
 
+// ── Byte-volume formatter (auto MB / GB / TB) ────────────────────
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes < 0) return "0 MB";
+  const tb = bytes / 1e12;
+  if (tb >= 1) return `${tb.toFixed(2)} TB`;
+  const gb = bytes / 1e9;
+  if (gb >= 1) return `${gb.toFixed(2)} GB`;
+  return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
 // ── Interface Bandwidth Card ─────────────────────────────────────
 function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
   const isUp = iface.oper_status === 1;
@@ -684,6 +694,21 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
                 ? `${(iface.current_out_mbps / 1000).toFixed(1)} Gbps`
                 : `${iface.current_out_mbps.toFixed(1)} Mbps`
               : "—"}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-blue-50/60 dark:bg-blue-950/10 rounded-lg p-2 text-center">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Volume In</p>
+          <p className="text-sm font-semibold text-blue-600 dark:text-blue-400">
+            {formatBytes(iface.total_in_bytes)}
+          </p>
+        </div>
+        <div className="bg-orange-50/60 dark:bg-orange-950/10 rounded-lg p-2 text-center">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Volume Out</p>
+          <p className="text-sm font-semibold text-orange-600 dark:text-orange-400">
+            {formatBytes(iface.total_out_bytes)}
           </p>
         </div>
       </div>

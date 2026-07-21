@@ -80,6 +80,7 @@ class TrafficInboundSummaryResponse(BaseModel):
 class TrafficInboundChartResponse(BaseModel):
     chart_data: list[dict]
     service_names: list[str]
+    bucket_seconds: int = 60  # actual bucket width used; frontend divides bytes by this for Mbps
 
 
 # ── TABLE RESPONSE ───────────────────────────────────────────────

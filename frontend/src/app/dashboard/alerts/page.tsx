@@ -4,12 +4,39 @@ import { useState, useEffect } from "react";
 import useSWR, { mutate } from "swr";
 import { swrFetcher, apiFetch, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { AlertRule } from "@/types";
+import type { AlertRule, AlertFieldCatalog, AlertEngineHealth, NotificationTemplate } from "@/types";
+
+// Compact relative time: "12s ago", "4m ago", "2h ago". Empty for null.
+function timeAgo(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+// Countdown to a future ISO time: "in 52s" / "in 3m". Empty for past/null.
+function timeUntil(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const s = Math.floor((new Date(iso).getTime() - Date.now()) / 1000);
+  if (s <= 0) return "due";
+  if (s < 60) return `in ${s}s`;
+  return `in ${Math.floor(s / 60)}m`;
+}
 
 const SEVERITY_COLORS: Record<string, string> = {
   CRITICAL: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-300",
   WARNING: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 border-amber-300",
   INFO: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-blue-300",
+};
+
+// Live state-machine chip (semantic, distinct from severity accent).
+const STATE_STYLE: Record<string, { dot: string; text: string; label: string }> = {
+  FIRING: { dot: "bg-red-500 animate-pulse", text: "text-red-700 dark:text-red-400", label: "FIRING" },
+  PENDING: { dot: "bg-amber-500", text: "text-amber-700 dark:text-amber-400", label: "PENDING" },
+  RESOLVED: { dot: "bg-emerald-500", text: "text-emerald-700 dark:text-emerald-400", label: "RESOLVED" },
+  INACTIVE: { dot: "bg-muted-foreground", text: "text-muted-foreground", label: "OK" },
 };
 
 const DATA_SOURCES = [
@@ -18,7 +45,13 @@ const DATA_SOURCES = [
   { value: "ha_resource", label: "HA Resource" },
   { value: "vpn_ssl", label: "SSL VPN" },
   { value: "vpn_ipsec", label: "IPsec VPN" },
+  { value: "interface_stats", label: "Interface Bandwidth" },
 ];
+
+// interface_stats requires a canonical site (the interface picker keys off it) and a
+// window ≥ 2 min (the counter→rate derivative needs 2 histogram buckets).
+const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
+const IFACE_MIN_WINDOW = 2;
 
 const AGGREGATIONS = ["avg", "max", "min", "sum", "count"];
 const CONDITIONS = [">", "<", ">=", "<=", "=="];
@@ -31,12 +64,14 @@ interface RuleForm {
   kind: "single" | "composite";
   data_source: string;
   metric_field: string;
+  target_key: string;
   aggregation: string;
   condition: string;
   threshold_value: number;
   evaluation_window_minutes: number;
   sustained_for_minutes: number;
   notify_channels: string[];
+  notification_template_id: string;
   site_name: string;
   enabled: boolean;
 }
@@ -47,12 +82,14 @@ const emptyForm: RuleForm = {
   kind: "single",
   data_source: "ha_resource",
   metric_field: "ha_member.cpu_usage",
+  target_key: "",
   aggregation: "avg",
   condition: ">",
   threshold_value: 80,
   evaluation_window_minutes: 5,
   sustained_for_minutes: 2,
   notify_channels: ["telegram"],
+  notification_template_id: "",
   site_name: "",
   enabled: true,
 };
@@ -78,6 +115,81 @@ export default function AlertsPage() {
     { refreshInterval: 30000 }
   );
   const rules = rulesData?.data || [];
+
+  // Phase C: engine-health status line (refreshes on its own cadence).
+  const { data: healthData } = useSWR<{ data: AlertEngineHealth }>(
+    canManageAlerts ? "/api/v1/alerts/engine-health" : null,
+    swrFetcher,
+    { refreshInterval: 15000 }
+  );
+  const health = healthData?.data;
+
+  // Phase A: catalog drives the metric/aggregation/condition choices — no free text.
+  // Fetched per data source only while the modal is open (SWR caches across opens).
+  const { data: catalogData } = useSWR<{ data: AlertFieldCatalog[] }>(
+    showModal ? `/api/v1/alerts/fields?data_source=${form.data_source}` : null,
+    swrFetcher
+  );
+  const fields = catalogData?.data || [];
+  const selectedField = fields.find((f) => f.field_key === form.metric_field) || null;
+
+  // Message templates for the assignment dropdown (§11.1). Loaded while the modal is open.
+  const { data: templatesData } = useSWR<{ data: NotificationTemplate[] }>(
+    showModal ? "/api/v1/config/notification-templates" : null,
+    swrFetcher
+  );
+  const messageTemplates = templatesData?.data || [];
+  // Constrain agg/condition to the chosen field; fall back to full lists pre-load.
+  const metricAggs = selectedField?.valid_aggregations?.length ? selectedField.valid_aggregations : AGGREGATIONS;
+  const metricConds = selectedField?.valid_conditions?.length ? selectedField.valid_conditions : CONDITIONS;
+
+  // Apply a catalog field to the form: set metric, snap agg/cond into its valid
+  // sets, and prefill the threshold from the catalog example.
+  function applyField(f: AlertFieldCatalog) {
+    setForm((prev) => ({
+      ...prev,
+      metric_field: f.field_key,
+      aggregation: f.valid_aggregations?.includes(prev.aggregation) ? prev.aggregation : (f.valid_aggregations?.[0] || prev.aggregation),
+      condition: f.valid_conditions?.includes(prev.condition) ? prev.condition : (f.valid_conditions?.[0] || prev.condition),
+      threshold_value: f.example_threshold ?? prev.threshold_value,
+    }));
+  }
+
+  // When the data source changes (or catalog first loads), if the current metric
+  // isn't offered by this source, snap to the first cataloged field.
+  useEffect(() => {
+    if (!showModal || fields.length === 0) return;
+    if (!fields.some((f) => f.field_key === form.metric_field)) {
+      applyField(fields[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields, form.metric_field, showModal]);
+
+  // Phase E: interface_stats needs a canonical site + an interface (target_key).
+  const isIface = form.data_source === "interface_stats";
+  const { data: ifaceData } = useSWR<{ data: { key: string; label: string }[] }>(
+    showModal && isIface && SITES.includes(form.site_name)
+      ? `/api/v1/alerts/interfaces?site_name=${form.site_name}`
+      : null,
+    swrFetcher
+  );
+  const interfaces = ifaceData?.data || [];
+
+  // For interface_stats: force a canonical site, and default target_key to the first
+  // interface once the list loads (or when the current one isn't at this site).
+  useEffect(() => {
+    if (!showModal || !isIface) return;
+    if (!SITES.includes(form.site_name)) {
+      setForm((prev) => ({ ...prev, site_name: SITES[0] }));
+      return;
+    }
+    if (interfaces.length && !interfaces.some((i) => i.key === form.target_key)) {
+      setForm((prev) => ({ ...prev, target_key: interfaces[0].key }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isIface, interfaces, form.site_name, form.target_key, showModal]);
+
+  const ifaceWindowTooShort = isIface && form.evaluation_window_minutes < IFACE_MIN_WINDOW;
 
   const { data: logsData } = useSWR<{ data: { id: string; rule_name: string; severity: string; metric_value_at_firing: number; fired_at: string; resolved_at: string | null }[] }>(
     showHistory ? "/api/v1/alerts/logs?limit=50" : null,
@@ -152,12 +264,14 @@ export default function AlertsPage() {
       kind: rule.kind || "single",
       data_source: rule.data_source,
       metric_field: rule.metric_field,
+      target_key: rule.target_key || "",
       aggregation: rule.aggregation,
       condition: rule.condition,
       threshold_value: rule.threshold_value,
       evaluation_window_minutes: rule.evaluation_window_minutes,
       sustained_for_minutes: rule.sustained_for_minutes,
       notify_channels: rule.notify_channels,
+      notification_template_id: rule.notification_template_id || "",
       site_name: rule.site_name || "",
       enabled: rule.enabled,
     });
@@ -167,16 +281,22 @@ export default function AlertsPage() {
 
   async function saveRule() {
     setSaving(true);
+    // target_key only applies to interface_stats; clear it otherwise. Empty template → null.
+    const payload = {
+      ...form,
+      target_key: form.data_source === "interface_stats" ? form.target_key : null,
+      notification_template_id: form.notification_template_id || null,
+    };
     try {
       if (editingRule) {
         await apiFetch(`/api/v1/alerts/rules/${editingRule.id}`, {
           method: "PUT",
-          body: JSON.stringify(form),
+          body: JSON.stringify(payload),
         });
       } else {
         await apiFetch("/api/v1/alerts/rules", {
           method: "POST",
-          body: JSON.stringify(form),
+          body: JSON.stringify(payload),
         });
       }
       setShowModal(false);
@@ -364,6 +484,25 @@ export default function AlertsPage() {
         </div>
       </div>
 
+      {/* Engine health status line (Phase C) */}
+      {canManageAlerts && health && (
+        <div className={cn(
+          "flex items-center flex-wrap gap-x-4 gap-y-1 text-[11px] px-3 py-2 rounded-lg border",
+          health.stalled
+            ? "bg-red-50 border-red-200 text-red-700 dark:bg-red-950/20 dark:border-red-900 dark:text-red-400"
+            : "bg-muted/40 text-muted-foreground"
+        )}>
+          <span className="inline-flex items-center gap-1 font-medium">
+            <span className={cn("w-1.5 h-1.5 rounded-full", health.running && !health.stalled ? "bg-emerald-500" : "bg-red-500")} />
+            Engine {health.stalled ? "STALLED" : health.running ? "running" : "stopped"}
+          </span>
+          <span>last run {health.last_run_at ? timeAgo(health.last_run_at) : "—"}{health.last_run_ms != null ? ` (${health.last_run_ms}ms)` : ""}</span>
+          <span>{health.enabled_rule_count} enabled rule{health.enabled_rule_count === 1 ? "" : "s"}</span>
+          <span>next run {health.next_run_at ? timeUntil(health.next_run_at) : "—"}</span>
+          {health.stalled && <span className="font-medium">— evaluation loop may be stalled</span>}
+        </div>
+      )}
+
       {/* Rules Table */}
       <div className="bg-card border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
@@ -376,7 +515,8 @@ export default function AlertsPage() {
                     <th className="text-left py-3 px-3 text-xs font-medium">Source</th>
                     <th className="text-left py-3 px-3 text-xs font-medium">Metric</th>
                     <th className="text-center py-3 px-3 text-xs font-medium">Condition</th>
-                    <th className="text-center py-3 px-3 text-xs font-medium">Status</th>
+                    <th className="text-center py-3 px-3 text-xs font-medium">State</th>
+                    <th className="text-center py-3 px-3 text-xs font-medium">Enabled</th>
                     <th className="text-right py-3 px-3 text-xs font-medium">Actions</th>
                   </tr>
             </thead>
@@ -384,14 +524,14 @@ export default function AlertsPage() {
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i} className="border-b animate-pulse">
-                    {Array.from({ length: 7 }).map((_, j) => (
+                    {Array.from({ length: 9 }).map((_, j) => (
                       <td key={j} className="py-3 px-3"><div className="h-4 bg-muted rounded" /></td>
                     ))}
                   </tr>
                 ))
               ) : rules.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-muted-foreground">
+                  <td colSpan={9} className="py-12 text-center text-muted-foreground">
                     No alert rules configured. Create your first rule to get started.
                   </td>
                 </tr>
@@ -409,6 +549,34 @@ export default function AlertsPage() {
                     <td className="py-2.5 px-3 text-xs font-mono">{rule.metric_field}</td>
                     <td className="py-2.5 px-3 text-center font-mono text-xs">
                       {rule.aggregation} {rule.condition} {rule.threshold_value}
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      {(() => {
+                        const s = STATE_STYLE[rule.state || "INACTIVE"] || STATE_STYLE.INACTIVE;
+                        const showAge = (rule.state === "FIRING" || rule.state === "PENDING") && rule.last_state_change_at;
+                        return (
+                          <div className="inline-flex flex-col items-center gap-0.5">
+                            <span className={cn("inline-flex items-center gap-1 text-[11px] font-medium", s.text)}>
+                              <span className={cn("w-1.5 h-1.5 rounded-full", s.dot)} />
+                              {s.label}{showAge ? ` ${timeAgo(rule.last_state_change_at).replace(" ago", "")}` : ""}
+                            </span>
+                            {rule.last_read_degraded ? (
+                              <span
+                                className="text-[9px] text-amber-600 dark:text-amber-400"
+                                title="Last OpenSearch read was degraded — state held, not evaluated"
+                              >
+                                ⚠ data delayed
+                              </span>
+                            ) : rule.last_evaluated_at ? (
+                              <span className="text-[9px] text-muted-foreground" title={new Date(rule.last_evaluated_at).toLocaleString()}>
+                                {timeAgo(rule.last_evaluated_at)}
+                              </span>
+                            ) : (
+                              <span className="text-[9px] text-muted-foreground">not yet evaluated</span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="py-2.5 px-3 text-center">
                       <button
@@ -519,13 +687,23 @@ export default function AlertsPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium">Site Name</label>
-                  <input
-                    type="text"
-                    value={form.site_name}
-                    onChange={(e) => setForm({ ...form, site_name: e.target.value })}
-                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1 font-mono"
-                    placeholder="DC, DRC, Office"
-                  />
+                  {isIface ? (
+                    <select
+                      value={SITES.includes(form.site_name) ? form.site_name : SITES[0]}
+                      onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: "" })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    >
+                      {SITES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={form.site_name}
+                      onChange={(e) => setForm({ ...form, site_name: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1 font-mono"
+                      placeholder="DC, DRC, Office"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -564,17 +742,65 @@ export default function AlertsPage() {
                 </div>
               </div>
 
-              {/* Metric Field */}
+              {/* Metric — catalog-driven (choose, don't type) */}
               <div>
-                <label className="text-xs font-medium">Metric Field</label>
-                <input
-                  type="text"
-                  value={form.metric_field}
-                  onChange={(e) => setForm({ ...form, metric_field: e.target.value })}
-                  className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1 font-mono"
-                  placeholder="ha_member.cpu_usage"
-                />
+                <label className="text-xs font-medium">Metric</label>
+                {fields.length === 0 ? (
+                  <div className="w-full px-3 py-1.5 text-sm rounded-md border bg-muted/50 mt-1 text-muted-foreground">
+                    Loading metrics…
+                  </div>
+                ) : (
+                  <select
+                    value={form.metric_field}
+                    onChange={(e) => {
+                      const f = fields.find((x) => x.field_key === e.target.value);
+                      if (f) applyField(f);
+                    }}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  >
+                    {["traffic", "state"].filter((cat) => fields.some((f) => f.category === cat)).map((cat) => (
+                      <optgroup key={cat} label={cat === "traffic" ? "Traffic" : "State"}>
+                        {fields.filter((f) => f.category === cat).map((f) => (
+                          <option key={f.field_key} value={f.field_key}>
+                            {f.display_name}{f.unit ? ` (${f.unit})` : ""}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                    {/* any uncategorized fields */}
+                    {fields.filter((f) => f.category !== "traffic" && f.category !== "state").map((f) => (
+                      <option key={f.field_key} value={f.field_key}>
+                        {f.display_name}{f.unit ? ` (${f.unit})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {selectedField?.description && (
+                  <p className="text-[10px] text-muted-foreground mt-1">{selectedField.description}</p>
+                )}
               </div>
+
+              {/* Interface picker (interface_stats only) → target_key */}
+              {isIface && (
+                <div>
+                  <label className="text-xs font-medium">Interface</label>
+                  {interfaces.length === 0 ? (
+                    <div className="w-full px-3 py-1.5 text-sm rounded-md border bg-muted/50 mt-1 text-muted-foreground">
+                      Loading interfaces…
+                    </div>
+                  ) : (
+                    <select
+                      value={form.target_key}
+                      onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    >
+                      {interfaces.map((i) => (
+                        <option key={i.key} value={i.key}>{i.label} (ifIndex {i.key})</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
 
               {/* Agg + Condition + Threshold */}
               <div className="grid grid-cols-3 gap-3">
@@ -585,7 +811,7 @@ export default function AlertsPage() {
                     onChange={(e) => setForm({ ...form, aggregation: e.target.value })}
                     className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                   >
-                    {AGGREGATIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+                    {metricAggs.map((a) => <option key={a} value={a}>{a}</option>)}
                   </select>
                 </div>
                 <div>
@@ -595,11 +821,11 @@ export default function AlertsPage() {
                     onChange={(e) => setForm({ ...form, condition: e.target.value })}
                     className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                   >
-                    {CONDITIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+                    {metricConds.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium">Threshold</label>
+                  <label className="text-xs font-medium">Threshold{selectedField?.unit ? ` (${selectedField.unit})` : ""}</label>
                   <input
                     type="number"
                     value={form.threshold_value}
@@ -615,10 +841,19 @@ export default function AlertsPage() {
                   <label className="text-xs font-medium">Eval Window (min)</label>
                   <input
                     type="number"
+                    min={isIface ? IFACE_MIN_WINDOW : 1}
                     value={form.evaluation_window_minutes}
                     onChange={(e) => setForm({ ...form, evaluation_window_minutes: Number(e.target.value) })}
-                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    className={cn(
+                      "w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1",
+                      ifaceWindowTooShort && "border-red-400"
+                    )}
                   />
+                  {ifaceWindowTooShort && (
+                    <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
+                      Interface bandwidth needs ≥ {IFACE_MIN_WINDOW} min (rate derivative).
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-medium">Sustained For (min)</label>
@@ -652,6 +887,24 @@ export default function AlertsPage() {
                 </div>
               </div>
 
+              {/* Message template assignment (§11.1) */}
+              <div>
+                <label className="text-xs font-medium">Message template</label>
+                <select
+                  value={form.notification_template_id}
+                  onChange={(e) => setForm({ ...form, notification_template_id: e.target.value })}
+                  className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                >
+                  <option value="">Use default</option>
+                  {messageTemplates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  Manage templates in Settings → Message Templates.
+                </p>
+              </div>
+
               {/* Enabled toggle */}
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -673,7 +926,7 @@ export default function AlertsPage() {
                 </button>
                 <button
                   onClick={saveRule}
-                  disabled={saving || !form.name}
+                  disabled={saving || !form.name || ifaceWindowTooShort || (isIface && !form.target_key)}
                   className="px-4 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : editingRule ? "Update" : "Create"}

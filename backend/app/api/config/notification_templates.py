@@ -174,6 +174,9 @@ async def preview_notification_template(
                 "threshold_value": body.threshold_value or 80.0,
             },
             "metric_value": body.metric_value or 95.5,
+            # Parity with the engine's render ctx (_notify): it always passes fired_at,
+            # so a {{ fired_at }} template must resolve in preview too or it 422s at fire.
+            "fired_at": body.fired_at or "2026-01-01T12:00:00+00:00",
         }
 
         rendered = {}

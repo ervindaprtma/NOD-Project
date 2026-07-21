@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.db.models import AlertTemplate
 from app.db.session import AsyncSessionLocal
@@ -238,6 +238,30 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_conditions": ["<", "<=", "=="],
         "example_threshold": 2,
     },
+    # Phase E Part 1: Resources depth — mem/session already returned by
+    # current_device_status(); catalog-only add (no query/extractor change).
+    {
+        "data_source": "ha_resource",
+        "field_key": "ha_member.mem_usage",
+        "display_name": "HA Member Memory",
+        "description": "Memory usage percentage per HA member device",
+        "unit": "%",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "<"],
+        "example_threshold": 85.0,
+    },
+    {
+        "data_source": "ha_resource",
+        "field_key": "ha_member.session_count",
+        "display_name": "Device Session Count",
+        "description": "Active session count per HA member device",
+        "unit": "count",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 500000,
+    },
     # sdwan_sla
     {
         "data_source": "sdwan_sla",
@@ -307,61 +331,130 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_conditions": ["<", "<="],
         "example_threshold": 1.0,
     },
-    # appid_flow - traffic fields
+    # appid_flow - per-path traffic rate (Mbps). Split by flow.traffic.path; the engine
+    # honors the "traffic.<path>.<metric>" key via appid_flow_alert_summary.
     {
         "data_source": "appid_flow",
-        "field_key": "total_throughput",
-        "display_name": "Traffic Internet (WAN aggregate)",
-        "description": "Total internet throughput",
+        "field_key": "traffic.internet.download_mbps",
+        "display_name": "Traffic Internet — Download",
+        "description": "Internet path download rate (WAN → client)",
         "unit": "Mbps",
         "category": "traffic",
-        "valid_aggregations": ["avg", "max", "sum"],
-        "valid_conditions": [">", ">=", "=="],
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 800.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "traffic.internet.upload_mbps",
+        "display_name": "Traffic Internet — Upload",
+        "description": "Internet path upload rate (client → WAN)",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 400.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "traffic.internet.total_mbps",
+        "display_name": "Traffic Internet — Total",
+        "description": "Internet path total rate (up + down)",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
         "example_threshold": 1000.0,
     },
     {
         "data_source": "appid_flow",
-        "field_key": "flow.client.bytes_out",
-        "display_name": "Traffic Outbound (client → WAN)",
-        "description": "Outbound traffic from client to WAN",
-        "unit": "bytes",
+        "field_key": "traffic.inbound.total_mbps",
+        "display_name": "Traffic Inbound (VIP) — Total",
+        "description": "Inbound VIP path total rate",
+        "unit": "Mbps",
         "category": "traffic",
-        "valid_aggregations": ["avg", "sum"],
+        "valid_aggregations": ["avg", "max"],
         "valid_conditions": [">", ">="],
-        "example_threshold": 1e9,
+        "example_threshold": 300.0,
     },
     {
         "data_source": "appid_flow",
-        "field_key": "flow.server.bytes_in",
-        "display_name": "Traffic Inbound (WAN → client)",
-        "description": "Inbound traffic from WAN to client",
-        "unit": "bytes",
+        "field_key": "traffic.inter_site.total_mbps",
+        "display_name": "Traffic Internal — Inter-site",
+        "description": "Inter-site path total rate",
+        "unit": "Mbps",
         "category": "traffic",
-        "valid_aggregations": ["avg", "sum"],
+        "valid_aggregations": ["avg", "max"],
         "valid_conditions": [">", ">="],
-        "example_threshold": 1e9,
+        "example_threshold": 500.0,
     },
     {
         "data_source": "appid_flow",
-        "field_key": "flow.internal.inter_site_bytes",
-        "display_name": "Traffic Internal - Inter-site",
-        "description": "Inter-site traffic between sites",
-        "unit": "bytes",
+        "field_key": "traffic.intra_lan.total_mbps",
+        "display_name": "Traffic Internal — Intra-LAN",
+        "description": "Intra-LAN path total rate",
+        "unit": "Mbps",
         "category": "traffic",
-        "valid_aggregations": ["avg", "sum"],
+        "valid_aggregations": ["avg", "max"],
         "valid_conditions": [">", ">="],
-        "example_threshold": 5e8,
+        "example_threshold": 500.0,
     },
     {
         "data_source": "appid_flow",
-        "field_key": "flow.internal.intra_lan_bytes",
-        "display_name": "Traffic Internal - Intra-LAN",
-        "description": "Local LAN traffic within site",
-        "unit": "bytes",
+        "field_key": "traffic.wan.total_mbps",
+        "display_name": "Traffic Internet (WAN aggregate)",
+        "description": "All-paths total rate (parity with old total_throughput)",
+        "unit": "Mbps",
         "category": "traffic",
-        "valid_aggregations": ["avg", "sum"],
+        "valid_aggregations": ["avg", "max"],
         "valid_conditions": [">", ">="],
-        "example_threshold": 5e8,
+        "example_threshold": 1200.0,
+    },
+    # Phase E Part 2: Interface Bandwidth (interface_stats). The builder pairs these with
+    # an interface picker (→ target_key). Window must be ≥ 2 min (derivative needs 2 buckets).
+    {
+        "data_source": "interface_stats",
+        "field_key": "iface.rx_mbps",
+        "display_name": "Interface RX (ingress)",
+        "description": "Ingress bandwidth (ifHCInOctets rate). Requires an interface + ≥2min window.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "<"],
+        "example_threshold": 800.0,
+    },
+    {
+        "data_source": "interface_stats",
+        "field_key": "iface.tx_mbps",
+        "display_name": "Interface TX (egress)",
+        "description": "Egress bandwidth (ifHCOutOctets rate). Requires an interface + ≥2min window.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "<"],
+        "example_threshold": 800.0,
+    },
+    {
+        "data_source": "interface_stats",
+        "field_key": "iface.utilization_pct",
+        "display_name": "Interface Utilization",
+        "description": "Busier direction vs ifHighSpeed. Requires an interface + ≥2min window.",
+        "unit": "%",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 85.0,
+    },
+    {
+        "data_source": "interface_stats",
+        "field_key": "iface.oper_status",
+        "display_name": "Interface Oper Status (1=up)",
+        "description": "Operational status; use == 0 or < 1 to catch a down link.",
+        "unit": "state",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": ["==", "<"],
+        "example_threshold": 1,
     },
 ]
 
@@ -377,18 +470,33 @@ async def seed_field_catalog() -> int:
         result = await db.execute(select(AlertFieldCatalog).limit(1))
         existing = result.scalar_one_or_none()
 
-        if existing is not None:
-            return 0
+        if existing is None:
+            count = 0
+            for data in SEED_FIELD_CATALOG:
+                db.add(AlertFieldCatalog(**data))
+                await db.flush()
+                count += 1
+            await db.commit()
+            logger.info("Seeded %d field catalog rows", count)
+            return count
 
+        # Already seeded: reconcile the data sources this codebase actively manages so
+        # engine-honored fields reach existing DBs — appid_flow (per-path fix, old byte
+        # keys were never honored), ha_resource (Phase E mem/session depth), and
+        # interface_stats (new source). Delete+reinsert per source; others untouched.
+        managed = {"appid_flow", "ha_resource", "interface_stats"}
+        await db.execute(
+            delete(AlertFieldCatalog).where(AlertFieldCatalog.data_source.in_(managed))
+        )
         count = 0
         for data in SEED_FIELD_CATALOG:
-            catalog = AlertFieldCatalog(**data)
-            db.add(catalog)
+            if data["data_source"] not in managed:
+                continue
+            db.add(AlertFieldCatalog(**data))
             await db.flush()
             count += 1
-
         await db.commit()
-        logger.info("Seeded %d field catalog rows", count)
+        logger.info("Reconciled %d field catalog rows for %s", count, sorted(managed))
         return count
 
 

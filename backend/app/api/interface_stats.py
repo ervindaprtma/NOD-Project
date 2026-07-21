@@ -34,6 +34,8 @@ class InterfaceStatsItem(BaseModel):
     label: str = ""                        # display label (ifAlias or ifName)
     current_in_mbps: Optional[float] = None
     current_out_mbps: Optional[float] = None
+    total_in_bytes: float = 0              # cumulative volume over the window (sum of per-bucket deltas)
+    total_out_bytes: float = 0
     speed_mbps: Optional[int] = None       # nominal interface speed
     oper_status: Optional[int] = None      # 1=UP, 2=DOWN
     timeline: list[InterfaceTimelinePoint] = []
@@ -49,7 +51,8 @@ class InterfaceStatsResponse(BaseModel):
 def _compute_throughput_timeline(
     time_buckets: list[dict],
     interval_seconds: int = 60,
-) -> list[InterfaceTimelinePoint]:
+    lte_ms: Optional[int] = None,
+) -> tuple[list[InterfaceTimelinePoint], float, float]:
     """
     Convert cumulative counter per-bucket into Mbps throughput.
     throughputMbps = (max_current - max_prev) × 8 / interval_seconds / 1_000_000
@@ -58,11 +61,29 @@ def _compute_throughput_timeline(
     The first bucket with counter values is used as baseline only — it has no
     prior counter so no delta can be computed, and it is skipped to avoid
     a misleading zero point at the chart boundary.
+
+    The trailing bucket is dropped when it is a partial (in-progress) interval:
+    a bucket starting at `key` covers [key, key+interval); if it extends past
+    lte_ms it only captured a slice of the interval, so dividing its small delta
+    by the full interval_seconds yields a fake ~0 rate — the "drop to 0 at the
+    end of the chart" artifact. Historical ranges that end on a bucket boundary
+    keep all buckets.
+
+    Returns (points, total_in_bytes, total_out_bytes). Volume is the sum of the
+    same per-bucket deltas that feed the Mbps rate (a counter reset drops that
+    bucket, so volume slightly under-counts across a reset — fine for a dashboard).
     """
+    if lte_ms is not None:
+        interval_ms = interval_seconds * 1000
+        while time_buckets and time_buckets[-1]["key"] + interval_ms > lte_ms:
+            time_buckets = time_buckets[:-1]
+
     points: list[InterfaceTimelinePoint] = []
     prev_in: Optional[float] = None
     prev_out: Optional[float] = None
     started: bool = False
+    total_in_bytes: float = 0
+    total_out_bytes: float = 0
 
     for bucket in time_buckets:
         ts = bucket["key"]
@@ -84,11 +105,13 @@ def _compute_throughput_timeline(
             delta = max_in - prev_in
             if delta >= 0:
                 in_mbps = round(delta * 8 / interval_seconds / 1_000_000, 4)
+                total_in_bytes += delta
 
         if max_out is not None and prev_out is not None:
             delta = max_out - prev_out
             if delta >= 0:
                 out_mbps = round(delta * 8 / interval_seconds / 1_000_000, 4)
+                total_out_bytes += delta
 
         points.append(InterfaceTimelinePoint(
             timestamp=ts,
@@ -99,7 +122,7 @@ def _compute_throughput_timeline(
         prev_in = max_in
         prev_out = max_out
 
-    return points
+    return points, total_in_bytes, total_out_bytes
 
 
 def _pick_latest_value(timeline: list[InterfaceTimelinePoint], attr: str) -> Optional[float]:
@@ -174,8 +197,10 @@ async def get_interface_stats(
         # Time buckets
         time_buckets = iface_bucket.get("by_time", {}).get("buckets", [])
 
-        # Compute throughput deltas
-        timeline = _compute_throughput_timeline(time_buckets, interval_seconds=interval_seconds)
+        # Compute throughput deltas + cumulative volume
+        timeline, total_in_bytes, total_out_bytes = _compute_throughput_timeline(
+            time_buckets, interval_seconds=interval_seconds, lte_ms=lte_ms
+        )
 
         # Extract last bucket's speed and oper_status
         speed_mbps = None
@@ -199,6 +224,8 @@ async def get_interface_stats(
             label=label,
             current_in_mbps=current_in_mbps,
             current_out_mbps=current_out_mbps,
+            total_in_bytes=total_in_bytes,
+            total_out_bytes=total_out_bytes,
             speed_mbps=speed_mbps,
             oper_status=oper_status,
             timeline=timeline,

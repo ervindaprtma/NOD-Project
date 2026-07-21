@@ -175,7 +175,7 @@ export interface TrafficFlowSummary {
   egress_breakdown: TrafficFlowEgressItem[];
   ingress_breakdown: TrafficFlowEgressItem[];
 }
-export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; global_speed_by_app?: Record<string, number>; }
+export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; bucket_seconds?: number; global_speed_by_app?: Record<string, number>; }
 export interface TrafficFlowTableRecord { client_ip: string; server_ip: string; app_name: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
 export interface TrafficFlowTableData { records: TrafficFlowTableRecord[]; after_key: any; }
 
@@ -202,7 +202,7 @@ export interface RawFlowRecord {
 // ── Interface Stats v2.0 ─────────────────────────────────────────
 
 export interface InterfaceTimelinePoint { timestamp: number; in_mbps: number | null; out_mbps: number | null; }
-export interface InterfaceStatsItem { if_index: string; if_name: string; label: string; current_in_mbps: number | null; current_out_mbps: number | null; speed_mbps: number | null; oper_status: number | null; timeline: InterfaceTimelinePoint[]; }
+export interface InterfaceStatsItem { if_index: string; if_name: string; label: string; current_in_mbps: number | null; current_out_mbps: number | null; total_in_bytes: number; total_out_bytes: number; speed_mbps: number | null; oper_status: number | null; timeline: InterfaceTimelinePoint[]; }
 export interface InterfaceStatsData { interfaces: InterfaceStatsItem[]; }
 
 // ── HA Status ────────────────────────────────────────────────────
@@ -281,8 +281,10 @@ export interface AlertRule {
   notify_when: "any" | "all";
   clauses: Record<string, unknown>[];
   template_id: string | null;
+  notification_template_id?: string | null;
   data_source: string;
   metric_field: string;
+  target_key?: string | null; // interface_stats ifIndex
   aggregation: string;
   condition: string;
   threshold_value: number;
@@ -291,8 +293,36 @@ export interface AlertRule {
   notify_channels: string[];
   site_name: string | null;
   enabled: boolean;
+  state?: string | null; // live state machine: INACTIVE | PENDING | FIRING | RESOLVED
+  last_evaluated_at?: string | null;
+  last_value?: number | null;
+  last_state_change_at?: string | null;
+  last_read_degraded?: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface AlertEngineHealth {
+  last_run_at: string | null;
+  last_run_ms: number | null;
+  next_run_at: string | null;
+  interval_seconds: number;
+  running: boolean;
+  enabled_rule_count: number;
+  stalled: boolean;
+}
+
+export interface AlertFieldCatalog {
+  id: string;
+  data_source: string;
+  field_key: string;
+  display_name: string;
+  description: string;
+  unit: string;
+  category: string; // "state" | "traffic"
+  valid_aggregations: string[];
+  valid_conditions: string[];
+  example_threshold: number | null;
 }
 
 // ── Alert Templates (v3 §3.12) ─────────────────────────────────
@@ -308,6 +338,20 @@ export interface AlertTemplate {
   exposed_fields: string[];
   is_user_created: boolean;
   created_at: string;
+}
+
+// ── Notification Message Templates (§11.1) ─────────────────────
+
+export interface NotificationTemplate {
+  id: string;
+  name: string;
+  description: string;
+  subject_template: string;
+  body_template: string;
+  line_template?: string | null;
+  is_default: boolean;
+  is_user_created: boolean;
+  used_by_count?: number;
 }
 
 // ── Notification Configs (v3 §3.13) ─────────────────────────────
@@ -424,7 +468,7 @@ export interface TrafficInboundSummary {
   egress_breakdown: TrafficFlowEgressItem[];
   ingress_breakdown: TrafficFlowEgressItem[];
 }
-export interface TrafficInboundChartData { chart_data: Record<string, any>[]; service_names: string[]; }
+export interface TrafficInboundChartData { chart_data: Record<string, any>[]; service_names: string[]; bucket_seconds?: number; }
 export interface TrafficInboundTableRecord { client_ip: string; server_ip: string; service: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
 export interface TrafficInboundTableData { records: TrafficInboundTableRecord[]; after_key: any; total: number; }
 
@@ -442,6 +486,6 @@ export interface TrafficInternalSummary {
   egress_breakdown: TrafficFlowEgressItem[];
   protocol_dist: { protocol: string; total_bytes: number }[];
 }
-export interface TrafficInternalChartData { chart_data: Record<string, any>[]; service_names: string[]; }
+export interface TrafficInternalChartData { chart_data: Record<string, any>[]; service_names: string[]; bucket_seconds?: number; }
 export interface TrafficInternalTableRecord { client_ip: string; server_ip: string; service: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
 export interface TrafficInternalTableData { records: TrafficInternalTableRecord[]; after_key: any; }

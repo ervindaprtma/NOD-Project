@@ -15,7 +15,7 @@ from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _multi_wildcard, _bytes_sum, BYTES_DESC,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
-from app.opensearch.query import safe_search
+from app.opensearch.query import safe_search, drop_partial_tail
 
 
 # ── Site config ──────────────────────────────────────────────────
@@ -270,7 +270,7 @@ async def flow_chart(
 
     app_totals: dict[str, int] = {}
     chart_data = []
-    for bucket in result["buckets"]:
+    for bucket in drop_partial_tail(result["buckets"], bucket_seconds, lte_ms):
         row: dict[str, Any] = {"timestamp": bucket["key_as_string"], "timestampMs": bucket["key"]}
         for app_bucket in bucket["top_apps"]["buckets"]:
             app_name = app_bucket["key"]
@@ -281,7 +281,7 @@ async def flow_chart(
 
     # Sort by total bytes descending (not alphabetically) so frontend gets top apps first
     sorted_apps = [name for name, _ in sorted(app_totals.items(), key=lambda x: -x[1])]
-    return {"chart_data": chart_data, "app_names": sorted_apps}
+    return {"chart_data": chart_data, "app_names": sorted_apps, "bucket_seconds": bucket_seconds}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -582,6 +582,59 @@ async def total_throughput(
         "total_upload": int(aggs["total_upload"]["value"] or 0),
         "total_download": int(aggs["total_download"]["value"] or 0),
     }
+
+
+async def appid_flow_alert_summary(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    site_name: str = "Site_FGT-DC",
+) -> dict[str, dict[str, float | int]]:
+    """One query → per-`flow.traffic.path` throughput for alerting.
+
+    Splits traffic by path (internet / inbound-vip / inter-site / intra-lan) plus a
+    `_wan` all-paths aggregate, returning both a window-average **rate** (Mbps) and raw
+    **bytes** per node. The alert extractor picks a node + metric from the rule's
+    metric_field. Rate is preferred for thresholds because it's window-size-stable;
+    bytes are kept for volume-cap rules and legacy (WAN-total) compatibility.
+
+    ponytail: single sum-over-window → avg==max rate (no per-bucket series). Upgrade to a
+    date_histogram like interface_stats only if a rule needs a true peak-minute max.
+    """
+    if client is None:
+        client = _get_client(site_name)
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": [_time_range(gte_ms, lte_ms), _site_filter(site_name)]}},
+        "aggs": {
+            "by_path": {
+                "terms": {"field": "flow.traffic.path", "size": 12},
+                "aggs": {
+                    "up": {"sum": {"field": "flow.client.bytes", "missing": 0}},
+                    "down": {"sum": {"field": "flow.server.bytes", "missing": 0}},
+                },
+            },
+            "up_all": {"sum": {"field": "flow.client.bytes", "missing": 0}},
+            "down_all": {"sum": {"field": "flow.server.bytes", "missing": 0}},
+        },
+    }
+    resp = await safe_search(client, FLOW_INDEX, body)
+    aggs = resp.get("aggregations", {})
+    secs = max(1.0, (lte_ms - gte_ms) / 1000.0)
+    to_mbps = lambda b: b * 8 / secs / 1e6
+
+    def _node(up: int, dn: int) -> dict[str, float | int]:
+        return {
+            "upload_mbps": to_mbps(up), "download_mbps": to_mbps(dn), "total_mbps": to_mbps(up + dn),
+            "upload_bytes": up, "download_bytes": dn, "total_bytes": up + dn,
+        }
+
+    out: dict[str, dict[str, float | int]] = {}
+    for b in aggs.get("by_path", {}).get("buckets", []):
+        out[b["key"]] = _node(int(b["up"]["value"] or 0), int(b["down"]["value"] or 0))
+    out["_wan"] = _node(int(aggs.get("up_all", {}).get("value") or 0),
+                        int(aggs.get("down_all", {}).get("value") or 0))
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────

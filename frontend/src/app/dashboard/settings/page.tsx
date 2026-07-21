@@ -7,6 +7,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import type { NotificationChannelRead, MaintenanceWindow } from "@/types";
+import { MessageTemplatesTab } from "./MessageTemplatesTab";
 
 // All tabs are visible to all roles — but the admin-only tabs
 // (notifications, maintenance) only render their forms if the
@@ -17,6 +18,7 @@ type Tab =
   | "profile"
   | "appearance"
   | "notifications"
+  | "templates"
   | "maintenance";
 
 const ALL_TABS: { id: Tab; label: string; adminOnly: boolean }[] = [
@@ -24,6 +26,7 @@ const ALL_TABS: { id: Tab; label: string; adminOnly: boolean }[] = [
   { id: "profile", label: "Profile", adminOnly: false },
   { id: "appearance", label: "Appearance", adminOnly: false },
   { id: "notifications", label: "Notification Channels", adminOnly: true },
+  { id: "templates", label: "Message Templates", adminOnly: true },
   { id: "maintenance", label: "Maintenance Windows", adminOnly: true },
 ];
 
@@ -71,6 +74,7 @@ export default function SettingsPage() {
         {safeActive === "profile" && <DisplayNameForm />}
         {safeActive === "appearance" && <AppearanceForm />}
         {safeActive === "notifications" && isAdmin && <NotificationChannelsTab showToast={setToast} />}
+        {safeActive === "templates" && isAdmin && <MessageTemplatesTab showToast={setToast} />}
         {safeActive === "maintenance" && isAdmin && <MaintenanceWindowsTab showToast={setToast} />}
       </div>
 

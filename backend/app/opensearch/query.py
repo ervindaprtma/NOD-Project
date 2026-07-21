@@ -139,6 +139,21 @@ def clear_cache() -> None:
     _client_semaphores.clear()
 
 
+def drop_partial_tail(buckets: list[dict], bucket_seconds: int, lte_ms: int) -> list[dict]:
+    """Drop trailing in-progress date_histogram buckets.
+
+    A fixed_interval bucket starting at ``key`` covers ``[key, key + bucket_seconds)``.
+    With ``lte_ms = now`` the final bucket captured only a slice of the interval, so a
+    bytes/bucket_seconds rate divides a partial numerator by a full denominator → a fake
+    ~0 at the chart edge. Buckets are ascending by key, so only trailing ones can be
+    partial; historical ranges ending on a boundary keep every bucket.
+    """
+    interval_ms = bucket_seconds * 1000
+    while buckets and buckets[-1]["key"] + interval_ms > lte_ms:
+        buckets = buckets[:-1]
+    return buckets
+
+
 async def safe_search(
     client: AsyncOpenSearch,
     index: str,
