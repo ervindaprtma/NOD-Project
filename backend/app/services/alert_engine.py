@@ -74,7 +74,13 @@ from jinja2 import StrictUndefined
 from jinja2.sandbox import SandboxedEnvironment
 
 _SANDBOX = SandboxedEnvironment(
-    autoescape=True,           # SSTI defense-in-depth: escape <, >, &, " in interpolated values
+    # autoescape OFF: every consumer (Telegram/Discord/WhatsApp/plain-text email) sends
+    # this output as plain text, where HTML-escaping turns `>` into a literal `&gt;`.
+    # SSTI protection comes from SandboxedEnvironment (dunder/attribute blocking) +
+    # the _ALLOWED_FILTERS whitelist — NOT from autoescape, which is an XSS/HTML concern
+    # that doesn't apply here. (The report generator renders HTML via its own separate
+    # _render_template, not this sandbox.)
+    autoescape=False,
     undefined=StrictUndefined,  # {{ missing_var }} → render error, NOT empty string
     keep_trailing_newline=False,
 )

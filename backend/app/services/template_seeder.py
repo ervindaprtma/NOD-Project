@@ -179,7 +179,7 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "description": "System default notification template for alert messages.",
         "subject_template": "🚨 Alert: {{ rule.name }}",
         "body_template": "🚨 *Alert: {{ rule.name }}*\nSeverity: {{ rule.severity }}\nMetric: {{ rule.metric_field }} = {{ metric_value|round(2) }}\nCondition: {{ rule.condition }} {{ rule.threshold_value }}\nFired at: {{ fired_at }}",
-        "line_template": "[{{ rule.severity|upper[:3] }}] {{ rule.name }}: {{ metric_value|round(2) }} ({{ rule.condition }} {{ rule.threshold_value }})",
+        "line_template": "[{{ (rule.severity|upper)[:3] }}] {{ rule.name }}: {{ metric_value|round(2) }} ({{ rule.condition }} {{ rule.threshold_value }})",
         "is_default": True,
         "is_user_created": False,
     },
