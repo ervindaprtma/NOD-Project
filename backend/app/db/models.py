@@ -123,8 +123,12 @@ class AlertRule(Base):
     )  # any | all (composite rule combination logic, P5)
     data_source: Mapped[str] = mapped_column(
         String(20), nullable=False
-    )  # appid_flow, sdwan_sla, ha_resource, vpn_ssl, vpn_ipsec
+    )  # appid_flow, sdwan_sla, ha_resource, vpn_ssl, vpn_ipsec, interface_stats
     metric_field: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Sub-entity selector (Phase E): for interface_stats holds the ifIndex (e.g. "3").
+    # Null for sources that address a single metric or encode the sub-entity in
+    # metric_field (sdwan link, traffic path).
+    target_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     aggregation: Mapped[str] = mapped_column(
         String(10), nullable=False
     )  # avg, max, min, sum, count
@@ -286,6 +290,19 @@ class AlertState(Base):
     last_notified_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # ── Phase C: evaluation observability (stamped every tick / transition) ──
+    last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )  # last tick that touched this rule
+    last_value: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )  # metric value from that evaluation
+    last_state_change_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )  # when it entered its current state (for "FIRING for 4m")
+    last_read_degraded: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )  # last read was held (OpenSearch degraded) — "data delayed" badge
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),

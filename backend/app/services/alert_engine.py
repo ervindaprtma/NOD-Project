@@ -17,11 +17,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.config import get_settings
 from app.db.models import AlertLog, AlertRule, AlertState, MaintenanceWindow, NotificationTemplate
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, engine
 from app.opensearch.query import degradation_scope
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.sse import sse_broadcast
@@ -30,6 +30,29 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 scheduler = AsyncIOScheduler()
+
+# Phase C: last-run telemetry for the engine-health endpoint. Set at the end of
+# each evaluate_all_rules() tick. Process-local (matches the in-process scheduler).
+_last_run_at: datetime | None = None
+_last_run_ms: int | None = None
+
+# Phase D: Postgres session-level advisory lock key. If the backend is ever scaled to
+# >1 replica, only the holder evaluates — the rest skip the tick, so notifications fire
+# once, not once-per-replica. Arbitrary stable bigint (not shared with any other lock).
+_EVALUATOR_LOCK_KEY = 4923017  # "nod alert evaluator"
+
+
+def get_engine_health() -> dict:
+    """Scheduler timings for GET /alerts/engine-health (rule count added by the API)."""
+    job = scheduler.get_job("alert_evaluation")
+    next_run = getattr(job, "next_run_time", None) if job else None
+    return {
+        "last_run_at": _last_run_at.isoformat() if _last_run_at else None,
+        "last_run_ms": _last_run_ms,
+        "next_run_at": next_run.isoformat() if next_run else None,
+        "interval_seconds": settings.ALERT_POLL_INTERVAL_SECONDS,
+        "running": scheduler.running,
+    }
 
 
 # ── Shared helpers ──────────────────────────────────────────────
@@ -117,13 +140,10 @@ async def _run_group_query(
             elif data_source == "appid_flow":
                 from app.opensearch import traffic_flow as tf_qb
 
-                throughput = await tf_qb.total_throughput(
+                # Per-path dict: {internet, inbound-vip, inter-site, intra-lan, _wan}
+                # each with *_mbps / *_bytes. Extractor selects node + metric.
+                result = await tf_qb.appid_flow_alert_summary(
                     gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC"
-                )
-                result = (
-                    throughput["total_bytes"]
-                    if isinstance(throughput, dict)
-                    else (throughput or 0)
                 )
 
             elif data_source == "sdwan_sla":
@@ -145,6 +165,15 @@ async def _run_group_query(
 
                 result = await ipsec_qb.active_ipsec_users_count(gte_ms=gte_ms, lte_ms=lte_ms)
 
+            elif data_source == "interface_stats":
+                from app.opensearch import interface_stats as if_qb
+
+                # Per-ifIndex dict of rate stats; extractor picks target_key + metric.
+                # All interface rules for a (site, window) share this one query.
+                result = await if_qb.interface_stats_summary(
+                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC"
+                )
+
             else:
                 logger.warning("Unsupported data_source for group query: %s", data_source)
                 return None
@@ -164,6 +193,54 @@ async def _run_group_query(
     return result
 
 
+# appid_flow metric_field "traffic.<path>.<metric>" → path bucket key
+_APPID_PATH_KEYS = {
+    "internet": "internet", "inbound": "inbound-vip",
+    "inter_site": "inter-site", "intra_lan": "intra-lan", "wan": "_wan",
+}
+
+
+def _extract_appid_flow(metric_field: str, group_result: dict[Any, Any]) -> float:
+    """Select one value from appid_flow_alert_summary's per-path dict.
+
+    New rules use "traffic.<path>.<metric>" (e.g. traffic.internet.download_mbps).
+    Legacy field_keys (total_throughput, app_total_bytes, flow.*bytes*) predate the
+    per-path split — they always measured the site-wide total in *bytes*, so they map
+    to the _wan total_bytes node to keep firing exactly as before (unit-preserving).
+    Migrate them to the new keys to get real per-path granularity + Mbps thresholds.
+    """
+    if metric_field.startswith("traffic."):
+        parts = metric_field.split(".", 2)
+        if len(parts) == 3:
+            path = _APPID_PATH_KEYS.get(parts[1])
+            if path is not None:
+                return float(group_result.get(path, {}).get(parts[2], 0.0) or 0.0)
+        return 0.0
+    # legacy → site-wide total bytes (unchanged behavior)
+    return float(group_result.get("_wan", {}).get("total_bytes", 0.0) or 0.0)
+
+
+def _extract_interface_stats(
+    metric_field: str, target_key: str | None, aggregation: str, group_result: dict[Any, Any]
+) -> float:
+    """Select one value from interface_stats_summary's per-ifIndex dict.
+
+    metric_field is "iface.<base>" (rx_mbps | tx_mbps | utilization_pct | oper_status);
+    target_key is the ifIndex. Missing interface → 0 (no false fire). oper_status is a
+    level (not avg/max); the rate metrics use the rule's aggregation (avg/max only).
+    """
+    if not target_key:
+        return 0.0
+    iface = group_result.get(target_key)
+    if not iface:
+        return 0.0
+    base = metric_field.split(".", 1)[1] if "." in metric_field else metric_field
+    if base == "oper_status":
+        return float(iface.get("oper_status") or 0)
+    agg = aggregation if aggregation in ("avg", "max") else "avg"
+    return float(iface.get(base, {}).get(agg, 0.0) or 0.0)
+
+
 def _extract_per_rule_value(
     rule: AlertRule,
     group_result: float | list[Any] | dict[Any, Any] | None,
@@ -180,8 +257,8 @@ def _extract_per_rule_value(
             return 0.0
 
         if rule.data_source == "appid_flow":
-            if isinstance(group_result, (int, float)):
-                return float(group_result)
+            if isinstance(group_result, dict):
+                return _extract_appid_flow(rule.metric_field, group_result)
             return 0.0
 
         if rule.data_source == "sdwan_sla":
@@ -201,6 +278,13 @@ def _extract_per_rule_value(
         if rule.data_source == "vpn_ipsec":
             if isinstance(group_result, (int, float)):
                 return float(group_result)
+            return 0.0
+
+        if rule.data_source == "interface_stats":
+            if isinstance(group_result, dict):
+                return _extract_interface_stats(
+                    rule.metric_field, rule.target_key, rule.aggregation, group_result
+                )
             return 0.0
 
         return None
@@ -322,6 +406,12 @@ async def _advance_state_machine(
 
     now = datetime.now(timezone.utc)
 
+    # Phase C: stamp this evaluation (a real read reached here, so not degraded).
+    prev_state = state.state
+    state.last_evaluated_at = now
+    state.last_value = metric_value
+    state.last_read_degraded = False
+
     if condition_met:
         if state.state == "INACTIVE":
             state.state = "PENDING"
@@ -414,6 +504,27 @@ async def _advance_state_machine(
                 resolved_at=now.isoformat(),
             )
 
+    if state.state != prev_state:
+        state.last_state_change_at = now
+
+    await db.commit()
+
+
+async def _mark_held(rule: AlertRule, db: AsyncSession) -> None:
+    """Phase C: a degraded/held read — record the attempt without advancing state.
+
+    Stamps last_evaluated_at + last_read_degraded so the UI shows a "data delayed"
+    badge instead of a silent hold. State value is left untouched (no false resolve).
+    """
+    state_result = await db.execute(
+        select(AlertState).where(AlertState.rule_id == rule.id)
+    )
+    state = state_result.scalar_one_or_none()
+    if not state:
+        state = AlertState(rule_id=rule.id, state="INACTIVE")
+        db.add(state)
+    state.last_evaluated_at = datetime.now(timezone.utc)
+    state.last_read_degraded = True
     await db.commit()
 
 
@@ -487,7 +598,11 @@ def _extract_per_rule_value_flat(
                 field_name = metric_field.split(".", 1)[1]
                 return float(group_result[0].get(field_name, 0) or 0)
             return 0.0
-        if data_source in ("appid_flow", "vpn_ssl", "vpn_ipsec"):
+        if data_source == "appid_flow":
+            if isinstance(group_result, dict):
+                return _extract_appid_flow(metric_field, group_result)
+            return 0.0
+        if data_source in ("vpn_ssl", "vpn_ipsec"):
             if isinstance(group_result, (int, float)):
                 return float(group_result)
             return 0.0
@@ -498,6 +613,12 @@ def _extract_per_rule_value_flat(
                 if isinstance(vals, list):
                     return float(vals[link_idx] if link_idx < len(vals) else vals[0])
                 return float(vals or 0.0)
+            return 0.0
+        if data_source == "interface_stats":
+            # Composite clauses carry no target_key (which interface), so interface_stats
+            # can't be resolved here. Single rules only — return 0 so a stray clause can't
+            # false-fire. (Add a clause-level target_key if composite interface rules are
+            # ever needed.)
             return 0.0
         return None
     except (TypeError, ValueError, IndexError):
@@ -537,13 +658,36 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
         except Exception as e:
             logger.error("Failed to fetch alert templates: %s", e)
 
+    # §11.1: pre-fetch assigned notification-message templates. These take precedence
+    # over the AlertTemplate body for the per-rule line — the admin-managed message text
+    # (Settings → Message Templates) is what the rule's notification_template_id points at.
+    # Prefer line_template (the batch line), fall back to body_template.
+    nt_ids = {r.notification_template_id for r, _ in notify_queue if r.notification_template_id}
+    nt_line: dict[str, str] = {}
+    if nt_ids:
+        from app.db.session import AsyncSessionLocal
+        try:
+            async with AsyncSessionLocal() as tdb:
+                result = await tdb.execute(
+                    select(NotificationTemplate.id, NotificationTemplate.line_template,
+                           NotificationTemplate.body_template)
+                    .where(NotificationTemplate.id.in_(nt_ids))
+                )
+                nt_line = {row[0]: (row[1] or row[2]) for row in result.all() if (row[1] or row[2])}
+        except Exception as e:
+            logger.error("Failed to fetch notification templates: %s", e)
+
     for rule, mv in notify_queue:
         sev = sev_emoji.get(rule.severity, "🔔")
-        if rule.template_id and rule.template_id in template_body:
-            # §9.5: render the rule's template body in the sandbox.
-            # The seeded templates use flat var names ({{ name }}, {{ metric_value }})
-            # for backward compat with the pre-§9.5 spec; the §11.1 design moves
-            # to nested {{ rule.* }} once notification_templates ships its own body.
+        # §11.1 message template (assigned) wins; else §9.5 AlertTemplate body; else hardcoded.
+        tmpl_text = (
+            nt_line.get(rule.notification_template_id) if rule.notification_template_id else None
+        ) or (
+            template_body.get(rule.template_id) if rule.template_id else None
+        )
+        if tmpl_text:
+            # The seeded AlertTemplates use flat var names ({{ name }}, {{ metric_value }});
+            # §11.1 NotificationTemplates use nested {{ rule.* }}. Provide both so either renders.
             ctx = {
                 "rule": {
                     "name": rule.name,
@@ -553,7 +697,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
                     "condition": rule.condition,
                     "threshold_value": rule.threshold_value,
                 },
-                # Flat aliases for the seeded templates — keep until §11.1.
+                # Flat aliases for the seeded AlertTemplates.
                 "name": rule.name,
                 "severity": rule.severity,
                 "site_name": rule.site_name,
@@ -567,7 +711,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
                 "fired_at": now_str,
             }
             try:
-                lines.append(_render_template(template_body[rule.template_id], ctx))
+                lines.append(_render_template(tmpl_text, ctx))
                 continue
             except Exception as e:
                 # ponytail: render error falls back to hardcoded line — never
@@ -602,18 +746,12 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
         logger.error("Batch notify flush error: %s", e)
 
 
-async def evaluate_all_rules():
-    """
-    Main alert evaluation job.  P1 batched: enabled rules are grouped by
-    (data_source, site_name, evaluation_window) so N rules sharing the same
-    OS profile make one query instead of N.  P5: composite rules are evaluated
-    separately clause-by-clause.
+async def _run_evaluation_cycle() -> None:
+    """One tick: enabled rules → grouped OS queries → state machine → batched notify.
 
-    Executed by APScheduler on ALERT_POLL_INTERVAL_SECONDS.
-    Complies with FR-08 state machine.
+    Split out from evaluate_all_rules so the advisory-lock wrapper stays thin. Opens its
+    own session; per-rule commits/rollbacks happen inside _advance_state_machine.
     """
-    logger.debug("Alert evaluation cycle started (P1 batched)")
-
     async with AsyncSessionLocal() as db:
         try:
             result = await db.execute(
@@ -671,6 +809,7 @@ async def evaluate_all_rules():
                     group_result = group_cache.get(key)
                     metric_value = _extract_per_rule_value(rule, group_result)
                     if metric_value is None:
+                        await _mark_held(rule, db)
                         continue
                     condition_met = _check_condition(
                         metric_value, rule.condition, rule.threshold_value
@@ -685,6 +824,7 @@ async def evaluate_all_rules():
                 try:
                     metric_value, condition_met = await _evaluate_composite_rule(rule, group_cache)
                     if metric_value is None:
+                        await _mark_held(rule, db)
                         continue
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:
@@ -699,7 +839,54 @@ async def evaluate_all_rules():
             logger.error("Alert evaluation cycle failed: %s", e)
             await db.rollback()
 
-    logger.debug("Alert evaluation cycle completed")
+
+async def evaluate_all_rules():
+    """
+    Main alert evaluation job.  P1 batched: enabled rules are grouped by
+    (data_source, site_name, evaluation_window) so N rules sharing the same
+    OS profile make one query instead of N.  P5: composite rules are evaluated
+    separately clause-by-clause.
+
+    Executed by APScheduler on ALERT_POLL_INTERVAL_SECONDS.
+    Complies with FR-08 state machine.
+    """
+    global _last_run_at, _last_run_ms
+    logger.debug("Alert evaluation cycle started (P1 batched)")
+    _t_start = _time.monotonic()
+
+    # Phase D: single-evaluator guarantee. The advisory lock is session-level (tied to a
+    # connection); the evaluation session commits per rule and cycles connections, so the
+    # lock lives on its OWN dedicated connection held for the whole cycle. If another
+    # replica holds it, skip this tick — notifications fire once, not once-per-replica.
+    async with engine.connect() as lock_conn:
+        got_lock = (
+            await lock_conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _EVALUATOR_LOCK_KEY})
+        ).scalar()
+        if not got_lock:
+            logger.debug("Alert evaluator lock held elsewhere — skipping this tick")
+            return
+
+        # Self-watch: warn if the previous completed run is older than 2× the interval
+        # (missed ticks / a stalled loop / OpenSearch slowness). engine-health also
+        # surfaces this as `stalled`.
+        if _last_run_at is not None:
+            gap = (datetime.now(timezone.utc) - _last_run_at).total_seconds()
+            if gap > 2 * settings.ALERT_POLL_INTERVAL_SECONDS:
+                logger.warning(
+                    "Alert evaluator gap %.0fs > 2× interval (%ss) — missed ticks or stall",
+                    gap, settings.ALERT_POLL_INTERVAL_SECONDS,
+                )
+
+        try:
+            await _run_evaluation_cycle()
+        finally:
+            # pg_advisory_unlock is non-transactional and runs on the same connection that
+            # took the lock — the only release path (rollbacks don't drop a session lock).
+            await lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _EVALUATOR_LOCK_KEY})
+
+    _last_run_at = datetime.now(timezone.utc)
+    _last_run_ms = int((_time.monotonic() - _t_start) * 1000)
+    logger.debug("Alert evaluation cycle completed in %dms", _last_run_ms)
 
 
 def start_alert_scheduler():
@@ -711,6 +898,11 @@ def start_alert_scheduler():
         id="alert_evaluation",
         replace_existing=True,
         max_instances=1,
+        # Phase D: a slow tick must not stack overlapping runs. coalesce collapses
+        # any ticks that piled up during a long run into one; misfire_grace_time drops
+        # a tick that's already >30s late instead of firing it against stale timing.
+        coalesce=True,
+        misfire_grace_time=30,
     )
     scheduler.start()
     logger.info(

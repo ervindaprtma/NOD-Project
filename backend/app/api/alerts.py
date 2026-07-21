@@ -263,10 +263,54 @@ async def list_alert_rules(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin")),
 ) -> APIResponse[list[AlertRuleRead]]:
-    """List all alert rules."""
+    """List all alert rules, each annotated with its live state + evaluation observability."""
     result = await db.execute(select(AlertRule).order_by(AlertRule.created_at.desc()))
     rules = result.scalars().all()
-    return APIResponse.ok(data=[AlertRuleRead.model_validate(r) for r in rules])
+    state_rows = await db.execute(select(AlertState))
+    state_map = {s.rule_id: s for s in state_rows.scalars().all()}
+
+    data = []
+    for r in rules:
+        read = AlertRuleRead.model_validate(r)
+        st = state_map.get(r.id)
+        if st is not None:
+            read.state = st.state
+            read.last_evaluated_at = st.last_evaluated_at
+            read.last_value = st.last_value
+            read.last_state_change_at = st.last_state_change_at
+            read.last_read_degraded = st.last_read_degraded
+        data.append(read)
+    return APIResponse.ok(data=data)
+
+
+@router.get("/engine-health")
+async def engine_health(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("viewer")),
+) -> APIResponse[dict]:
+    """Scheduler health for the status line above the rules table (Phase C).
+
+    Returns last-run timing, next-run, and the count of enabled rules. If the last
+    completed run is older than 2× the poll interval, the loop has stalled — flagged
+    via `stalled` so the UI can warn.
+    """
+    from app.services.alert_engine import get_engine_health
+
+    health = get_engine_health()
+    count_result = await db.execute(
+        select(func.count()).select_from(AlertRule).where(AlertRule.enabled == True)  # noqa: E712
+    )
+    health["enabled_rule_count"] = count_result.scalar_one()
+
+    # Stall self-watch: last run older than 2× interval (only meaningful once it's run).
+    stalled = False
+    if health["last_run_at"]:
+        from datetime import datetime, timezone
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(health["last_run_at"])).total_seconds()
+        stalled = age > 2 * health["interval_seconds"]
+    health["stalled"] = stalled
+
+    return APIResponse.ok(data=health)
 
 
 @router.post("/rules", response_model=APIResponse[AlertRuleRead], status_code=status.HTTP_201_CREATED)
@@ -281,6 +325,7 @@ async def create_alert_rule(
         severity=body.severity,
         data_source=body.data_source,
         metric_field=body.metric_field,
+        target_key=body.target_key,
         aggregation=body.aggregation,
         condition=body.condition,
         threshold_value=body.threshold_value,
@@ -288,6 +333,8 @@ async def create_alert_rule(
         sustained_for_minutes=body.sustained_for_minutes,
         notify_channels=body.notify_channels,
         template_id=body.template_id,
+        notification_template_id=body.notification_template_id,
+        site_name=body.site_name,
         enabled=body.enabled,
         created_by=current_user.id,
     )
@@ -411,13 +458,13 @@ async def test_alert_rule(
                 field_name = rule.metric_field.split(".", 1)[1]
                 metric_value = float(devices[0].get(field_name, 0) or 0)
         elif rule.data_source == "appid_flow":
-            total = await tf_qb.total_throughput(
-                gte_ms=gte_ms, lte_ms=lte_ms
+            # Same per-path summary + extractor the engine uses, so the dry-run
+            # value matches what the rule will actually evaluate.
+            from app.services.alert_engine import _extract_appid_flow
+            summary = await tf_qb.appid_flow_alert_summary(
+                gte_ms=gte_ms, lte_ms=lte_ms, site_name=rule.site_name or "Site_FGT-DC"
             )
-            if isinstance(total, dict):
-                metric_value = float(total.get("total_bytes", 0))
-            else:
-                metric_value = float(total)
+            metric_value = _extract_appid_flow(rule.metric_field, summary) if isinstance(summary, dict) else 0.0
         elif rule.data_source == "sdwan_sla":
             site = rule.site_name or "Site_FGT-DC"
             summary = await sdwan_qb.sla_summary(
@@ -440,6 +487,16 @@ async def test_alert_rule(
                 gte_ms=gte_ms, lte_ms=lte_ms,
             )
             metric_value = float(count)
+        elif rule.data_source == "interface_stats":
+            # Same summary + extractor the engine uses, so the dry-run matches live.
+            from app.opensearch import interface_stats as if_qb
+            from app.services.alert_engine import _extract_interface_stats
+            summary = await if_qb.interface_stats_summary(
+                gte_ms=gte_ms, lte_ms=lte_ms, site_name=rule.site_name or "Site_FGT-DC"
+            )
+            metric_value = _extract_interface_stats(
+                rule.metric_field, rule.target_key, rule.aggregation, summary
+            ) if isinstance(summary, dict) else 0.0
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -515,3 +572,23 @@ async def get_field_catalog(
     result = await db.execute(stmt.order_by(AlertFieldCatalog.field_key))
     fields = result.scalars().all()
     return APIResponse.ok(data=[AlertFieldCatalogRead.model_validate(f) for f in fields])
+
+
+@router.get("/interfaces")
+async def get_site_interfaces(
+    site_name: str,
+    current_user: User = Depends(require_role("viewer")),
+) -> APIResponse[list[dict]]:
+    """Phase E: per-site interface list for the builder's interface picker (→ target_key).
+
+    Sourced from the hardcoded SITE_IFINDEX_MAP, ordered by SITE_IFACE_SORT_ORDER (WAN
+    first, MPLS second) to match the dashboard layout.
+    """
+    from app.opensearch.interface_stats import SITE_IFINDEX_MAP, SITE_IFACE_SORT_ORDER
+
+    iface_map = SITE_IFINDEX_MAP.get(site_name)
+    if not iface_map:
+        raise HTTPException(status_code=404, detail=f"No interfaces mapped for site: {site_name}")
+    order = SITE_IFACE_SORT_ORDER.get(site_name, {})
+    keys = sorted(iface_map.keys(), key=lambda k: order.get(k, 999))
+    return APIResponse.ok(data=[{"key": k, "label": iface_map[k]} for k in keys])

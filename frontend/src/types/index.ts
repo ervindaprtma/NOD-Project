@@ -281,8 +281,10 @@ export interface AlertRule {
   notify_when: "any" | "all";
   clauses: Record<string, unknown>[];
   template_id: string | null;
+  notification_template_id?: string | null;
   data_source: string;
   metric_field: string;
+  target_key?: string | null; // interface_stats ifIndex
   aggregation: string;
   condition: string;
   threshold_value: number;
@@ -291,8 +293,36 @@ export interface AlertRule {
   notify_channels: string[];
   site_name: string | null;
   enabled: boolean;
+  state?: string | null; // live state machine: INACTIVE | PENDING | FIRING | RESOLVED
+  last_evaluated_at?: string | null;
+  last_value?: number | null;
+  last_state_change_at?: string | null;
+  last_read_degraded?: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface AlertEngineHealth {
+  last_run_at: string | null;
+  last_run_ms: number | null;
+  next_run_at: string | null;
+  interval_seconds: number;
+  running: boolean;
+  enabled_rule_count: number;
+  stalled: boolean;
+}
+
+export interface AlertFieldCatalog {
+  id: string;
+  data_source: string;
+  field_key: string;
+  display_name: string;
+  description: string;
+  unit: string;
+  category: string; // "state" | "traffic"
+  valid_aggregations: string[];
+  valid_conditions: string[];
+  example_threshold: number | null;
 }
 
 // ── Alert Templates (v3 §3.12) ─────────────────────────────────
@@ -308,6 +338,20 @@ export interface AlertTemplate {
   exposed_fields: string[];
   is_user_created: boolean;
   created_at: string;
+}
+
+// ── Notification Message Templates (§11.1) ─────────────────────
+
+export interface NotificationTemplate {
+  id: string;
+  name: string;
+  description: string;
+  subject_template: string;
+  body_template: string;
+  line_template?: string | null;
+  is_default: boolean;
+  is_user_created: boolean;
+  used_by_count?: number;
 }
 
 // ── Notification Configs (v3 §3.13) ─────────────────────────────

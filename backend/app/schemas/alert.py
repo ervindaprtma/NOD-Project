@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 class AlertRuleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     severity: str = Field(..., pattern=r"^(INFO|WARNING|CRITICAL)$")
-    data_source: str = Field(..., pattern=r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec)$")
+    data_source: str = Field(..., pattern=r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec|interface_stats)$")
     metric_field: str = Field(..., min_length=1, max_length=255)
     aggregation: str = Field(..., pattern=r"^(avg|max|min|sum|count)$")
     condition: str = Field(..., pattern=r"^(>|<|>=|<=|==)$")
@@ -23,13 +23,14 @@ class AlertRuleCreate(BaseModel):
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
+    target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
     enabled: bool = True
 
 
 class AlertRuleUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     severity: Optional[str] = Field(default=None, pattern=r"^(INFO|WARNING|CRITICAL)$")
-    data_source: Optional[str] = Field(default=None, pattern=r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec)$")
+    data_source: Optional[str] = Field(default=None, pattern=r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec|interface_stats)$")
     metric_field: Optional[str] = Field(default=None, min_length=1, max_length=255)
     aggregation: Optional[str] = Field(default=None, pattern=r"^(avg|max|min|sum|count)$")
     condition: Optional[str] = Field(default=None, pattern=r"^(>|<|>=|<=|==)$")
@@ -40,6 +41,7 @@ class AlertRuleUpdate(BaseModel):
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
+    target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
     enabled: Optional[bool] = None
 
 
@@ -49,6 +51,7 @@ class AlertRuleRead(BaseModel):
     severity: str
     data_source: str
     metric_field: str
+    target_key: Optional[str] = None
     aggregation: str
     condition: str
     threshold_value: float
@@ -62,6 +65,14 @@ class AlertRuleRead(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    # Live evaluation state from the state machine (INACTIVE/PENDING/FIRING/RESOLVED).
+    # Populated by the list endpoint; None when no state row exists yet.
+    state: Optional[str] = None
+    # Phase C observability (from AlertState; None until first evaluation).
+    last_evaluated_at: Optional[datetime] = None
+    last_value: Optional[float] = None
+    last_state_change_at: Optional[datetime] = None
+    last_read_degraded: bool = False
 
     model_config = {"from_attributes": True}
 
