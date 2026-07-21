@@ -350,6 +350,7 @@ export interface NotificationTemplate {
   body_template: string;
   line_template?: string | null;
   is_default: boolean;
+  is_active: boolean;
   is_user_created: boolean;
   used_by_count?: number;
 }

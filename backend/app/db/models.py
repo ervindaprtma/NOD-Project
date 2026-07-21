@@ -230,6 +230,12 @@ class NotificationTemplate(Base):
     body_template: Mapped[str] = mapped_column(Text, nullable=False, default="")
     line_template: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Inactive templates aren't offered to rules and aren't rendered — the engine falls
+    # back to the default (or hardcoded) line. Lets an admin retire a template without
+    # deleting it or breaking rules that still reference it.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true"), default=True
+    )
     is_user_created: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_by: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
