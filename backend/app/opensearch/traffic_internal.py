@@ -16,7 +16,7 @@ from app.opensearch.client import get_dc_client, get_drc_client
 from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _bytes_sum, _port_to_service, BYTES_DESC,
 )
-from app.opensearch.query import safe_search
+from app.opensearch.query import safe_search, drop_partial_tail
 
 SITE_FLOW_MAP: dict[str, tuple[str, str]] = {
     "Site_FGT-DC": ("10.80.150.1", "dc"),
@@ -228,42 +228,75 @@ async def flow_chart(
     if client is None:
         client = _get_client(site_name)
 
-    interval_str = f"{bucket_seconds}s"
-    body = {
+    # Bucket clamp: honor a fine (e.g. 60s) bucket_seconds but never let n_date × N_ports
+    # blow past OpenSearch search.max_buckets (10k). 400 date buckets × 20 ports = 8k < 10k.
+    # So 60s granularity holds up to ~6.7h ranges, then auto-coarsens. The real bucket used
+    # is echoed back and the frontend divides bytes by it, so Mbps stays correct.
+    MAX_DATE_BUCKETS = 400
+    span_s = max(1, (lte_ms - gte_ms) // 1000)
+    bucket_seconds = max(60, bucket_seconds)
+    if span_s / bucket_seconds > MAX_DATE_BUCKETS:
+        bucket_seconds = -(-span_s // MAX_DATE_BUCKETS)  # ceil division
+
+    base_filter = _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)
+
+    # Pass A: global top-N server ports over the whole range. One plain terms agg with
+    # no nested histogram — same shape/cost as the summary's top-services (proven OK).
+    # This is the STABLE series set for the timeline. `timeout` returns partial results
+    # instead of failing empty if the aggregation runs long.
+    top_resp = await safe_search(client, FLOW_INDEX, {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path)}},
+        "timeout": "115s",
+        "query": {"bool": {"filter": base_filter}},
+        "aggs": {"top_ports": {
+            "terms": {"field": "flow.server.l4.port.id", "size": min(top_n, 50), "order": BYTES_DESC},
+            "aggs": {"sort_bytes": {"sum": {"field": "flow.bytes", "missing": 0}}},  # drives the order
+        }},
+    })
+    top_ports = [b["key"] for b in top_resp["aggregations"].get("top_ports", {}).get("buckets", [])]
+    if not top_ports:
+        return {"chart_data": [], "service_names": [], "bucket_seconds": bucket_seconds}
+
+    # Pass B: per-bucket values for ONLY those ports. `include` pins the terms to the N
+    # known ports, so there's no high-cardinality ranking per bucket (cheaper than the
+    # old unrestricted per-bucket top-20) AND every series has a value in every bucket —
+    # which is what kills the "holes at 12h" churn. Keeps the light date_histogram→terms
+    # shape so it can't trip the circuit breaker the way terms→date_histogram did.
+    interval_str = f"{bucket_seconds}s"
+    resp = await safe_search(client, FLOW_INDEX, {
+        "size": 0,
+        "timeout": "115s",
+        "query": {"bool": {"filter": base_filter}},
         "aggs": {
             "per_minute": {
                 "date_histogram": {"field": "@timestamp", "fixed_interval": interval_str},
                 "aggs": {
                     "top_services": {
-                        "terms": {"field": "flow.server.l4.port.id", "size": min(top_n, 50), "order": BYTES_DESC},
+                        "terms": {"field": "flow.server.l4.port.id", "size": len(top_ports), "include": top_ports},
                         "aggs": _bytes_sum(),
                     }
                 },
             }
         },
-    }
-
-    resp = await safe_search(client, FLOW_INDEX, body)
-    buckets = resp["aggregations"]["per_minute"]["buckets"]
+    })
+    buckets = drop_partial_tail(resp["aggregations"]["per_minute"]["buckets"], bucket_seconds, lte_ms)
 
     all_service_bytes: dict[str, int] = {}
     chart_data: list[dict] = []
-
     for bucket in buckets:
         ts_ms = bucket["key"]
         row: dict = {"timestamp": ts_ms, "timestampMs": ts_ms}
         for svc_bucket in bucket["top_services"]["buckets"]:
             svc_name = _port_to_service(svc_bucket["key"])
             svc_bytes = int(svc_bucket["total_bytes"]["value"])
-            row[svc_name] = svc_bytes
+            if svc_bytes <= 0:
+                continue
+            row[svc_name] = row.get(svc_name, 0) + svc_bytes  # ports sharing a service name merge
             all_service_bytes[svc_name] = all_service_bytes.get(svc_name, 0) + svc_bytes
         chart_data.append(row)
 
     service_names = sorted(all_service_bytes, key=all_service_bytes.get, reverse=True)
-
-    return {"chart_data": chart_data, "service_names": service_names}
+    return {"chart_data": chart_data, "service_names": service_names, "bucket_seconds": bucket_seconds}
 
 
 # ─────────────────────────────────────────────────────────────────

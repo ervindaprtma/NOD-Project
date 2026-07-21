@@ -29,6 +29,8 @@ import TimeRangePicker, {
 import { TagFilterField } from "@/components/TagFilterField";
 
 import { AreaChart } from "@/components/charts/AreaChart";
+import { ChartHeader } from "@/components/charts/ChartHeader";
+import { useSvgDragSelect } from "@/lib/chartZoom";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
 
 // ── Constants ────────────────────────────────────────────────────
@@ -105,6 +107,8 @@ export default function TrafficPage() {
 
   const [currentGteMs, setCurrentGteMs] = useState(defaultRange.gte_ms);
   const [currentLteMs, setCurrentLteMs] = useState(defaultRange.lte_ms);
+  const [isZoomed, setIsZoomed] = useState(false);
+  const preZoomRef = useRef<{ gteMs: number; lteMs: number; activePresetSeconds: number; selectedPreset: string; customRangeLabel: string | null; refreshInterval: number } | null>(null);
 
   // Dynamic bucket: keep ~30 bars on chart regardless of time range
   const bucketSeconds = useMemo(() => {
@@ -219,6 +223,7 @@ export default function TrafficPage() {
   // ── Derived data for charts ──
   const throughputTimeline = useMemo(() => {
     if (!chart?.chart_data) return [];
+    const divSec = chart.bucket_seconds || bucketSeconds;
     let prevMs: number | null = null;
     return chart.chart_data.map((row: Record<string, any>) => {
       let totalBytes = 0;
@@ -226,31 +231,33 @@ export default function TrafficPage() {
         totalBytes += Number(row[app]) || 0;
       }
       const ms = row.timestampMs || (row.timestamp ? new Date(row.timestamp).getTime() : 0);
-      const mbps = parseFloat(((totalBytes * 8) / bucketSeconds / 1_000_000).toFixed(2));
+      const mbps = parseFloat(((totalBytes * 8) / divSec / 1_000_000).toFixed(2));
       const label = ms ? formatBucketLabelWIB(ms, prevMs) : row.timestamp;
       prevMs = ms || prevMs;
-      return { timestamp: label, mbps };
+      return { timestamp: label, mbps, tsMs: ms };
     });
   }, [chart, bucketSeconds]);
 
   const stackedBarData = useMemo(() => {
     if (!chart?.chart_data || !chart?.app_names) return { data: [], appNames: [] };
     const appNames = chart.app_names.filter(a => a !== "app-0").slice(0, 50);
+    const divSec = chart.bucket_seconds || bucketSeconds;
     let prevMs: number | null = null;
     const data = chart.chart_data.map((row: Record<string, any>) => {
       const ms = row.timestampMs || (row.timestamp ? new Date(row.timestamp).getTime() : 0);
       const entry: Record<string, any> = {
         timestamp: ms ? formatBucketLabelWIB(ms, prevMs) : row.timestamp,
+        tsMs: ms,
       };
       prevMs = ms || prevMs;
       for (const app of appNames) {
         const bytes = Number(row[app]) || 0;
-        entry[app] = parseFloat(((bytes * 8) / bucketSeconds / 1_000_000).toFixed(2));
+        entry[app] = parseFloat(((bytes * 8) / divSec / 1_000_000).toFixed(2));
       }
       return entry;
     });
     return { data, appNames };
-  }, [chart]);
+  }, [chart, bucketSeconds]);
 
   // ── Time handlers ──
   function handlePreset(seconds: number, label: string) {
@@ -279,6 +286,28 @@ export default function TrafficPage() {
     setCustomRangeLabel(
       `${from.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "Asia/Jakarta" })} ${from.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} — ${to.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "Asia/Jakarta" })} ${to.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })}`
     );
+  }
+
+  // Drag-zoom: apply a brush-selected range, remembering the pre-zoom view so
+  // "Reset zoom" can restore it. Reuses handleCustomApply (custom mode + no auto-refresh).
+  function applyBrushRange(g: number, l: number) {
+    if (!isZoomed) {
+      preZoomRef.current = { gteMs, lteMs, activePresetSeconds, selectedPreset, customRangeLabel, refreshInterval };
+      setIsZoomed(true);
+    }
+    handleCustomApply({ gte_ms: g, lte_ms: l });
+  }
+
+  function resetZoom() {
+    const s = preZoomRef.current;
+    setIsZoomed(false);
+    if (!s) return;
+    setActivePresetSeconds(s.activePresetSeconds);
+    setSelectedPreset(s.selectedPreset);
+    setCustomRangeLabel(s.customRangeLabel);
+    setRefreshInterval(s.refreshInterval);
+    setGteMs(s.gteMs);
+    setLteMs(s.lteMs);
   }
 
   function applyFilters() {
@@ -530,7 +559,7 @@ export default function TrafficPage() {
             {/* ═══ ROW 5 — Throughput Charts ═══ */}
             <div className="space-y-4 mb-6">
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
-                <h2 className="text-lg font-semibold mb-3">Total Throughput Over Time</h2>
+                <ChartHeader title="Total Throughput Over Time" isZoomed={isZoomed} onReset={resetZoom} />
                 {chartLoading ? (
                   <SkeletonChart />
                 ) : chartError ? (
@@ -547,13 +576,15 @@ export default function TrafficPage() {
                     showXAxis={true}
                     showYAxis={true}
                     className="h-72 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400"
+                    onRangeSelect={applyBrushRange}
+                    bucketMs={(chart?.bucket_seconds || bucketSeconds) * 1000}
                   />
                 ) : (
                   <EmptyState message="No throughput timeline data" />
                 )}
               </div>
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
-                <h2 className="text-lg font-semibold mb-3">App Throughput (Mbps)</h2>
+                <ChartHeader title="App Throughput (Mbps)" isZoomed={isZoomed} onReset={resetZoom} />
                 {chartLoading ? (
                   <SkeletonChart />
                 ) : chartError ? (
@@ -562,6 +593,8 @@ export default function TrafficPage() {
                   <StackedBarChart
                     data={stackedBarData.data}
                     appNames={stackedBarData.appNames}
+                    onRangeSelect={applyBrushRange}
+                    bucketMs={(chart?.bucket_seconds || bucketSeconds) * 1000}
                   />
                 ) : (
                   <EmptyState message="No application throughput data" />
@@ -996,9 +1029,13 @@ function formatStackTs(row: Record<string, any>, prevRow: Record<string, any> | 
 function StackedBarChart({
   data,
   appNames,
+  onRangeSelect,
+  bucketMs = 60_000,
 }: {
   data: Record<string, any>[];
   appNames: string[];
+  onRangeSelect?: (gteMs: number, lteMs: number) => void;
+  bucketMs?: number;
 }) {
   const [hoveredBar, setHoveredBar] = useState<{
     barIndex: number;
@@ -1006,15 +1043,20 @@ function StackedBarChart({
     x: number;
   } | null>(null);
 
-  if (!data.length || !appNames.length) {
-    return <EmptyState message="No application throughput data" />;
-  }
-
   const W = 800;
   const H = 380;
   const pad = { top: 10, right: 30, bottom: 50, left: 65 };
   const plotW = W - pad.left - pad.right;
   const plotH = H - pad.top - pad.bottom;
+  const { selRect, handlers } = useSvgDragSelect({
+    tsList: data.map((d) => Number(d.tsMs) || 0),
+    viewW: W, padLeft: pad.left, plotW, bucketMs, onRangeSelect,
+  });
+
+  if (!data.length || !appNames.length) {
+    return <EmptyState message="No application throughput data" />;
+  }
+
   const barGap = 2;
 
   let maxTotal = 0;
@@ -1052,7 +1094,7 @@ function StackedBarChart({
         )}
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420 }}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420, cursor: onRangeSelect ? "crosshair" : undefined, touchAction: "none", userSelect: "none" }} {...handlers}>
         {/* Grid lines */}
         {yTickValues.map((v) => (
           <g key={v}>
@@ -1120,6 +1162,12 @@ function StackedBarChart({
           transform={`rotate(-90, 12, ${H / 2})`}>
           Mbps
         </text>
+
+        {/* Drag-select band */}
+        {selRect && (
+          <rect x={selRect.x} y={pad.top} width={selRect.width} height={plotH}
+            fill="hsl(var(--chart-1))" fillOpacity={0.15} className="pointer-events-none" />
+        )}
       </svg>
 
       {/* Tooltip */}

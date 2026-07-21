@@ -175,7 +175,7 @@ export interface TrafficFlowSummary {
   egress_breakdown: TrafficFlowEgressItem[];
   ingress_breakdown: TrafficFlowEgressItem[];
 }
-export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; global_speed_by_app?: Record<string, number>; }
+export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; bucket_seconds?: number; global_speed_by_app?: Record<string, number>; }
 export interface TrafficFlowTableRecord { client_ip: string; server_ip: string; app_name: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
 export interface TrafficFlowTableData { records: TrafficFlowTableRecord[]; after_key: any; }
 
@@ -424,7 +424,7 @@ export interface TrafficInboundSummary {
   egress_breakdown: TrafficFlowEgressItem[];
   ingress_breakdown: TrafficFlowEgressItem[];
 }
-export interface TrafficInboundChartData { chart_data: Record<string, any>[]; service_names: string[]; }
+export interface TrafficInboundChartData { chart_data: Record<string, any>[]; service_names: string[]; bucket_seconds?: number; }
 export interface TrafficInboundTableRecord { client_ip: string; server_ip: string; service: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
 export interface TrafficInboundTableData { records: TrafficInboundTableRecord[]; after_key: any; total: number; }
 
@@ -442,6 +442,6 @@ export interface TrafficInternalSummary {
   egress_breakdown: TrafficFlowEgressItem[];
   protocol_dist: { protocol: string; total_bytes: number }[];
 }
-export interface TrafficInternalChartData { chart_data: Record<string, any>[]; service_names: string[]; }
+export interface TrafficInternalChartData { chart_data: Record<string, any>[]; service_names: string[]; bucket_seconds?: number; }
 export interface TrafficInternalTableRecord { client_ip: string; server_ip: string; service: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
 export interface TrafficInternalTableData { records: TrafficInternalTableRecord[]; after_key: any; }

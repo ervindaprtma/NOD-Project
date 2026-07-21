@@ -102,6 +102,7 @@ class TrafficSummaryResponse(BaseModel):
 class TrafficChartResponse(BaseModel):
     chart_data: list[dict]  # [{timestamp, timestampMs, app1: bytes, app2: bytes, ...}]
     app_names: list[str]
+    bucket_seconds: int = 60  # actual bucket width used; frontend divides bytes by this for Mbps
     global_speed_by_app: dict[str, float] = {}
 
 

@@ -11,6 +11,8 @@ import { DegradedBanner } from "@/components/panels/DegradedBanner";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { TagFilterField } from "@/components/TagFilterField";
 import { AreaChart } from "@/components/charts/AreaChart";
+import { ChartHeader } from "@/components/charts/ChartHeader";
+import { useSvgDragSelect } from "@/lib/chartZoom";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
 
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
@@ -45,9 +47,14 @@ export default function TrafficInternalPage() {
   const [showFilters, setShowFilters] = useState(false);
 
   const token = typeof window !== "undefined" ? getAccessToken() : null;
+  const [isZoomed, setIsZoomed] = useState(false);
+  const preZoomRef = useRef<{ gteMs: number; lteMs: number; activePresetSeconds: number; selectedPreset: string; customRangeLabel: string | null; refreshInterval: number } | null>(null);
   const [currentGteMs, setCurrentGteMs] = useState(defaultRange.gte_ms);
   const [currentLteMs, setCurrentLteMs] = useState(defaultRange.lte_ms);
 
+  // Dynamic bucket ~30 fat bars: 60s for short ranges, coarser for long ones so a
+  // partly-idle 24h window doesn't render as hundreds of razor-thin/empty bars. The
+  // backend clamps + echoes the real bucket_seconds; the chart divides bytes by it.
   const bucketSeconds = useMemo(() => {
     const rangeMs = currentLteMs - currentGteMs;
     const rangeSec = Math.max(60, Math.floor(rangeMs / 1000));
@@ -98,15 +105,16 @@ export default function TrafficInternalPage() {
 
   const throughputTimeline = useMemo(() => {
     if (!chart?.chart_data) return [];
+    const divSec = chart.bucket_seconds || bucketSeconds;
     let prevMs: number | null = null;
     return chart.chart_data.map((row: Record<string, any>) => {
       let totalBytes = 0;
       for (const svc of chart.service_names || []) totalBytes += Number(row[svc]) || 0;
       const ms = row.timestampMs || (row.timestamp ? new Date(row.timestamp).getTime() : 0);
-      const mbps = parseFloat(((totalBytes * 8) / bucketSeconds / 1_000_000).toFixed(2));
+      const mbps = parseFloat(((totalBytes * 8) / divSec / 1_000_000).toFixed(2));
       const label = ms ? formatBucketLabelWIB(ms, prevMs) : row.timestamp;
       prevMs = ms || prevMs;
-      return { timestamp: label, mbps };
+      return { timestamp: label, mbps, tsMs: ms };
     });
   }, [chart, bucketSeconds]);
 
@@ -121,6 +129,22 @@ export default function TrafficInternalPage() {
     prevIntervalRef.current = refreshInterval > 0 ? refreshInterval : DEFAULT_REFRESH_MS; setRefreshInterval(0); setShowCustomPicker(false);
     const from = new Date(range.gte_ms); const to = new Date(range.lte_ms);
     setCustomRangeLabel(`${from.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "Asia/Jakarta" })} ${from.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} — ${to.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "Asia/Jakarta" })} ${to.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })}`);
+  }
+
+  function applyBrushRange(g: number, l: number) {
+    if (!isZoomed) {
+      preZoomRef.current = { gteMs, lteMs, activePresetSeconds, selectedPreset, customRangeLabel, refreshInterval };
+      setIsZoomed(true);
+    }
+    handleCustomApply({ gte_ms: g, lte_ms: l });
+  }
+  function resetZoom() {
+    const s = preZoomRef.current;
+    setIsZoomed(false);
+    if (!s) return;
+    setActivePresetSeconds(s.activePresetSeconds); setSelectedPreset(s.selectedPreset);
+    setCustomRangeLabel(s.customRangeLabel); setRefreshInterval(s.refreshInterval);
+    setGteMs(s.gteMs); setLteMs(s.lteMs);
   }
 
   function applyFilters() { setFilters({ ...draftFilters }); }
@@ -229,15 +253,16 @@ export default function TrafficInternalPage() {
             {/* ROW 4 — Charts */}
             <div className="space-y-4 mb-6">
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
-                <h2 className="text-lg font-semibold mb-3">Total Throughput Over Time</h2>
+                <ChartHeader title="Total Throughput Over Time" isZoomed={isZoomed} onReset={resetZoom} />
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText /> : throughputTimeline.length > 0 ? (
-                    <AreaChart data={throughputTimeline} categories={["mbps"]} index="timestamp" colors={["#3b82f6"]} showLegend={false} showGridLines={true} showXAxis={true} showYAxis={true} className="h-72" />
+                    <AreaChart data={throughputTimeline} categories={["mbps"]} index="timestamp" colors={["#3b82f6"]} showLegend={false} showGridLines={true} showXAxis={true} showYAxis={true} className="h-72"
+                      onRangeSelect={applyBrushRange} bucketMs={(chart?.bucket_seconds || bucketSeconds) * 1000} />
                   ) : <EmptyState message="No throughput data" />}
               </div>
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
-                <h2 className="text-lg font-semibold mb-1">Service Throughput — {bucketSeconds}s Buckets</h2>
+                <ChartHeader title={`Service Throughput — ${chart?.bucket_seconds ?? bucketSeconds}s Buckets`} isZoomed={isZoomed} onReset={resetZoom} />
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText /> : chart?.chart_data?.length ? (
-                  <StackedBarChart data={(() => { let p: number | null = null; return chart.chart_data.map((row) => { const ms = typeof row.timestampMs === "number" ? row.timestampMs : (row.timestamp ? new Date(row.timestamp).getTime() : 0); const entry: Record<string, any> = { timestamp: ms ? formatBucketLabelWIB(ms, p) : row.timestamp }; p = ms || p; for (const svc of chart.service_names || []) { entry[svc] = parseFloat(((Number(row[svc]) || 0) * 8 / bucketSeconds / 1_000_000).toFixed(2)); } return entry; }); })()} serviceNames={chart.service_names || []} />
+                  <StackedBarChart data={(() => { const divSec = chart.bucket_seconds || bucketSeconds; let p: number | null = null; return chart.chart_data.map((row) => { const ms = typeof row.timestampMs === "number" ? row.timestampMs : (row.timestamp ? new Date(row.timestamp).getTime() : 0); const entry: Record<string, any> = { timestamp: ms ? formatBucketLabelWIB(ms, p) : row.timestamp, tsMs: ms }; p = ms || p; for (const svc of chart.service_names || []) { entry[svc] = parseFloat(((Number(row[svc]) || 0) * 8 / divSec / 1_000_000).toFixed(2)); } return entry; }); })()} serviceNames={chart.service_names || []} onRangeSelect={applyBrushRange} bucketMs={(chart?.bucket_seconds || bucketSeconds) * 1000} />
                 ) : <EmptyState message="No service throughput data" />}
               </div>
             </div>
@@ -360,10 +385,11 @@ function FlowRecordsTable({ records }: { records: TrafficInternalTableRecord[] }
 function appColor(index: number, total: number): string { const hue = (index * 360) / total, sat = 70 + (index % 3) * 10, lit = 45 + (index % 4) * 8; return `hsl(${hue}, ${sat}%, ${lit}%)`; }
 function formatStackTs(row: Record<string, any>, prevRow: Record<string, any> | null = null): string { const ts = row.timestampMs || row.timestamp; if (!ts) return ""; const ms = typeof ts === "number" ? ts : new Date(ts).getTime(); if (isNaN(ms)) return String(ts).slice(-8) || ""; const prevTs = prevRow ? (prevRow.timestampMs || prevRow.timestamp) : null; const prevMs = typeof prevTs === "number" ? prevTs : (prevTs ? new Date(prevTs).getTime() : null); return formatBucketLabelWIB(ms, (prevMs && !isNaN(prevMs)) ? prevMs : null); }
 
-function StackedBarChart({ data, serviceNames }: { data: Record<string, any>[]; serviceNames: string[] }) {
+function StackedBarChart({ data, serviceNames, onRangeSelect, bucketMs = 60_000 }: { data: Record<string, any>[]; serviceNames: string[]; onRangeSelect?: (gteMs: number, lteMs: number) => void; bucketMs?: number }) {
   const [hoveredBar, setHoveredBar] = useState<{ barIndex: number; sBreakdown: { svc: string; mbps: number; color: string }[]; x: number } | null>(null);
-  if (!data.length || !serviceNames.length) return <EmptyState message="No service throughput data" />;
   const W = 800, H = 380, pad = { top: 10, right: 30, bottom: 50, left: 65 }, plotW = W - pad.left - pad.right, plotH = H - pad.top - pad.bottom, barGap = 2;
+  const { selRect, handlers } = useSvgDragSelect({ tsList: data.map((d) => Number(d.tsMs) || 0), viewW: W, padLeft: pad.left, plotW, bucketMs, onRangeSelect });
+  if (!data.length || !serviceNames.length) return <EmptyState message="No service throughput data" />;
   let maxTotal = 0; for (const row of data) { let sum = 0; for (const svc of serviceNames) sum += Number(row[svc]) || 0; if (sum > maxTotal) maxTotal = sum; }
   if (maxTotal === 0) maxTotal = 1;
   const barWidth = Math.max(2, plotW / data.length - barGap), yTickValues = Array.from({ length: 6 }, (_, i) => (maxTotal / 5) * i);
@@ -371,11 +397,12 @@ function StackedBarChart({ data, serviceNames }: { data: Record<string, any>[]; 
   const xScale = (i: number) => pad.left + i * (plotW / data.length), yScale = (v: number) => pad.top + plotH - (v / maxTotal) * plotH, xLabelEvery = Math.max(1, Math.floor(data.length / 8));
   return <div className="relative">
     <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">{serviceNames.slice(0, 25).map((svc) => <div key={svc} className="flex items-center gap-1.5 text-[11px]"><span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: colorMap[svc] }} /><span className="text-muted-foreground truncate max-w-[120px]">{svc}</span></div>)}{serviceNames.length > 25 && <span className="text-[11px] text-muted-foreground">+{serviceNames.length - 25} more</span>}</div>
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420 }}>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420, cursor: onRangeSelect ? "crosshair" : undefined, touchAction: "none", userSelect: "none" }} {...handlers}>
       {yTickValues.map((v) => <g key={v}><line x1={pad.left} x2={W - pad.right} y1={yScale(v)} y2={yScale(v)} className="stroke-muted-foreground/15" strokeWidth={0.5} /><text x={pad.left - 6} y={yScale(v) + 4} textAnchor="end" className="text-[10px] fill-muted-foreground">{v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v >= 0.01 ? v.toFixed(2) : v.toFixed(4)}</text></g>)}
       {data.map((row, i) => { const x = xScale(i); let yOff = yScale(0); return <g key={i}>{serviceNames.map((svc) => { const mbps = Number(row[svc]) || 0; if (mbps <= 0) return null; const barH = (mbps / maxTotal) * plotH, actualY = yOff - barH; const el = <rect key={svc} x={x} y={actualY} width={Math.max(1, barWidth - barGap)} height={Math.max(1, barH)} fill={colorMap[svc]} className="cursor-pointer transition-opacity hover:opacity-80" onMouseEnter={(e) => { const bd = serviceNames.filter((s) => (Number(row[s]) || 0) > 0).map((s) => ({ svc: s, mbps: Number(row[s]) || 0, color: colorMap[s] })).sort((a, b) => b.mbps - a.mbps); const rect = (e.target as SVGRectElement).getBoundingClientRect(); setHoveredBar({ barIndex: i, sBreakdown: bd, x: rect.left + rect.width / 2 }); }} onMouseLeave={() => setHoveredBar(null)} />; yOff = actualY; return el; })}</g>; })}
       {data.map((row, i) => { if (i % xLabelEvery !== 0 && i !== data.length - 1) return null; return <text key={i} x={xScale(i) + barWidth / 2} y={H - pad.bottom + 16} textAnchor="middle" className="text-[9px] fill-muted-foreground">{formatStackTs(row, i > 0 ? data[i - 1] : null)}</text>; })}
       <text x={12} y={H / 2} textAnchor="middle" className="text-[10px] fill-muted-foreground" transform={`rotate(-90, 12, ${H / 2})`}>Mbps</text>
+      {selRect && <rect x={selRect.x} y={pad.top} width={selRect.width} height={plotH} fill="hsl(var(--chart-1))" fillOpacity={0.15} className="pointer-events-none" />}
     </svg>
     {hoveredBar && <div className="fixed z-50 bg-card border rounded-lg shadow-lg p-3 text-xs pointer-events-none" style={{ left: Math.min(hoveredBar.x, window.innerWidth - 260), top: 60, maxWidth: 250 }}>
       <p className="font-semibold mb-2 text-muted-foreground">{formatStackTs(data[hoveredBar.barIndex])}</p>

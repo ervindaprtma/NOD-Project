@@ -15,7 +15,7 @@ from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _multi_wildcard, _bytes_sum, BYTES_DESC,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
-from app.opensearch.query import safe_search
+from app.opensearch.query import safe_search, drop_partial_tail
 
 
 # ── Site config ──────────────────────────────────────────────────
@@ -270,7 +270,7 @@ async def flow_chart(
 
     app_totals: dict[str, int] = {}
     chart_data = []
-    for bucket in result["buckets"]:
+    for bucket in drop_partial_tail(result["buckets"], bucket_seconds, lte_ms):
         row: dict[str, Any] = {"timestamp": bucket["key_as_string"], "timestampMs": bucket["key"]}
         for app_bucket in bucket["top_apps"]["buckets"]:
             app_name = app_bucket["key"]
@@ -281,7 +281,7 @@ async def flow_chart(
 
     # Sort by total bytes descending (not alphabetically) so frontend gets top apps first
     sorted_apps = [name for name, _ in sorted(app_totals.items(), key=lambda x: -x[1])]
-    return {"chart_data": chart_data, "app_names": sorted_apps}
+    return {"chart_data": chart_data, "app_names": sorted_apps, "bucket_seconds": bucket_seconds}
 
 
 # ─────────────────────────────────────────────────────────────────
