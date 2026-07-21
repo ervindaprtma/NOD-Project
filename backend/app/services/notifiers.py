@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 _T = httpx.Timeout(10.0)
 _T_LONG = httpx.Timeout(30.0)
 
+
+class NotifierError(Exception):
+    """A notifier failed to send; carries a human-readable reason for the UI + logs."""
+
 # ponytail: §9.2 SSRF egress allow-list. User-supplied webhook URLs are POSTed
 # to — an unvalidated URL is an SSRF vector (OWASP A10). Allow only Discord's
 # webhook hostname. If a future deployment needs a custom host, add it here
@@ -128,16 +132,28 @@ async def _telegram_alert(message: str, config: dict | None = None) -> bool:
     token = (config or {}).get("bot_token", settings.TELEGRAM_BOT_TOKEN)
     chat = (config or {}).get("chat_id", settings.TELEGRAM_CHAT_ID)
     if not token or not chat:
-        logger.warning("Telegram not configured — skipping")
-        return False
+        raise NotifierError("Telegram bot_token or chat_id is missing.")
     try:
         async with httpx.AsyncClient(timeout=_T) as c:
-            r = await c.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat, "text": message, "parse_mode": "Markdown"})
-            r.raise_for_status()
-        return True
-    except Exception as e:
-        logger.error(f"Telegram alert failed: {e}")
-        return False
+            # Plain text — no parse_mode. Metric fields contain '_' (e.g.
+            # active_sslvpn_users_count), which Telegram's Markdown parser rejects with
+            # a 400 "can't parse entities", silently dropping real alerts.
+            r = await c.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat, "text": message},
+            )
+    except httpx.RequestError as e:
+        # DNS/connect/timeout — the server can't reach Telegram (egress/firewall).
+        raise NotifierError(f"Could not reach Telegram: {e}") from e
+    if r.status_code != 200:
+        # Telegram replies {"ok": false, "description": "..."} — surface the real reason
+        # (bad token → 401 Unauthorized, wrong chat → 400 "chat not found", etc.).
+        try:
+            desc = r.json().get("description") or r.text
+        except Exception:
+            desc = r.text
+        raise NotifierError(f"Telegram API {r.status_code}: {desc}")
+    return True
 
 
 async def _telegram_document(file_path: str, caption: str = "") -> bool:

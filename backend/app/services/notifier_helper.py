@@ -61,15 +61,36 @@ async def load_channel_configs(min_severity: str | None = None) -> dict[str, dic
     return channels
 
 
-async def send_alert(channel: str, config: dict, subject: str, body: str, severity: str = "CRITICAL") -> bool:
-    """Dispatch an alert via the named channel. Returns True on success."""
-    from app.services.notifiers import ALERT_DISPATCH
+async def send_alert(
+    channel: str, config: dict, subject: str, body: str,
+    severity: str = "CRITICAL", raise_on_error: bool = False,
+) -> bool:
+    """Dispatch an alert via the named channel. Returns True on success.
+
+    The fire path (alert_engine) wants a quiet bool — a failed channel must not abort
+    the batch — so failures are logged and return False. The test endpoint passes
+    raise_on_error=True to get the real reason (NotifierError) surfaced to the admin
+    instead of an opaque failure.
+    """
+    from app.services.notifiers import ALERT_DISPATCH, NotifierError
 
     fn = ALERT_DISPATCH.get(channel)
     if not fn:
+        if raise_on_error:
+            raise NotifierError(f"Unknown notification channel: {channel}")
         logger.warning(f"Unknown notification channel: {channel}")
         return False
-    # ponytail: smtp is the only channel needing a subject.
-    if channel == "smtp":
-        return await fn(subject=subject, body=body, config=config)
-    return await fn(message=body, config=config)
+    try:
+        # ponytail: smtp is the only channel needing a subject.
+        if channel == "smtp":
+            ok = await fn(subject=subject, body=body, config=config)
+        else:
+            ok = await fn(message=body, config=config)
+    except NotifierError as e:
+        if raise_on_error:
+            raise
+        logger.error(f"{channel} send failed: {e}")
+        return False
+    if not ok and raise_on_error:
+        raise NotifierError(f"{channel} rejected the message (see server logs for details).")
+    return ok

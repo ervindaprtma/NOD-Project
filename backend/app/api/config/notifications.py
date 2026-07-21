@@ -229,16 +229,34 @@ async def test_config(
 
         decrypted = _decrypt_config(dict(cfg.config), channel)
 
-        from app.services.notifier_helper import send_alert
+        # If the Fernet key rotated since the secret was saved, decryption yields this
+        # sentinel; sending it would fail opaquely (Telegram 401, etc.). Say so plainly.
+        bad_secrets = [k for k, v in decrypted.items() if v == "<decrypt-error>"]
+        if bad_secrets:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Cannot decrypt {', '.join(sorted(bad_secrets))} for '{channel}' — the "
+                    f"encryption key changed since it was saved. Re-enter the {channel} "
+                    f"credentials in Settings and save again."
+                ),
+            )
 
-        success = await send_alert(
-            channel=channel,
-            config=decrypted,
-            subject="🧪 NOD Alert Test",
-            body=f"🧪 Test notification from NOD Alert System\nChannel: {channel}\nSeverity: {cfg.min_severity}",
-        )
+        from app.services.notifier_helper import send_alert
+        from app.services.notifiers import NotifierError
+
+        try:
+            success = await send_alert(
+                channel=channel,
+                config=decrypted,
+                subject="🧪 NOD Alert Test",
+                body=f"🧪 Test notification from NOD Alert System\nChannel: {channel}\nSeverity: {cfg.min_severity}",
+                raise_on_error=True,
+            )
+        except NotifierError as e:
+            # 502: we reached the endpoint but the provider (or config) rejected the send.
+            raise HTTPException(status_code=502, detail=f"{channel} test failed — {e}")
 
         if success:
             return APIResponse.ok(data={"sent": True, "channel": channel})
-        else:
-            raise HTTPException(status_code=500, detail=f"Failed to send test message via {channel}")
+        raise HTTPException(status_code=502, detail=f"Failed to send test message via {channel}")
