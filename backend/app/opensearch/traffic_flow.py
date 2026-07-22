@@ -15,7 +15,7 @@ from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _multi_wildcard, _bytes_sum, BYTES_DESC,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
-from app.opensearch.query import safe_search, drop_partial_tail
+from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions
 
 
 # ── Site config ──────────────────────────────────────────────────
@@ -249,9 +249,10 @@ async def flow_chart(
         client = _get_client(site_name)
 
     interval_str = f"{bucket_seconds}s"
+    base_filter = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
+        "query": {"bool": {"filter": base_filter}},
         "aggs": {
             "per_minute": {
                 "date_histogram": {"field": "@timestamp", "fixed_interval": interval_str, "min_doc_count": 1},
@@ -268,15 +269,33 @@ async def flow_chart(
     resp = await safe_search(client, FLOW_INDEX, body)
     result = resp["aggregations"]["per_minute"]
 
-    app_totals: dict[str, int] = {}
-    chart_data = []
+    # Base: per-bucket per-app bytes by @timestamp.
+    bucket_app: dict[int, dict[str, float]] = {}
     for bucket in drop_partial_tail(result["buckets"], bucket_seconds, lte_ms):
-        row: dict[str, Any] = {"timestamp": bucket["key_as_string"], "timestampMs": bucket["key"]}
+        app_map: dict[str, float] = {}
         for app_bucket in bucket["top_apps"]["buckets"]:
-            app_name = app_bucket["key"]
             app_bytes = int(app_bucket["total_bytes"]["value"])
-            app_totals[app_name] = app_totals.get(app_name, 0) + app_bytes
-            row[app_name] = app_bytes
+            if app_bytes <= 0:
+                continue
+            app_map[app_bucket["key"]] = app_map.get(app_bucket["key"], 0.0) + float(app_bytes)
+        bucket_app[int(bucket["key"])] = app_map
+
+    # Session-close-spike fix: re-spread long sessions across their active window (keyed by app).
+    charted = {app for m in bucket_app.values() for app in m}
+    await spread_long_sessions(
+        client, base_filter, "flow.application.name", lambda x: x, charted,
+        bucket_app, bucket_seconds, gte_ms, lte_ms, key_filter_values=list(charted),
+    )
+
+    app_totals: dict[str, float] = {}
+    chart_data: list[dict[str, Any]] = []
+    for ts_ms in sorted(bucket_app):
+        row: dict[str, Any] = {"timestamp": ts_ms, "timestampMs": ts_ms}
+        for app_name, ab in bucket_app[ts_ms].items():
+            if ab <= 0:
+                continue
+            row[app_name] = int(round(ab))
+            app_totals[app_name] = app_totals.get(app_name, 0.0) + ab
         chart_data.append(row)
 
     # Sort by total bytes descending (not alphabetically) so frontend gets top apps first
