@@ -137,6 +137,31 @@ export default function ResourcesPage() {
     );
   }
 
+  // Drag-to-zoom on any chart narrows the page's time range (same as the Traffic pages).
+  // preZoomRef remembers the prior view so "Reset zoom" restores it.
+  const [isZoomed, setIsZoomed] = useState(false);
+  const preZoomRef = useRef<{ gteMs: number; lteMs: number; activePresetSeconds: number; selectedPreset: string; customRangeLabel: string | null; refreshInterval: number } | null>(null);
+
+  function applyBrushRange(g: number, l: number) {
+    if (!isZoomed) {
+      preZoomRef.current = { gteMs, lteMs, activePresetSeconds, selectedPreset, customRangeLabel, refreshInterval };
+      setIsZoomed(true);
+    }
+    handleCustomApply({ gte_ms: g, lte_ms: l });
+  }
+
+  function resetZoom() {
+    const s = preZoomRef.current;
+    setIsZoomed(false);
+    if (!s) return;
+    setActivePresetSeconds(s.activePresetSeconds);
+    setSelectedPreset(s.selectedPreset);
+    setCustomRangeLabel(s.customRangeLabel);
+    setRefreshInterval(s.refreshInterval);
+    setGteMs(s.gteMs);
+    setLteMs(s.lteMs);
+  }
+
   // ── Expanded view (full-screen section) ──────────────────────────
   if (expanded) {
     return (
@@ -205,16 +230,19 @@ export default function ResourcesPage() {
                         title="CPU Usage (%)"
                         data={(resources?.timeline?.cpu || []).filter(d => d.device === device)}
                         color="blue" valueFormatter={formatPercent}
+                        onRangeSelect={applyBrushRange}
                       />
                       <ResourceAreaCard
                         title="Memory Usage (%)"
                         data={(resources?.timeline?.memory || []).filter(d => d.device === device)}
                         color="amber" valueFormatter={formatPercent}
+                        onRangeSelect={applyBrushRange}
                       />
                       <ResourceAreaCard
                         title="Active Sessions"
                         data={(resources?.timeline?.sessions || []).filter(d => d.device === device)}
                         color="purple" valueFormatter={formatNumber}
+                        onRangeSelect={applyBrushRange}
                       />
                     </>
                   )}
@@ -290,6 +318,15 @@ export default function ResourcesPage() {
                 : "Custom"}
             </button>
           </div>
+          {isZoomed && (
+            <button
+              onClick={resetZoom}
+              className="inline-flex items-center gap-1 rounded-md border border-border/60 px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted/50 transition-colors"
+              title="Restore the view before drag-zoom"
+            >
+              ⟲ Reset zoom
+            </button>
+          )}
           <select
             value={refreshInterval}
             onChange={(e) => setRefreshInterval(Number(e.target.value))}
@@ -526,16 +563,19 @@ export default function ResourcesPage() {
                             title="CPU Usage (%)"
                             data={(resources?.timeline?.cpu || []).filter(d => d.device === device)}
                             color="blue" valueFormatter={formatPercent}
+                            onRangeSelect={applyBrushRange}
                           />
                           <ResourceAreaCard
                             title="Memory Usage (%)"
                             data={(resources?.timeline?.memory || []).filter(d => d.device === device)}
                             color="amber" valueFormatter={formatPercent}
+                            onRangeSelect={applyBrushRange}
                           />
                           <ResourceAreaCard
                             title="Active Sessions"
                             data={(resources?.timeline?.sessions || []).filter(d => d.device === device)}
                             color="purple" valueFormatter={formatNumber}
+                            onRangeSelect={applyBrushRange}
                           />
                         </>
                       )}
@@ -603,7 +643,7 @@ export default function ResourcesPage() {
               {!ifStatsLoading && !ifStatsError && ifStats.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {ifStats.map((iface, i) => (
-                    <InterfaceBandwidthCard key={i} iface={iface} />
+                    <InterfaceBandwidthCard key={i} iface={iface} onRangeSelect={applyBrushRange} />
                   ))}
                 </div>
               )}
@@ -633,7 +673,7 @@ function formatBytes(bytes: number): string {
 }
 
 // ── Interface Bandwidth Card ─────────────────────────────────────
-function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
+function InterfaceBandwidthCard({ iface, onRangeSelect }: { iface: InterfaceStatsItem; onRangeSelect?: (gteMs: number, lteMs: number) => void }) {
   const isUp = iface.oper_status === 1;
 
   const chartData = (iface.timeline || []).map((pt, idx) => {
@@ -642,10 +682,12 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
       timestamp: ms ? formatBucketLabelWIB(ms, idx > 0 ? new Date(iface.timeline![idx - 1].timestamp).getTime() : null) : pt.timestamp,
       In: pt.in_mbps ?? 0,
       Out: pt.out_mbps ?? 0,
+      tsMs: ms,
     };
   });
 
   const hasTimeline = chartData.length > 1;
+  const bucketMs = chartData.length > 1 ? (chartData[1].tsMs - chartData[0].tsMs) || 60_000 : 60_000;
 
   return (
     <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-5 space-y-4">
@@ -734,6 +776,8 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
             showGradient={false}
             tickGap={30}
             yAxisWidth={60}
+            onRangeSelect={onRangeSelect}
+            bucketMs={bucketMs}
           />
         </div>
       ) : (
@@ -768,10 +812,11 @@ const AREA_COLORS: Record<string, string> = {
 };
 
 function ResourceAreaCard({
-  title, data, color, valueFormatter,
+  title, data, color, valueFormatter, onRangeSelect,
 }: {
   title: string; data: { timestamp: number; value: number }[];
   color: string; valueFormatter: (v: number) => string;
+  onRangeSelect?: (gteMs: number, lteMs: number) => void;
 }) {
   if (!data || data.length === 0) {
     return (
@@ -787,8 +832,11 @@ function ResourceAreaCard({
     return {
       timestamp: ms ? formatBucketLabelWIB(ms, idx > 0 ? new Date(data[idx - 1].timestamp).getTime() : null) : d.timestamp,
       value: d.value,
+      tsMs: ms,
     };
   });
+  // Bucket width from the data spacing, for the drag-zoom range end.
+  const bucketMs = chartData.length > 1 ? (chartData[1].tsMs - chartData[0].tsMs) || 60_000 : 60_000;
 
   return (
     <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg p-3 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20">
@@ -811,6 +859,8 @@ function ResourceAreaCard({
           showGradient={false}
           tickGap={30}
           yAxisWidth={50}
+          onRangeSelect={onRangeSelect}
+          bucketMs={bucketMs}
         />
       </div>
     </div>

@@ -94,6 +94,30 @@ export default function SDWANPage() {
     );
   }
 
+  // Drag-to-zoom on any SLA chart narrows the page's time range (same as Traffic).
+  const [isZoomed, setIsZoomed] = useState(false);
+  const preZoomRef = useRef<{ gteMs: number; lteMs: number; activePresetSeconds: number; selectedPreset: string; customRangeLabel: string | null; refreshInterval: number } | null>(null);
+
+  function applyBrushRange(g: number, l: number) {
+    if (!isZoomed) {
+      preZoomRef.current = { gteMs, lteMs, activePresetSeconds, selectedPreset, customRangeLabel, refreshInterval };
+      setIsZoomed(true);
+    }
+    handleCustomApply({ gte_ms: g, lte_ms: l });
+  }
+
+  function resetZoom() {
+    const s = preZoomRef.current;
+    setIsZoomed(false);
+    if (!s) return;
+    setActivePresetSeconds(s.activePresetSeconds);
+    setSelectedPreset(s.selectedPreset);
+    setCustomRangeLabel(s.customRangeLabel);
+    setRefreshInterval(s.refreshInterval);
+    setGteMs(s.gteMs);
+    setLteMs(s.lteMs);
+  }
+
   // Data is directly available from API — no grouping needed
 
   if (expanded) {
@@ -113,7 +137,7 @@ export default function SDWANPage() {
         {expanded === "linkStatus" && renderLinkStatus(sdwan, isLoading)}
         {expanded === "summary" && renderSummary(sdwan)}
         {(expanded === "latency" || expanded === "jitter" || expanded === "packetLoss") &&
-          renderExpandedChart(expanded, sdwan, isLoading)}
+          renderExpandedChart(expanded, sdwan, isLoading, applyBrushRange)}
         <TimeRangePicker
           isOpen={showCustomPicker}
           onApply={handleCustomApply}
@@ -180,6 +204,15 @@ export default function SDWANPage() {
                 : "Custom"}
             </button>
           </div>
+          {isZoomed && (
+            <button
+              onClick={resetZoom}
+              className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted/50 transition-colors"
+              title="Restore the view before drag-zoom"
+            >
+              ⟲ Reset zoom
+            </button>
+          )}
           <select
             value={refreshInterval}
             onChange={(e) => setRefreshInterval(Number(e.target.value))}
@@ -317,6 +350,7 @@ export default function SDWANPage() {
         title="Latency (ms)" loading={isLoading} section="latency"
         onViewMore={() => setExpanded("latency")}
         links={sdwan?.latency_timeline?.links} color="blue" format={formatMs}
+        onRangeSelect={applyBrushRange}
       />
 
       {/* Jitter (all links) */}
@@ -324,6 +358,7 @@ export default function SDWANPage() {
         title="Jitter (ms)" loading={isLoading} section="jitter"
         onViewMore={() => setExpanded("jitter")}
         links={sdwan?.jitter_timeline?.links} color="orange" format={(v: number) => formatMs(v, true)}
+        onRangeSelect={applyBrushRange}
       />
 
       {/* Packet Loss (all links) */}
@@ -331,6 +366,7 @@ export default function SDWANPage() {
         title="Packet Loss (%)" loading={isLoading} section="packetLoss"
         onViewMore={() => setExpanded("packetLoss")}
         links={sdwan?.packet_loss_timeline?.links} color="red" format={formatPercent}
+        onRangeSelect={applyBrushRange}
       />
 
       <TimeRangePicker
@@ -420,7 +456,8 @@ function renderSummary(sdwan: SDWANData | undefined) {
 
 function renderExpandedChart(
   section: SectionId,
-  sdwan: SDWANData | undefined, loading: boolean
+  sdwan: SDWANData | undefined, loading: boolean,
+  onRangeSelect?: (gteMs: number, lteMs: number) => void,
 ) {
   if (loading) return <div className="h-64 bg-muted animate-pulse rounded-lg" />;
   if (!sdwan) return <p className="text-sm text-muted-foreground text-center py-12">No data</p>;
@@ -439,7 +476,7 @@ function renderExpandedChart(
   return (
     <div className="bg-card border rounded-lg p-6">
       <div className="h-64 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
-        <SlaAreaChart links={metric.links} color={metric.color} format={metric.format} />
+        <SlaAreaChart links={metric.links} color={metric.color} format={metric.format} onRangeSelect={onRangeSelect} />
       </div>
     </div>
   );
@@ -469,11 +506,12 @@ function SectionBlock({
 // ── SLA Timeseries Chart (compact card) ────────────────────────
 
 function SlaTimeseriesChart({
-  title, loading, section, onViewMore, links, color, format,
+  title, loading, section, onViewMore, links, color, format, onRangeSelect,
 }: {
   title: string; loading: boolean; section: string; onViewMore: () => void;
   links?: { timestamp: number; value: number; label: string; link_type: string }[];
   color: string; format: (v: number) => string;
+  onRangeSelect?: (gteMs: number, lteMs: number) => void;
 }) {
   return (
     <div className="bg-card border rounded-lg p-4 group">
@@ -490,7 +528,7 @@ function SlaTimeseriesChart({
         <div className="h-48 bg-muted animate-pulse rounded" />
       ) : links && links.length > 0 ? (
         <div className="h-48 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
-          <SlaAreaChart links={links} color={color} format={format} />
+          <SlaAreaChart links={links} color={color} format={format} onRangeSelect={onRangeSelect} />
         </div>
       ) : (
         <p className="text-xs text-muted-foreground text-center py-8">No data</p>
@@ -502,10 +540,11 @@ function SlaTimeseriesChart({
 // ── SLA Area Chart (Tremor) ────────────────────────────────────
 
 function SlaAreaChart({
-  links, color, format,
+  links, color, format, onRangeSelect,
 }: {
   links: { timestamp: number; value: number; label: string; link_type: string }[];
   color: string; format: (v: number) => string;
+  onRangeSelect?: (gteMs: number, lteMs: number) => void;
 }) {
   const labels = [...new Set(links.map(l => l.label))];
 
@@ -524,9 +563,11 @@ function SlaAreaChart({
         // Use the Resources-page formatter: always show date on the first row
         // and on any day boundary; subsequent rows in the same day show time only.
         timestamp: formatBucketLabelWIB(ms, prevMs),
+        tsMs: ms,
         ...vals,
       };
     });
+  const bucketMs = chartData.length > 1 ? (chartData[1].tsMs - chartData[0].tsMs) || 60_000 : 60_000;
 
   // Color hex values for chart series
   const chartColors: Record<string, string> = {
@@ -551,6 +592,8 @@ function SlaAreaChart({
       showGradient={false}
       tickGap={30}
       yAxisWidth={60}
+      onRangeSelect={onRangeSelect}
+      bucketMs={bucketMs}
     />
   );
 }
