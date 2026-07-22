@@ -156,6 +156,54 @@ async def _telegram_alert(message: str, config: dict | None = None) -> bool:
     return True
 
 
+async def telegram_discover_chats(token: str) -> list[dict]:
+    """List the distinct chats the bot can currently see, via getUpdates.
+
+    getUpdates only returns recent (~24h) updates the bot has received, so the target
+    chat must have had a message — or the bot been added to it — recently. Read-only:
+    with no offset passed, updates are not consumed. Pulls the chat from every common
+    update type so a group the bot was just added to (my_chat_member) shows up too.
+    """
+    if not token:
+        raise NotifierError("Telegram bot_token is not configured.")
+    try:
+        async with httpx.AsyncClient(timeout=_T) as c:
+            r = await c.get(
+                f"https://api.telegram.org/bot{token}/getUpdates",
+                params={"limit": 100, "timeout": 0},
+            )
+    except httpx.RequestError as e:
+        raise NotifierError(f"Could not reach Telegram: {e}") from e
+    if r.status_code != 200:
+        try:
+            desc = r.json().get("description") or r.text
+        except Exception:
+            desc = r.text
+        raise NotifierError(f"Telegram API {r.status_code}: {desc}")
+
+    updates = r.json().get("result", [])
+    _KEYS = ("message", "edited_message", "channel_post", "edited_channel_post",
+             "my_chat_member", "chat_member")
+    seen: dict = {}
+    for u in updates:
+        for k in _KEYS:
+            obj = u.get(k)
+            if not isinstance(obj, dict):
+                continue
+            ch = obj.get("chat")
+            if not isinstance(ch, dict) or ch.get("id") is None:
+                continue
+            cid = ch["id"]
+            name = (
+                ch.get("title")
+                or " ".join(p for p in (ch.get("first_name"), ch.get("last_name")) if p)
+                or ch.get("username")
+                or str(cid)
+            )
+            seen[cid] = {"id": str(cid), "type": ch.get("type", "?"), "title": name}
+    return list(seen.values())
+
+
 async def _telegram_document(file_path: str, caption: str = "") -> bool:
     if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_CHAT_ID:
         return False

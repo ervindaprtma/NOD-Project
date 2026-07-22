@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import logging
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -260,3 +263,45 @@ async def test_config(
         if success:
             return APIResponse.ok(data={"sent": True, "channel": channel})
         raise HTTPException(status_code=502, detail=f"Failed to send test message via {channel}")
+
+
+class TelegramDiscoverRequest(BaseModel):
+    # Optional freshly-typed token so discovery works before the config is saved;
+    # falls back to the stored (decrypted) token when omitted.
+    bot_token: Optional[str] = None
+
+
+@router.post("/telegram/chats")
+async def discover_telegram_chats(
+    body: TelegramDiscoverRequest,
+    current_user=Depends(require_role("admin")),
+):
+    """Find the chat_ids the Telegram bot can currently see (getUpdates helper).
+
+    Uses the token from the request if provided (so it works before saving), else the
+    stored one. Returns the distinct chats the bot has recently received a message in /
+    been added to, so the admin can pick the right chat_id instead of guessing.
+    """
+    token = (body.bot_token or "").strip()
+    if not token:
+        async with AsyncSessionLocal() as db:
+            cfg = await _get_config(db, "telegram")
+        if cfg and cfg.config:
+            decrypted = _decrypt_config(dict(cfg.config), "telegram")
+            stored = decrypted.get("bot_token")
+            if stored == "<decrypt-error>":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot decrypt the saved bot token — re-enter it and save first.",
+                )
+            token = (stored or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Enter or save a Telegram bot token first.")
+
+    from app.services.notifiers import telegram_discover_chats, NotifierError
+
+    try:
+        chats = await telegram_discover_chats(token)
+    except NotifierError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return APIResponse.ok(data={"chats": chats})

@@ -559,6 +559,28 @@ function TelegramConfigForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [tokenIsSet, setTokenIsSet] = useState(Boolean(config?.bot_token));
+  const [discovering, setDiscovering] = useState(false);
+  const [chats, setChats] = useState<{ id: string; type: string; title: string }[] | null>(null);
+
+  // "Find my chat_id": ask the bot (getUpdates) which chats it can currently see.
+  async function discoverChats() {
+    setError("");
+    setDiscovering(true);
+    setChats(null);
+    try {
+      const resp = await apiFetch<{ data: { chats: { id: string; type: string; title: string }[] } }>(
+        "/api/v1/config/notifications/telegram/chats",
+        { method: "POST", body: JSON.stringify({ bot_token: botToken || undefined }) }
+      );
+      setChats(resp.data.chats);
+    } catch (e: unknown) {
+      const msg = getErrorMessage(e, "Could not fetch chats.");
+      setError(msg);
+      onError(msg);
+    } finally {
+      setDiscovering(false);
+    }
+  }
 
   async function handleSave() {
     setError("");
@@ -622,7 +644,18 @@ function TelegramConfigForm({
       </div>
 
       <div>
-        <label className="text-xs font-medium block mb-1">Chat ID / Channel ID</label>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-xs font-medium">Chat ID / Channel ID</label>
+          <button
+            type="button"
+            onClick={discoverChats}
+            disabled={discovering}
+            className="text-[11px] px-2 py-0.5 rounded border bg-background hover:bg-muted disabled:opacity-50"
+            title="Ask the bot which chats it can currently message"
+          >
+            {discovering ? "Looking…" : "Find my chat_id"}
+          </button>
+        </div>
         <input
           type="text"
           value={chatId}
@@ -633,6 +666,36 @@ function TelegramConfigForm({
         <p className="text-xs text-muted-foreground mt-1">
           Use a negative number for groups/channels (e.g. <span className="font-mono">-100…</span>).
         </p>
+
+        {/* Discovered chats — click one to fill the field */}
+        {chats !== null && (
+          <div className="mt-2 border rounded-md p-2 bg-muted/30">
+            {chats.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground">
+                No chats found. Send a message to the bot (or add it to the group/channel) in the
+                last 24h, then try again. For a private DM, press <span className="font-mono">/start</span> on the bot first.
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                {chats.map((c) => (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onClick={() => setChatId(c.id)}
+                      className={cn(
+                        "w-full flex items-center justify-between gap-2 text-left px-2 py-1 rounded text-xs hover:bg-muted transition-colors",
+                        chatId === c.id && "bg-muted"
+                      )}
+                    >
+                      <span className="truncate">{c.title} <span className="text-[10px] text-muted-foreground">({c.type})</span></span>
+                      <span className="font-mono text-[11px] shrink-0">{c.id}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       <div>
