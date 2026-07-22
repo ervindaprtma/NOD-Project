@@ -67,6 +67,28 @@ export default function SDWANPage() {
   const queryTook = data?.meta?.query_took_ms;
   const sourceIp = (data as any)?.meta?.source_ip || sdwan?.link_status?.[0]?.device || null;
 
+  // ── Link filter (visual): which links to show across every table & chart ──
+  const allLabels = sdwan?.summary?.labels ?? [];
+  const allTypes = sdwan?.summary?.link_types ?? [];
+  const linkMeta = allLabels.map((l, i) => ({ label: l, type: allTypes[i] || "WAN" }));
+  const [selectedLinks, setSelectedLinks] = useState<Set<string>>(new Set());
+  // Self-correcting default: an untouched or stale (other-site) selection shows all links.
+  const effectiveLinks =
+    selectedLinks.size && allLabels.some((l) => selectedLinks.has(l))
+      ? selectedLinks
+      : new Set(allLabels);
+  const isLinkVisible = (label: string) => effectiveLinks.has(label);
+  function toggleLink(label: string) {
+    setSelectedLinks((prev) => {
+      const base = prev.size && allLabels.some((l) => prev.has(l)) ? prev : new Set(allLabels);
+      const next = new Set(base);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
+  const selectLinks = (labels: string[]) => setSelectedLinks(new Set(labels));
+
   function handlePreset(seconds: number, label: string) {
     const now = Date.now();
     setGteMs(now - seconds * 1000);
@@ -134,10 +156,10 @@ export default function SDWANPage() {
             {SECTION_LABELS[expanded]}
           </h1>
         </div>
-        {expanded === "linkStatus" && renderLinkStatus(sdwan, isLoading)}
-        {expanded === "summary" && renderSummary(sdwan)}
+        {expanded === "linkStatus" && renderLinkStatus(sdwan, isLoading, isLinkVisible)}
+        {expanded === "summary" && renderSummary(sdwan, isLinkVisible)}
         {(expanded === "latency" || expanded === "jitter" || expanded === "packetLoss") &&
-          renderExpandedChart(expanded, sdwan, isLoading, applyBrushRange)}
+          renderExpandedChart(expanded, sdwan, isLoading, applyBrushRange, isLinkVisible)}
         <TimeRangePicker
           isOpen={showCustomPicker}
           onApply={handleCustomApply}
@@ -245,6 +267,53 @@ export default function SDWANPage() {
         </div>
       )}
 
+      {/* Link filter bar */}
+      {linkMeta.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap bg-card border rounded-lg px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">Links</span>
+          <div className="flex gap-1">
+            {[
+              { label: "All", labels: allLabels },
+              { label: "WAN", labels: linkMeta.filter((m) => m.type === "WAN").map((m) => m.label) },
+              { label: "MPLS", labels: linkMeta.filter((m) => m.type === "MPLS").map((m) => m.label) },
+            ].filter((q) => q.labels.length > 0).map((q) => (
+              <button
+                key={q.label}
+                onClick={() => selectLinks(q.labels)}
+                className="px-2 py-0.5 text-[11px] rounded border bg-background text-muted-foreground hover:bg-muted transition-colors"
+              >
+                {q.label}
+              </button>
+            ))}
+          </div>
+          <div className="h-4 w-px bg-border mx-0.5" />
+          <div className="flex gap-1.5 flex-wrap">
+            {linkMeta.map((m) => {
+              const on = isLinkVisible(m.label);
+              const isWan = m.type === "WAN";
+              return (
+                <button
+                  key={m.label}
+                  onClick={() => toggleLink(m.label)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-full border transition-colors",
+                    on
+                      ? isWan
+                        ? "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800"
+                        : "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+                      : "bg-background text-muted-foreground border-border opacity-60 line-through"
+                  )}
+                  title={on ? "Click to hide" : "Click to show"}
+                >
+                  <span className={cn("w-1.5 h-1.5 rounded-full", isWan ? "bg-blue-500" : "bg-emerald-500", !on && "opacity-40")} />
+                  {m.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Link Status Table */}
       <div className="bg-card border rounded-lg p-4 group">
         <div className="flex items-center justify-between mb-3">
@@ -270,7 +339,7 @@ export default function SDWANPage() {
               </tr>
             </thead>
             <tbody>
-              {sdwan.link_status[0].links.map((link, i) => (
+              {sdwan.link_status[0].links.filter((link) => isLinkVisible(link.label)).map((link, i) => (
                 <tr key={i} className="border-b last:border-0">
                   <td className="py-2">
                     <span className={cn(
@@ -305,7 +374,7 @@ export default function SDWANPage() {
       <SectionBlock title="SLA Summary KPIs" section="summary" onViewMore={() => setExpanded("summary")}>
         {sdwan?.summary ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {sdwan.summary.labels.map((label, i) => (
+            {sdwan.summary.labels.map((label, i) => !isLinkVisible(label) ? null : (
               <div key={i} className={cn(
                 "bg-muted/50 border rounded-lg p-4",
                 sdwan.summary.link_types[i] === "MPLS" && "border-l-4 border-l-emerald-500",
@@ -349,7 +418,7 @@ export default function SDWANPage() {
       <SlaTimeseriesChart
         title="Latency (ms)" loading={isLoading} section="latency"
         onViewMore={() => setExpanded("latency")}
-        links={sdwan?.latency_timeline?.links} color="blue" format={formatMs}
+        links={sdwan?.latency_timeline?.links?.filter((l) => isLinkVisible(l.label))} color="blue" format={formatMs}
         onRangeSelect={applyBrushRange}
       />
 
@@ -357,7 +426,7 @@ export default function SDWANPage() {
       <SlaTimeseriesChart
         title="Jitter (ms)" loading={isLoading} section="jitter"
         onViewMore={() => setExpanded("jitter")}
-        links={sdwan?.jitter_timeline?.links} color="orange" format={(v: number) => formatMs(v, true)}
+        links={sdwan?.jitter_timeline?.links?.filter((l) => isLinkVisible(l.label))} color="orange" format={(v: number) => formatMs(v, true)}
         onRangeSelect={applyBrushRange}
       />
 
@@ -365,7 +434,7 @@ export default function SDWANPage() {
       <SlaTimeseriesChart
         title="Packet Loss (%)" loading={isLoading} section="packetLoss"
         onViewMore={() => setExpanded("packetLoss")}
-        links={sdwan?.packet_loss_timeline?.links} color="red" format={formatPercent}
+        links={sdwan?.packet_loss_timeline?.links?.filter((l) => isLinkVisible(l.label))} color="red" format={formatPercent}
         onRangeSelect={applyBrushRange}
       />
 
@@ -390,7 +459,7 @@ const SECTION_LABELS: Record<SectionId, string> = {
   packetLoss: "Packet Loss",
 };
 
-function renderLinkStatus(sdwan: SDWANData | undefined, loading: boolean) {
+function renderLinkStatus(sdwan: SDWANData | undefined, loading: boolean, visible?: (label: string) => boolean) {
   if (loading) return <div className="h-48 bg-muted animate-pulse rounded-lg" />;
   if (!sdwan?.link_status?.[0]?.links) return <p className="text-sm text-muted-foreground text-center py-12">No data</p>;
   return (
@@ -403,7 +472,7 @@ function renderLinkStatus(sdwan: SDWANData | undefined, loading: boolean) {
           </tr>
         </thead>
         <tbody>
-          {sdwan.link_status[0].links.map((link, i) => (
+          {sdwan.link_status[0].links.filter((link) => !visible || visible(link.label)).map((link, i) => (
             <tr key={i} className="border-b last:border-0">
               <td className="py-3">
                 <span className={cn("px-2 py-0.5 rounded text-[11px] font-medium",
@@ -430,12 +499,12 @@ function renderLinkStatus(sdwan: SDWANData | undefined, loading: boolean) {
   );
 }
 
-function renderSummary(sdwan: SDWANData | undefined) {
+function renderSummary(sdwan: SDWANData | undefined, visible?: (label: string) => boolean) {
   if (!sdwan?.summary) return <p className="text-sm text-muted-foreground text-center py-12">No data</p>;
   return (
     <div className="bg-card border rounded-lg p-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {sdwan.summary.labels.map((label, i) => (
+        {sdwan.summary.labels.map((label, i) => (visible && !visible(label)) ? null : (
           <div key={i} className={cn("bg-muted/50 border rounded-lg p-4",
             sdwan.summary.link_types[i] === "MPLS" && "border-l-4 border-l-emerald-500",
             sdwan.summary.link_types[i] === "WAN" && "border-l-4 border-l-blue-500"
@@ -458,14 +527,16 @@ function renderExpandedChart(
   section: SectionId,
   sdwan: SDWANData | undefined, loading: boolean,
   onRangeSelect?: (gteMs: number, lteMs: number) => void,
+  visible?: (label: string) => boolean,
 ) {
   if (loading) return <div className="h-64 bg-muted animate-pulse rounded-lg" />;
   if (!sdwan) return <p className="text-sm text-muted-foreground text-center py-12">No data</p>;
 
+  const flt = (links: { label: string }[]) => (visible ? links.filter((l) => visible(l.label)) : links);
   const metricMap: Record<string, { links: { timestamp: number; value: number; label: string; link_type: string }[]; color: string; format: (v: number) => string }> = {
-    latency: { links: sdwan.latency_timeline?.links || [], color: "blue", format: formatMs },
-    jitter: { links: sdwan.jitter_timeline?.links || [], color: "orange", format: (v: number) => formatMs(v, true) },
-    packetLoss: { links: sdwan.packet_loss_timeline?.links || [], color: "red", format: formatPercent },
+    latency: { links: flt(sdwan.latency_timeline?.links || []) as any, color: "blue", format: formatMs },
+    jitter: { links: flt(sdwan.jitter_timeline?.links || []) as any, color: "orange", format: (v: number) => formatMs(v, true) },
+    packetLoss: { links: flt(sdwan.packet_loss_timeline?.links || []) as any, color: "red", format: formatPercent },
   };
 
   const metric = metricMap[section];
