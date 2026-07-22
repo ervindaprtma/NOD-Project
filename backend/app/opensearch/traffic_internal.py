@@ -6,6 +6,7 @@ Key dimension: flow.server.l4.port.id (service/port-based).
 """
 from __future__ import annotations
 
+import logging
 import socket
 from collections import defaultdict
 from typing import Optional
@@ -17,6 +18,8 @@ from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _bytes_sum, _port_to_service, BYTES_DESC,
 )
 from app.opensearch.query import safe_search, drop_partial_tail
+
+logger = logging.getLogger(__name__)
 
 SITE_FLOW_MAP: dict[str, tuple[str, str]] = {
     "Site_FGT-DC": ("10.80.150.1", "dc"),
@@ -164,7 +167,7 @@ async def flow_summary(
     aggs = resp["aggregations"]
 
     def _buckets(agg_name: str) -> list[dict]:
-        return aggs.get(agg_name, {}).get("buckets", [])
+        return list(aggs.get(agg_name, {}).get("buckets", []))
 
     def _total(agg_name: str) -> int:
         return sum(int(b.get("total_bytes", {}).get("value", 0)) for b in _buckets(agg_name))
@@ -217,6 +220,83 @@ async def flow_summary(
 # ─────────────────────────────────────────────────────────────────
 # Chart
 # ─────────────────────────────────────────────────────────────────
+
+
+# Hybrid session-spread cap: re-distribute at most this many top-byte sessions. The
+# distortion a session causes is ~proportional to its bytes, so the biggest N cover
+# essentially all the spike volume; the small-byte long tail stays in the base histogram.
+_SPREAD_CAP = 6000
+# Only sessions at least this large can meaningfully distort a bucket (10 MB / 60s ≈
+# 1.3 Mbps). Pre-filtering on it prunes the sort from ~all flows to a handful, which is
+# what keeps the extra query fast.
+_SPREAD_MIN_BYTES = 10_000_000
+
+
+async def _spread_long_sessions(
+    client: AsyncOpenSearch, base_filter: list[dict], top_ports: list,
+    bucket_svc: dict[int, dict[str, float]], bucket_seconds: int, lte_ms: int,
+) -> None:
+    """Hybrid fix for the session-close spike (see traffic-throughput docs).
+
+    The base date_histogram attributes each flow's whole byte count to the single bucket
+    holding its @timestamp (FortiGate log/close time). For sessions longer than one
+    bucket that inflates a bucket. Here we fetch the top-byte sessions, and for any whose
+    `flow.end.ms - flow.start.ms` exceeds one bucket, we move its bytes off the log-time
+    bucket and spread them across the buckets it was actually active, weighted by overlap.
+    Bytes are conserved within the visible window; short sessions are left untouched
+    (their bytes already belong in ~one bucket). Mutates `bucket_svc` in place.
+    """
+    W = bucket_seconds * 1000
+    if not bucket_svc:
+        return
+    kept = set(bucket_svc)
+    resp = await safe_search(client, FLOW_INDEX, {
+        "size": _SPREAD_CAP,
+        "timeout": "115s",
+        "query": {"bool": {"filter": base_filter + [
+            {"terms": {"flow.server.l4.port.id": top_ports}},
+            {"range": {"flow.bytes": {"gte": _SPREAD_MIN_BYTES}}},
+        ]}},
+        "sort": [{"flow.bytes": "desc"}],
+        "_source": ["flow.client.bytes", "flow.server.bytes", "flow.start.ms", "flow.end.ms",
+                    "flow.server.l4.port.id"],
+        "docvalue_fields": [{"field": "@timestamp", "format": "epoch_millis"}],
+    })
+    hits = resp.get("hits", {}).get("hits", [])
+    spread = 0
+    for h in hits:
+        s = h["_source"]
+        st, en = s.get("flow.start.ms"), s.get("flow.end.ms")
+        if st is None or en is None:
+            continue
+        dur = en - st
+        if dur <= W:
+            continue  # short session — already lands in ~one bucket, leave it in the base
+        b = float(int(s.get("flow.client.bytes", 0) or 0) + int(s.get("flow.server.bytes", 0) or 0))
+        if b <= 0:
+            continue
+        svc = _port_to_service(s.get("flow.server.l4.port.id"))
+        try:
+            ts = int(h["fields"]["@timestamp"][0])
+        except (KeyError, IndexError, ValueError, TypeError):
+            continue
+        # 1) remove the mis-attributed lump from the log-time bucket
+        tb = (ts // W) * W
+        if tb in bucket_svc and svc in bucket_svc[tb]:
+            bucket_svc[tb][svc] = max(0.0, bucket_svc[tb][svc] - b)
+        # 2) add overlap-weighted slices across the session's active, in-window buckets
+        t = (st // W) * W
+        while t < en:
+            if t in kept:
+                lo = max(t, st)
+                hi = min(t + W, en)
+                if hi > lo:
+                    bucket_svc[t][svc] = bucket_svc[t].get(svc, 0.0) + b * (hi - lo) / dur
+            t += W
+        spread += 1
+    if len(hits) >= _SPREAD_CAP:
+        logger.info("traffic_internal spread: cap %d hit — smaller long sessions left in base", _SPREAD_CAP)
+    logger.debug("traffic_internal spread: re-distributed %d/%d long sessions", spread, len(hits))
 
 
 async def flow_chart(
@@ -281,21 +361,35 @@ async def flow_chart(
     })
     buckets = drop_partial_tail(resp["aggregations"]["per_minute"]["buckets"], bucket_seconds, lte_ms)
 
-    all_service_bytes: dict[str, int] = {}
-    chart_data: list[dict] = []
+    # Base: per-bucket per-service bytes by @timestamp (ports sharing a service name merge).
+    bucket_svc: dict[int, dict[str, float]] = {}
     for bucket in buckets:
-        ts_ms = bucket["key"]
-        row: dict = {"timestamp": ts_ms, "timestampMs": ts_ms}
+        bkey = int(bucket["key"])
+        svc_map: dict[str, float] = {}
         for svc_bucket in bucket["top_services"]["buckets"]:
-            svc_name = _port_to_service(svc_bucket["key"])
             svc_bytes = int(svc_bucket["total_bytes"]["value"])
             if svc_bytes <= 0:
                 continue
-            row[svc_name] = row.get(svc_name, 0) + svc_bytes  # ports sharing a service name merge
-            all_service_bytes[svc_name] = all_service_bytes.get(svc_name, 0) + svc_bytes
+            svc_name = _port_to_service(svc_bucket["key"])
+            svc_map[svc_name] = svc_map.get(svc_name, 0.0) + float(svc_bytes)
+        bucket_svc[bkey] = svc_map
+
+    # Hybrid correction: re-spread long sessions across their active window (fixes the
+    # session-close spike). Uses the same base_filter + the top ports we're charting.
+    await _spread_long_sessions(client, base_filter, top_ports, bucket_svc, bucket_seconds, lte_ms)
+
+    all_service_bytes: dict[str, float] = {}
+    chart_data: list[dict] = []
+    for ts_ms in sorted(bucket_svc):
+        row: dict = {"timestamp": ts_ms, "timestampMs": ts_ms}
+        for svc_name, sb in bucket_svc[ts_ms].items():
+            if sb <= 0:
+                continue
+            row[svc_name] = int(round(sb))
+            all_service_bytes[svc_name] = all_service_bytes.get(svc_name, 0.0) + sb
         chart_data.append(row)
 
-    service_names = sorted(all_service_bytes, key=all_service_bytes.get, reverse=True)
+    service_names = sorted(all_service_bytes, key=lambda k: all_service_bytes[k], reverse=True)
     return {"chart_data": chart_data, "service_names": service_names, "bucket_seconds": bucket_seconds}
 
 
