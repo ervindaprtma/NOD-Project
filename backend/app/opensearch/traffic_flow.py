@@ -62,7 +62,7 @@ def _base_filters(
     if f: filters.append(f)
     f = _multi_term("flow.server.ip.addr", server_ip)
     if f: filters.append(f)
-    f = _multi_term("l4.proto.name", protocol)
+    f = _multi_term("l4.proto.name", protocol.upper())  # proto names are uppercase (TCP/UDP/ICMP); accept any-case input
     if f: filters.append(f)
     if dst_port is not None:
         # Role-based, not direction-based: flow.dst.l4.port.id is the destination of
