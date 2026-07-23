@@ -74,7 +74,13 @@ from jinja2 import StrictUndefined
 from jinja2.sandbox import SandboxedEnvironment
 
 _SANDBOX = SandboxedEnvironment(
-    autoescape=True,           # SSTI defense-in-depth: escape <, >, &, " in interpolated values
+    # autoescape OFF: every consumer (Telegram/Discord/WhatsApp/plain-text email) sends
+    # this output as plain text, where HTML-escaping turns `>` into a literal `&gt;`.
+    # SSTI protection comes from SandboxedEnvironment (dunder/attribute blocking) +
+    # the _ALLOWED_FILTERS whitelist — NOT from autoescape, which is an XSS/HTML concern
+    # that doesn't apply here. (The report generator renders HTML via its own separate
+    # _render_template, not this sandbox.)
+    autoescape=False,
     undefined=StrictUndefined,  # {{ missing_var }} → render error, NOT empty string
     keep_trailing_newline=False,
 )
@@ -658,32 +664,46 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
         except Exception as e:
             logger.error("Failed to fetch alert templates: %s", e)
 
-    # §11.1: pre-fetch assigned notification-message templates. These take precedence
-    # over the AlertTemplate body for the per-rule line — the admin-managed message text
-    # (Settings → Message Templates) is what the rule's notification_template_id points at.
-    # Prefer line_template (the batch line), fall back to body_template.
+    # §11.1: pre-fetch the message templates for the per-rule line. Resolution order is
+    # assigned (active) template → active default template → AlertTemplate body →
+    # hardcoded, so different rules can use different templates (multi-use) and rules
+    # with none fall to the admin-chosen default. Only ACTIVE templates render; an
+    # inactive/retired one is skipped and the rule falls through. Prefer line_template
+    # (the batch line), fall back to body_template.
     nt_ids = {r.notification_template_id for r, _ in notify_queue if r.notification_template_id}
     nt_line: dict[str, str] = {}
-    if nt_ids:
+    default_line: str | None = None
+    try:
         from app.db.session import AsyncSessionLocal
-        try:
-            async with AsyncSessionLocal() as tdb:
+        async with AsyncSessionLocal() as tdb:
+            if nt_ids:
                 result = await tdb.execute(
                     select(NotificationTemplate.id, NotificationTemplate.line_template,
                            NotificationTemplate.body_template)
                     .where(NotificationTemplate.id.in_(nt_ids))
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
                 )
                 nt_line = {row[0]: (row[1] or row[2]) for row in result.all() if (row[1] or row[2])}
-        except Exception as e:
-            logger.error("Failed to fetch notification templates: %s", e)
+            drow = (await tdb.execute(
+                select(NotificationTemplate.line_template, NotificationTemplate.body_template)
+                .where(NotificationTemplate.is_default == True)  # noqa: E712
+                .where(NotificationTemplate.is_active == True)  # noqa: E712
+                .limit(1)
+            )).first()
+            if drow:
+                default_line = drow[0] or drow[1]
+    except Exception as e:
+        logger.error("Failed to fetch notification templates: %s", e)
 
     for rule, mv in notify_queue:
         sev = sev_emoji.get(rule.severity, "🔔")
-        # §11.1 message template (assigned) wins; else §9.5 AlertTemplate body; else hardcoded.
+        # Resolution: assigned (active) template → active default → AlertTemplate body →
+        # hardcoded. nt_line only holds active templates, so an inactive assignment falls
+        # through to the default here.
         tmpl_text = (
-            nt_line.get(rule.notification_template_id) if rule.notification_template_id else None
-        ) or (
-            template_body.get(rule.template_id) if rule.template_id else None
+            (nt_line.get(rule.notification_template_id) if rule.notification_template_id else None)
+            or default_line
+            or (template_body.get(rule.template_id) if rule.template_id else None)
         )
         if tmpl_text:
             # The seeded AlertTemplates use flat var names ({{ name }}, {{ metric_value }});

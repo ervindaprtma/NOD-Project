@@ -5,7 +5,7 @@ from __future__ import annotations
 
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 
 from app.api.auth import require_role
 from app.db.models import NotificationTemplate, AlertRule
@@ -114,6 +114,19 @@ async def update_notification_template(
             tmpl.body_template = body.body_template
         if body.line_template is not None:
             tmpl.line_template = body.line_template
+        if body.is_active is not None:
+            tmpl.is_active = body.is_active
+        if body.is_default is not None:
+            if body.is_default:
+                # Single default: clear the flag on every other template first.
+                await db.execute(
+                    update(NotificationTemplate)
+                    .where(NotificationTemplate.id != template_id)
+                    .values(is_default=False)
+                )
+                # A template being made the default must be usable.
+                tmpl.is_active = True
+            tmpl.is_default = body.is_default
 
         await db.commit()
         return APIResponse.ok(data={})

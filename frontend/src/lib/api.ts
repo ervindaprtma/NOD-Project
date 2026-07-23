@@ -225,12 +225,16 @@ export async function apiFetch<T = unknown>(
   }
 
   if (!resp.ok || !json.success) {
-    // FastAPI 422 validation errors come back as { detail: [{loc, msg, type, ...}] }
-    // instead of the project's { error: { code, message } } shape. Surface the
-    // first validation message so the user sees *why* it was rejected, not a
-    // generic "An error occurred".
+    // FastAPI errors come back as { detail: ... } instead of the project's
+    // { error: { code, message } } shape. `detail` is a string for HTTPException
+    // (e.g. "telegram test failed — Telegram API 401: Unauthorized") or a list for
+    // 422 validation errors. Surface either so the user sees *why*, not a generic
+    // "An error occurred".
     let code = json.error?.code || "UNKNOWN_ERROR";
-    let message = json.error?.message || "An error occurred";
+    let message =
+      json.error?.message ||
+      (typeof json.detail === "string" ? json.detail : "") ||
+      "An error occurred";
     if (Array.isArray(json.detail) && json.detail.length > 0) {
       const first = json.detail[0];
       const loc = Array.isArray(first.loc) ? first.loc.filter((p: any) => p !== "body").join(".") : "";

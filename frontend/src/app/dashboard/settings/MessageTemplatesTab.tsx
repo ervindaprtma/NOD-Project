@@ -136,6 +136,19 @@ export function MessageTemplatesTab({ showToast }: { showToast: (t: { ok: boolea
     setForm((prev) => ({ ...prev, body_template: `${prev.body_template}{{ ${v} }}` }));
   }
 
+  // Toggle active / set default operate on the saved template (via PUT), not the draft.
+  async function patch(t: NotificationTemplate, fields: Record<string, unknown>, okMsg: string) {
+    try {
+      await apiFetch(`${LIST_KEY}/${t.id}`, { method: "PUT", body: JSON.stringify(fields) });
+      await mutate(LIST_KEY);
+      showToast({ ok: true, msg: okMsg });
+    } catch (e) {
+      showToast({ ok: false, msg: getErrorMessage(e, "Update failed") });
+    }
+  }
+
+  const selected = templates.find((t) => t.id === selectedId) || null;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -168,10 +181,13 @@ export function MessageTemplatesTab({ showToast }: { showToast: (t: { ok: boolea
                   selectedId === t.id && "bg-muted"
                 )}
               >
-                <div className="text-sm font-medium truncate">{t.name}</div>
+                <div className="flex items-center gap-1.5">
+                  <span className={cn("text-sm font-medium truncate", !t.is_active && "text-muted-foreground line-through")}>{t.name}</span>
+                  {t.is_default && <span className="text-[9px] px-1 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">default</span>}
+                  {!t.is_active && <span className="text-[9px] px-1 rounded bg-muted text-muted-foreground">inactive</span>}
+                </div>
                 <div className="text-[10px] text-muted-foreground">
-                  {t.used_by_count ? `${t.used_by_count} rule(s)` : "unused"}
-                  {t.is_default ? " · default" : ""}
+                  {t.used_by_count ? `used by ${t.used_by_count} rule(s)` : "unused"}
                 </div>
               </button>
             ))
@@ -279,18 +295,44 @@ export function MessageTemplatesTab({ showToast }: { showToast: (t: { ok: boolea
             >
               {saving ? "Saving…" : selectedId ? "Save" : "Create"}
             </button>
-            {selectedId && (
+            {selected && (
               <button
-                onClick={() => {
-                  const t = templates.find((x) => x.id === selectedId);
-                  if (t) onDelete(t);
-                }}
+                onClick={() => onDelete(selected)}
                 className="px-3 py-1.5 text-xs rounded-md border border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20"
               >
                 Delete
               </button>
             )}
           </div>
+
+          {/* Lifecycle actions on the saved template */}
+          {selected && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Status:</span>
+              <button
+                onClick={() => patch(selected, { is_active: !selected.is_active }, selected.is_active ? "Template deactivated" : "Template activated")}
+                className={cn(
+                  "px-2.5 py-1 rounded-md border transition-colors",
+                  selected.is_active
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/20 dark:border-emerald-900 dark:text-emerald-400"
+                    : "bg-muted text-muted-foreground"
+                )}
+              >
+                {selected.is_active ? "● Active — click to deactivate" : "○ Inactive — click to activate"}
+              </button>
+              {selected.is_default ? (
+                <span className="px-2.5 py-1 rounded-md bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">★ Default template</span>
+              ) : (
+                <button
+                  onClick={() => patch(selected, { is_default: true }, `"${selected.name}" is now the default`)}
+                  className="px-2.5 py-1 rounded-md border bg-background hover:bg-muted"
+                  title="Rules with no template assigned will use this one"
+                >
+                  Set as default
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Preview output / 422 */}
           {previewError && (

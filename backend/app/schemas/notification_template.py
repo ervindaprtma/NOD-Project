@@ -22,6 +22,8 @@ class NotificationTemplateUpdate(BaseModel):
     subject_template: Optional[str] = None
     body_template: Optional[str] = None
     line_template: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_default: Optional[bool] = None
 
 
 class NotificationTemplateRead(BaseModel):
@@ -32,6 +34,7 @@ class NotificationTemplateRead(BaseModel):
     body_template: str
     line_template: Optional[str] = None
     is_default: bool
+    is_active: bool = True
     is_user_created: bool
     used_by_count: Optional[int] = 0  # computed field for UI
 

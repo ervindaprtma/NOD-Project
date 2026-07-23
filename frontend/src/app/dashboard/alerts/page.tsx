@@ -895,13 +895,15 @@ export default function AlertsPage() {
                   onChange={(e) => setForm({ ...form, notification_template_id: e.target.value })}
                   className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                 >
-                  <option value="">Use default</option>
-                  {messageTemplates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
+                  <option value="">
+                    Use default{(() => { const d = messageTemplates.find((t) => t.is_default); return d ? ` (${d.name})` : ""; })()}
+                  </option>
+                  {messageTemplates.filter((t) => t.is_active).map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}{t.is_default ? " — default" : ""}</option>
                   ))}
                 </select>
                 <p className="text-[10px] text-muted-foreground mt-1">
-                  Manage templates in Settings → Message Templates.
+                  Different rules can use different templates. Leave as “Use default” to follow the default. Manage in Settings → Message Templates.
                 </p>
               </div>
 

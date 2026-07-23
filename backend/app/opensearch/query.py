@@ -20,13 +20,15 @@ import json
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Iterator, Optional
+import logging
+from typing import Any, Callable, Iterator, Optional
 
 from opensearchpy import AsyncOpenSearch
 
 from app.core.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 # ── Degradation tracking ─────────────────────────────────────────
 # safe_search() deliberately never raises: it returns an empty skeleton so one bad
@@ -152,6 +154,95 @@ def drop_partial_tail(buckets: list[dict], bucket_seconds: int, lte_ms: int) -> 
     while buckets and buckets[-1]["key"] + interval_ms > lte_ms:
         buckets = buckets[:-1]
     return buckets
+
+
+# ── Session-close-spike fix (shared by the traffic flow_chart timelines) ──
+# FortiGate logs a flow's whole byte count against its @timestamp (log/close time), so a
+# long session dumps minutes of bytes into one bucket → a fake Mbps spike. We re-spread
+# the top-byte long sessions across the buckets they were actually active
+# (flow.start.ms → flow.end.ms). Bounded + cheap: only sessions large enough to distort a
+# bucket are candidates, sorted by bytes, capped.
+_SPREAD_CAP = 6000
+_SPREAD_MIN_BYTES = 10_000_000  # 10 MB / 60s ≈ 1.3 Mbps — below this a session can't spike
+
+
+async def spread_long_sessions(
+    client: Any,
+    base_filter: list[dict],
+    key_field: str,
+    key_name: Callable[[Any], str],
+    charted_names: set[str],
+    bucket_svc: dict[int, dict[str, float]],
+    bucket_seconds: int,
+    gte_ms: int,
+    lte_ms: int,
+    key_filter_values: list | None = None,
+) -> None:
+    """Re-distribute long sessions' bytes across their active window, in place.
+
+    `bucket_svc[bucket_start_ms][series_name] = bytes` holds the base per-bucket totals
+    (built from the @timestamp date_histogram). `key_field` is the doc field the chart
+    buckets on (e.g. flow.server.l4.port.id or flow.application.name); `key_name` maps a
+    raw key to the chart's series name; only sessions whose name is in `charted_names`
+    are touched. `key_filter_values` optionally restricts the fetch to those raw keys
+    (cheaper when the caller knows the global top set). Bytes are conserved within the
+    visible window; the pre-window slice of a session that started earlier is dropped.
+    """
+    from app.opensearch._common import FLOW_INDEX
+
+    W = bucket_seconds * 1000
+    lo = (gte_ms // W) * W
+
+    def _valid(t: int) -> bool:
+        return lo <= t and (t + W) <= lte_ms  # matches drop_partial_tail (no partial tail)
+
+    fetch_filter = base_filter + [{"range": {"flow.bytes": {"gte": _SPREAD_MIN_BYTES}}}]
+    if key_filter_values:
+        fetch_filter.append({"terms": {key_field: key_filter_values}})
+
+    resp = await safe_search(client, FLOW_INDEX, {
+        "size": _SPREAD_CAP,
+        "timeout": "115s",
+        "query": {"bool": {"filter": fetch_filter}},
+        "sort": [{"flow.bytes": "desc"}],
+        "_source": ["flow.client.bytes", "flow.server.bytes", "flow.start.ms", "flow.end.ms", key_field],
+        "docvalue_fields": [{"field": "@timestamp", "format": "epoch_millis"}],
+    })
+    hits = resp.get("hits", {}).get("hits", [])
+    for h in hits:
+        s = h["_source"]
+        st, en = s.get("flow.start.ms"), s.get("flow.end.ms")
+        if st is None or en is None:
+            continue
+        dur = en - st
+        if dur <= W:
+            continue  # short session — already lands in ~one bucket
+        b = float(int(s.get("flow.client.bytes", 0) or 0) + int(s.get("flow.server.bytes", 0) or 0))
+        if b <= 0:
+            continue
+        name = key_name(s.get(key_field))
+        if name not in charted_names:
+            continue  # not a charted series — its bytes aren't shown anyway
+        try:
+            ts = int(h["fields"]["@timestamp"][0])
+        except (KeyError, IndexError, ValueError, TypeError):
+            continue
+        # 1) remove the mis-attributed lump from the log-time bucket
+        tb = (ts // W) * W
+        if tb in bucket_svc and name in bucket_svc[tb]:
+            bucket_svc[tb][name] = max(0.0, bucket_svc[tb][name] - b)
+        # 2) add overlap-weighted slices across the session's active, in-window buckets
+        t = (st // W) * W
+        while t < en:
+            if _valid(t):
+                lov = max(t, st)
+                hiv = min(t + W, en)
+                if hiv > lov:
+                    slot = bucket_svc.setdefault(t, {})
+                    slot[name] = slot.get(name, 0.0) + b * (hiv - lov) / dur
+            t += W
+    if len(hits) >= _SPREAD_CAP:
+        logger.info("spread_long_sessions: cap %d hit — smaller long sessions left in base", _SPREAD_CAP)
 
 
 async def safe_search(

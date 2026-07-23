@@ -16,7 +16,7 @@ from app.opensearch.client import get_dc_client, get_drc_client
 from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _bytes_sum, _port_to_service, BYTES_DESC,
 )
-from app.opensearch.query import safe_search, drop_partial_tail
+from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions
 
 SITE_FLOW_MAP: dict[str, tuple[str, str]] = {
     "Site_FGT-DC": ("10.80.150.1", "dc"),
@@ -164,7 +164,7 @@ async def flow_summary(
     aggs = resp["aggregations"]
 
     def _buckets(agg_name: str) -> list[dict]:
-        return aggs.get(agg_name, {}).get("buckets", [])
+        return list(aggs.get(agg_name, {}).get("buckets", []))
 
     def _total(agg_name: str) -> int:
         return sum(int(b.get("total_bytes", {}).get("value", 0)) for b in _buckets(agg_name))
@@ -281,21 +281,39 @@ async def flow_chart(
     })
     buckets = drop_partial_tail(resp["aggregations"]["per_minute"]["buckets"], bucket_seconds, lte_ms)
 
-    all_service_bytes: dict[str, int] = {}
-    chart_data: list[dict] = []
+    # Base: per-bucket per-service bytes by @timestamp (ports sharing a service name merge).
+    bucket_svc: dict[int, dict[str, float]] = {}
     for bucket in buckets:
-        ts_ms = bucket["key"]
-        row: dict = {"timestamp": ts_ms, "timestampMs": ts_ms}
+        bkey = int(bucket["key"])
+        svc_map: dict[str, float] = {}
         for svc_bucket in bucket["top_services"]["buckets"]:
-            svc_name = _port_to_service(svc_bucket["key"])
             svc_bytes = int(svc_bucket["total_bytes"]["value"])
             if svc_bytes <= 0:
                 continue
-            row[svc_name] = row.get(svc_name, 0) + svc_bytes  # ports sharing a service name merge
-            all_service_bytes[svc_name] = all_service_bytes.get(svc_name, 0) + svc_bytes
+            svc_name = _port_to_service(svc_bucket["key"])
+            svc_map[svc_name] = svc_map.get(svc_name, 0.0) + float(svc_bytes)
+        bucket_svc[bkey] = svc_map
+
+    # Hybrid correction: re-spread long sessions across their active window (fixes the
+    # session-close spike). Keyed by service port; restrict the fetch to the charted ports.
+    charted = {svc for m in bucket_svc.values() for svc in m}
+    await spread_long_sessions(
+        client, base_filter, "flow.server.l4.port.id", _port_to_service, charted,
+        bucket_svc, bucket_seconds, gte_ms, lte_ms, key_filter_values=top_ports,
+    )
+
+    all_service_bytes: dict[str, float] = {}
+    chart_data: list[dict] = []
+    for ts_ms in sorted(bucket_svc):
+        row: dict = {"timestamp": ts_ms, "timestampMs": ts_ms}
+        for svc_name, sb in bucket_svc[ts_ms].items():
+            if sb <= 0:
+                continue
+            row[svc_name] = int(round(sb))
+            all_service_bytes[svc_name] = all_service_bytes.get(svc_name, 0.0) + sb
         chart_data.append(row)
 
-    service_names = sorted(all_service_bytes, key=all_service_bytes.get, reverse=True)
+    service_names = sorted(all_service_bytes, key=lambda k: all_service_bytes[k], reverse=True)
     return {"chart_data": chart_data, "service_names": service_names, "bucket_seconds": bucket_seconds}
 
 

@@ -7,7 +7,7 @@ Routes: DC→dc cluster, DRC→drc cluster.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Optional
+from typing import Any, Optional
 
 from opensearchpy import AsyncOpenSearch
 
@@ -15,7 +15,7 @@ from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _multi_wildcard, _bytes_sum, _port_to_service, BYTES_DESC,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
-from app.opensearch.query import safe_search, drop_partial_tail
+from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions
 
 SITE_SOURCE_IPS: dict[str, str] = {
     "Site_FGT-DC": "10.80.150.1",
@@ -143,7 +143,7 @@ async def flow_summary(
     aggs = resp["aggregations"]
 
     def _buckets(agg_name: str) -> list[dict]:
-        return aggs.get(agg_name, {}).get("buckets", [])
+        return list(aggs.get(agg_name, {}).get("buckets", []))
 
     def _merge_filter_buckets(upload_agg: str, download_agg: str, inner_agg: str) -> list[dict]:
         merged: dict[str, int] = {}
@@ -225,9 +225,10 @@ async def flow_chart(
         client = _get_client(site_name)
 
     interval_str = f"{bucket_seconds}s"
+    base_filter = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org)
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org)}},
+        "query": {"bool": {"filter": base_filter}},
         "aggs": {
             "per_minute": {
                 "date_histogram": {"field": "@timestamp", "fixed_interval": interval_str},
@@ -244,15 +245,35 @@ async def flow_chart(
     resp = await safe_search(client, FLOW_INDEX, body)
     result = resp["aggregations"]["per_minute"]
 
-    service_set: set[str] = set()
-    chart_data = []
+    # Base: per-bucket per-service bytes by @timestamp.
+    bucket_svc: dict[int, dict[str, float]] = {}
     for bucket in drop_partial_tail(result["buckets"], bucket_seconds, lte_ms):
-        row: dict[str, any] = {"timestamp": bucket["key_as_string"], "timestampMs": bucket["key"]}
+        svc_map: dict[str, float] = {}
         for svc_bucket in bucket["top_services"]["buckets"]:
-            svc_name = _port_to_service(svc_bucket["key"])
             svc_bytes = int(svc_bucket["total_bytes"]["value"])
+            if svc_bytes <= 0:
+                continue
+            svc_name = _port_to_service(svc_bucket["key"])
+            svc_map[svc_name] = svc_map.get(svc_name, 0.0) + float(svc_bytes)
+        bucket_svc[int(bucket["key"])] = svc_map
+
+    # Session-close-spike fix: re-spread long sessions (keyed by service port). No global
+    # top-port list here (per-bucket top-N), so the fetch is byte-bounded + name-gated.
+    charted = {svc for m in bucket_svc.values() for svc in m}
+    await spread_long_sessions(
+        client, base_filter, "flow.server.l4.port.id", _port_to_service, charted,
+        bucket_svc, bucket_seconds, gte_ms, lte_ms,
+    )
+
+    service_set: set[str] = set()
+    chart_data: list[dict[str, Any]] = []
+    for ts_ms in sorted(bucket_svc):
+        row: dict[str, Any] = {"timestamp": ts_ms, "timestampMs": ts_ms}
+        for svc_name, sb in bucket_svc[ts_ms].items():
+            if sb <= 0:
+                continue
+            row[svc_name] = int(round(sb))
             service_set.add(svc_name)
-            row[svc_name] = svc_bytes
         chart_data.append(row)
 
     return {"chart_data": chart_data, "service_names": sorted(service_set), "bucket_seconds": bucket_seconds}

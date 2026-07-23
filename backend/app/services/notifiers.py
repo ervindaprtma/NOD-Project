@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 _T = httpx.Timeout(10.0)
 _T_LONG = httpx.Timeout(30.0)
 
+
+class NotifierError(Exception):
+    """A notifier failed to send; carries a human-readable reason for the UI + logs."""
+
 # ponytail: §9.2 SSRF egress allow-list. User-supplied webhook URLs are POSTed
 # to — an unvalidated URL is an SSRF vector (OWASP A10). Allow only Discord's
 # webhook hostname. If a future deployment needs a custom host, add it here
@@ -128,16 +132,76 @@ async def _telegram_alert(message: str, config: dict | None = None) -> bool:
     token = (config or {}).get("bot_token", settings.TELEGRAM_BOT_TOKEN)
     chat = (config or {}).get("chat_id", settings.TELEGRAM_CHAT_ID)
     if not token or not chat:
-        logger.warning("Telegram not configured — skipping")
-        return False
+        raise NotifierError("Telegram bot_token or chat_id is missing.")
     try:
         async with httpx.AsyncClient(timeout=_T) as c:
-            r = await c.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat, "text": message, "parse_mode": "Markdown"})
-            r.raise_for_status()
-        return True
-    except Exception as e:
-        logger.error(f"Telegram alert failed: {e}")
-        return False
+            # Plain text — no parse_mode. Metric fields contain '_' (e.g.
+            # active_sslvpn_users_count), which Telegram's Markdown parser rejects with
+            # a 400 "can't parse entities", silently dropping real alerts.
+            r = await c.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat, "text": message},
+            )
+    except httpx.RequestError as e:
+        # DNS/connect/timeout — the server can't reach Telegram (egress/firewall).
+        raise NotifierError(f"Could not reach Telegram: {e}") from e
+    if r.status_code != 200:
+        # Telegram replies {"ok": false, "description": "..."} — surface the real reason
+        # (bad token → 401 Unauthorized, wrong chat → 400 "chat not found", etc.).
+        try:
+            desc = r.json().get("description") or r.text
+        except Exception:
+            desc = r.text
+        raise NotifierError(f"Telegram API {r.status_code}: {desc}")
+    return True
+
+
+async def telegram_discover_chats(token: str) -> list[dict]:
+    """List the distinct chats the bot can currently see, via getUpdates.
+
+    getUpdates only returns recent (~24h) updates the bot has received, so the target
+    chat must have had a message — or the bot been added to it — recently. Read-only:
+    with no offset passed, updates are not consumed. Pulls the chat from every common
+    update type so a group the bot was just added to (my_chat_member) shows up too.
+    """
+    if not token:
+        raise NotifierError("Telegram bot_token is not configured.")
+    try:
+        async with httpx.AsyncClient(timeout=_T) as c:
+            r = await c.get(
+                f"https://api.telegram.org/bot{token}/getUpdates",
+                params={"limit": 100, "timeout": 0},
+            )
+    except httpx.RequestError as e:
+        raise NotifierError(f"Could not reach Telegram: {e}") from e
+    if r.status_code != 200:
+        try:
+            desc = r.json().get("description") or r.text
+        except Exception:
+            desc = r.text
+        raise NotifierError(f"Telegram API {r.status_code}: {desc}")
+
+    updates = r.json().get("result", [])
+    _KEYS = ("message", "edited_message", "channel_post", "edited_channel_post",
+             "my_chat_member", "chat_member")
+    seen: dict = {}
+    for u in updates:
+        for k in _KEYS:
+            obj = u.get(k)
+            if not isinstance(obj, dict):
+                continue
+            ch = obj.get("chat")
+            if not isinstance(ch, dict) or ch.get("id") is None:
+                continue
+            cid = ch["id"]
+            name = (
+                ch.get("title")
+                or " ".join(p for p in (ch.get("first_name"), ch.get("last_name")) if p)
+                or ch.get("username")
+                or str(cid)
+            )
+            seen[cid] = {"id": str(cid), "type": ch.get("type", "?"), "title": name}
+    return list(seen.values())
 
 
 async def _telegram_document(file_path: str, caption: str = "") -> bool:
