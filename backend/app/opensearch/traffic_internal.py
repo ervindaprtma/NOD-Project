@@ -56,8 +56,10 @@ def _get_client(site_name: str = "Site_FGT_Office") -> AsyncOpenSearch:
 
 
 def _site_filter(site_name: str) -> dict:
-    entry = SITE_FLOW_MAP.get(site_name, ("",))
-    return {"term": {"flow.export.ip.addr": entry[0] if entry else ""}}
+    entry = SITE_FLOW_MAP.get(site_name)
+    if not entry or not entry[0]:
+        return {"match_none": {}}  # unknown site — see traffic_inbound._site_filter
+    return {"term": {"flow.export.ip.addr": entry[0]}}
 
 
 def _internal_path_filter(traffic_path: str = "all") -> dict:

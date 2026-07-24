@@ -30,7 +30,12 @@ def _get_client(site_name: str = "Site_FGT-DRC") -> AsyncOpenSearch:
 
 
 def _site_filter(site_name: str) -> dict:
-    source_ip = SITE_SOURCE_IPS.get(site_name, "")
+    source_ip = SITE_SOURCE_IPS.get(site_name)
+    if not source_ip:
+        # Site has no inbound path (e.g. Office). An empty term is rejected by
+        # OpenSearch ("'' is not an IP string literal") and fails the shard,
+        # which masks real partial-result warnings — match nothing instead.
+        return {"match_none": {}}
     return {"term": {"flow.export.ip.addr": source_ip}}
 
 

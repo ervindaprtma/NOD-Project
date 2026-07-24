@@ -69,7 +69,7 @@ async def active_ipsec_users_count_timeline(
         "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms)}},
         "aggs": {
             "over_time": {
-                "date_histogram": {"field": "@timestamp", "calendar_interval": interval},
+                "date_histogram": {"field": "@timestamp", "fixed_interval": interval},
                 "aggs": {"active_users": {"cardinality": {"field": "tag.username.keyword"}}},
             }
         },
