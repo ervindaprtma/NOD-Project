@@ -136,7 +136,7 @@ async def all_sslvpn_users_count_timeline(
         },
         "aggs": {
             "over_time": {
-                "date_histogram": {"field": "@timestamp", "calendar_interval": interval},
+                "date_histogram": {"field": "@timestamp", "fixed_interval": interval},
                 "aggs": {"active_users": {"cardinality": {"field": "tag.username.keyword"}}},
             }
         },
@@ -295,7 +295,7 @@ async def user_bandwidth_timeline(
         },
         "aggs": {
             "over_time": {
-                "date_histogram": {"field": "@timestamp", "calendar_interval": interval},
+                "date_histogram": {"field": "@timestamp", "fixed_interval": interval},
                 "aggs": {
                     "bytes_in": {"sum": {"field": "sslvpn.bytes_received"}},
                     "bytes_out": {"sum": {"field": "sslvpn.bytes_sent"}},

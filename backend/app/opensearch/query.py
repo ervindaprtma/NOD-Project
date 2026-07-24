@@ -164,6 +164,11 @@ def drop_partial_tail(buckets: list[dict], bucket_seconds: int, lte_ms: int) -> 
 # bucket are candidates, sorted by bytes, capped.
 _SPREAD_CAP = 6000
 _SPREAD_MIN_BYTES = 10_000_000  # 10 MB / 60s ≈ 1.3 Mbps — below this a session can't spike
+# Above this bucket size the spread is skipped: wide buckets (long time ranges) already
+# average session-close spikes away, so almost no session exceeds one bucket — the fix
+# would do nothing while still paying for a big sorted fetch. Keeps large-timeframe charts
+# fast/stable. 900s ≈ up to a ~7.5h range at the frontend's ~30-bucket target.
+_SPREAD_MAX_BUCKET_SECONDS = 900
 
 
 async def spread_long_sessions(
@@ -189,6 +194,9 @@ async def spread_long_sessions(
     visible window; the pre-window slice of a session that started earlier is dropped.
     """
     from app.opensearch._common import FLOW_INDEX
+
+    if bucket_seconds > _SPREAD_MAX_BUCKET_SECONDS:
+        return  # wide buckets already smooth spikes — skip the costly fetch (stability)
 
     W = bucket_seconds * 1000
     lo = (gte_ms // W) * W

@@ -672,6 +672,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1e6).toFixed(1)} MB`;
 }
 
+function formatMbps(v: number | null): string {
+  if (v == null) return "—";
+  return v >= 1000 ? `${(v / 1000).toFixed(1)} Gbps` : `${v.toFixed(1)} Mbps`;
+}
+
 // ── Interface Bandwidth Card ─────────────────────────────────────
 function InterfaceBandwidthCard({ iface, onRangeSelect }: { iface: InterfaceStatsItem; onRangeSelect?: (gteMs: number, lteMs: number) => void }) {
   const isUp = iface.oper_status === 1;
@@ -698,6 +703,16 @@ function InterfaceBandwidthCard({ iface, onRangeSelect }: { iface: InterfaceStat
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {hasTimeline && (
+            <span
+              className="text-[10px] text-muted-foreground"
+              title="Avg/Peak/Last are per-bucket rates at this interval — 'Last' is the final bucket's average, not a live reading."
+            >
+              {bucketMs >= 3_600_000
+                ? `${Math.round(bucketMs / 3_600_000)}h buckets`
+                : `${Math.round(bucketMs / 60_000)}m buckets`}
+            </span>
+          )}
           {iface.speed_mbps != null && (
             <span className="inline-flex items-center rounded-md bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 px-2 py-0.5 text-[11px] font-medium">
               {iface.speed_mbps >= 1000
@@ -717,26 +732,28 @@ function InterfaceBandwidthCard({ iface, onRangeSelect }: { iface: InterfaceStat
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-blue-50 dark:bg-blue-950/20 rounded-lg p-3 text-center">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Inbound</p>
-          <p className="text-lg font-bold text-blue-600 dark:text-blue-400">
-            {iface.current_in_mbps != null
-              ? iface.current_in_mbps >= 1000
-                ? `${(iface.current_in_mbps / 1000).toFixed(1)} Gbps`
-                : `${iface.current_in_mbps.toFixed(1)} Mbps`
-              : "—"}
-          </p>
+      {/* Avg / Peak / Last — blue row inbound, orange row outbound, matching the chart series */}
+      <div className="space-y-2">
+        <div className="grid grid-cols-3 gap-2">
+          {(["Avg", "Peak", "Last"] as const).map((h) => (
+            <p key={h} className="text-[10px] text-muted-foreground uppercase tracking-wider text-center">
+              {h}
+            </p>
+          ))}
         </div>
-        <div className="bg-orange-50 dark:bg-orange-950/20 rounded-lg p-3 text-center">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Outbound</p>
-          <p className="text-lg font-bold text-orange-600 dark:text-orange-400">
-            {iface.current_out_mbps != null
-              ? iface.current_out_mbps >= 1000
-                ? `${(iface.current_out_mbps / 1000).toFixed(1)} Gbps`
-                : `${iface.current_out_mbps.toFixed(1)} Mbps`
-              : "—"}
-          </p>
+        <div className="grid grid-cols-3 gap-2">
+          {[iface.avg_in_mbps, iface.peak_in_mbps, iface.last_in_mbps].map((v, i) => (
+            <div key={i} className="bg-blue-50 dark:bg-blue-950/20 rounded-lg p-2 text-center">
+              <p className="text-base font-bold text-blue-600 dark:text-blue-400">{formatMbps(v)}</p>
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {[iface.avg_out_mbps, iface.peak_out_mbps, iface.last_out_mbps].map((v, i) => (
+            <div key={i} className="bg-orange-50 dark:bg-orange-950/20 rounded-lg p-2 text-center">
+              <p className="text-base font-bold text-orange-600 dark:text-orange-400">{formatMbps(v)}</p>
+            </div>
+          ))}
         </div>
       </div>
 

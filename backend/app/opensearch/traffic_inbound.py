@@ -30,7 +30,12 @@ def _get_client(site_name: str = "Site_FGT-DRC") -> AsyncOpenSearch:
 
 
 def _site_filter(site_name: str) -> dict:
-    source_ip = SITE_SOURCE_IPS.get(site_name, "")
+    source_ip = SITE_SOURCE_IPS.get(site_name)
+    if not source_ip:
+        # Site has no inbound path (e.g. Office). An empty term is rejected by
+        # OpenSearch ("'' is not an IP string literal") and fails the shard,
+        # which masks real partial-result warnings — match nothing instead.
+        return {"match_none": {}}
     return {"term": {"flow.export.ip.addr": source_ip}}
 
 
@@ -56,7 +61,7 @@ def _base_filters(
     if f: filters.append(f)
     f = _multi_term("flow.server.ip.addr", server_ip)
     if f: filters.append(f)
-    f = _multi_term("l4.proto.name", protocol)
+    f = _multi_term("l4.proto.name", protocol.upper())  # proto names are uppercase (TCP/UDP/ICMP); accept any-case input
     if f: filters.append(f)
     if dst_port is not None:
         # Role-based (stable across both legs) — see traffic_flow._base_filters.

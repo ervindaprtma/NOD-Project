@@ -28,12 +28,16 @@ class InterfaceTimelinePoint(BaseModel):
 
 
 class InterfaceStatsItem(BaseModel):
-    """Per-interface stats with current values and timeline."""
+    """Per-interface stats averaged over the queried window, plus the timeline."""
     if_index: str
     if_name: str
     label: str = ""                        # display label (ifAlias or ifName)
-    current_in_mbps: Optional[float] = None
-    current_out_mbps: Optional[float] = None
+    avg_in_mbps: Optional[float] = None     # mean rate across the window, not the latest sample
+    avg_out_mbps: Optional[float] = None
+    peak_in_mbps: Optional[float] = None    # busiest single bucket
+    peak_out_mbps: Optional[float] = None
+    last_in_mbps: Optional[float] = None    # final bucket — a bucket average, not a live reading
+    last_out_mbps: Optional[float] = None
     total_in_bytes: float = 0              # cumulative volume over the window (sum of per-bucket deltas)
     total_out_bytes: float = 0
     speed_mbps: Optional[int] = None       # nominal interface speed
@@ -125,13 +129,21 @@ def _compute_throughput_timeline(
     return points, total_in_bytes, total_out_bytes
 
 
-def _pick_latest_value(timeline: list[InterfaceTimelinePoint], attr: str) -> Optional[float]:
-    """Pick the most recent non-None throughput value from the timeline."""
-    for pt in reversed(timeline):
-        val = getattr(pt, attr, None)
-        if val is not None:
-            return val
-    return None
+def _summarize(
+    timeline: list[InterfaceTimelinePoint], attr: str
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    (avg, peak, last) throughput across the window, skipping buckets with no
+    delta — counter resets and the seeded first bucket emit None, and max()
+    would raise on them.
+
+    All three are per-bucket rates, so they scale with the adaptive interval:
+    a 24h peak is the busiest 15-minute average, not the busiest instant.
+    """
+    vals = [v for pt in timeline if (v := getattr(pt, attr, None)) is not None]
+    if not vals:
+        return None, None, None
+    return round(sum(vals) / len(vals), 2), round(max(vals), 2), round(vals[-1], 2)
 
 
 # ── Endpoint ─────────────────────────────────────────────────────
@@ -215,15 +227,19 @@ async def get_interface_stats(
             if speed_mbps is not None or oper_status is not None:
                 break
 
-        current_in_mbps = _pick_latest_value(timeline, "in_mbps")
-        current_out_mbps = _pick_latest_value(timeline, "out_mbps")
+        avg_in_mbps, peak_in_mbps, last_in_mbps = _summarize(timeline, "in_mbps")
+        avg_out_mbps, peak_out_mbps, last_out_mbps = _summarize(timeline, "out_mbps")
 
         interfaces.append(InterfaceStatsItem(
             if_index=if_index,
             if_name=if_index,
             label=label,
-            current_in_mbps=current_in_mbps,
-            current_out_mbps=current_out_mbps,
+            avg_in_mbps=avg_in_mbps,
+            avg_out_mbps=avg_out_mbps,
+            peak_in_mbps=peak_in_mbps,
+            peak_out_mbps=peak_out_mbps,
+            last_in_mbps=last_in_mbps,
+            last_out_mbps=last_out_mbps,
             total_in_bytes=total_in_bytes,
             total_out_bytes=total_out_bytes,
             speed_mbps=speed_mbps,

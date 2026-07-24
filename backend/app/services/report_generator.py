@@ -1931,7 +1931,9 @@ async def build_report_context(
                     time_buckets = iface_bucket.get("by_time", {}).get("buckets", [])
 
                     # Throughput at summary interval
-                    timeline = _iface_throughput_timeline(time_buckets, interval_seconds=summary_interval_seconds)
+                    timeline, _, _ = _iface_throughput_timeline(
+                        time_buckets, interval_seconds=summary_interval_seconds, lte_ms=lte_ms
+                    )
 
                     # Speed and oper_status from latest non-null bucket
                     speed_mbps = None
@@ -1989,7 +1991,9 @@ async def build_report_context(
                     cb = chart_iface_buckets.get(if_index)
                     if cb:
                         ctb = cb.get("by_time", {}).get("buckets", [])
-                        c_timeline = _iface_throughput_timeline(ctb, interval_seconds=chart_interval_seconds)
+                        c_timeline, _, _ = _iface_throughput_timeline(
+                            ctb, interval_seconds=chart_interval_seconds, lte_ms=lte_ms
+                        )
                         chart_data = []
                         for pt in c_timeline:
                             if pt.in_mbps is not None:
