@@ -202,7 +202,7 @@ export interface RawFlowRecord {
 // ── Interface Stats v2.0 ─────────────────────────────────────────
 
 export interface InterfaceTimelinePoint { timestamp: number; in_mbps: number | null; out_mbps: number | null; }
-export interface InterfaceStatsItem { if_index: string; if_name: string; label: string; current_in_mbps: number | null; current_out_mbps: number | null; total_in_bytes: number; total_out_bytes: number; speed_mbps: number | null; oper_status: number | null; timeline: InterfaceTimelinePoint[]; }
+export interface InterfaceStatsItem { if_index: string; if_name: string; label: string; avg_in_mbps: number | null; avg_out_mbps: number | null; total_in_bytes: number; total_out_bytes: number; speed_mbps: number | null; oper_status: number | null; timeline: InterfaceTimelinePoint[]; }
 export interface InterfaceStatsData { interfaces: InterfaceStatsItem[]; }
 
 // ── HA Status ────────────────────────────────────────────────────

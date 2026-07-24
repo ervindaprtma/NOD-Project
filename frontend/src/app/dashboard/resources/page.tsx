@@ -719,22 +719,22 @@ function InterfaceBandwidthCard({ iface, onRangeSelect }: { iface: InterfaceStat
 
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-blue-50 dark:bg-blue-950/20 rounded-lg p-3 text-center">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Inbound</p>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Avg Inbound</p>
           <p className="text-lg font-bold text-blue-600 dark:text-blue-400">
-            {iface.current_in_mbps != null
-              ? iface.current_in_mbps >= 1000
-                ? `${(iface.current_in_mbps / 1000).toFixed(1)} Gbps`
-                : `${iface.current_in_mbps.toFixed(1)} Mbps`
+            {iface.avg_in_mbps != null
+              ? iface.avg_in_mbps >= 1000
+                ? `${(iface.avg_in_mbps / 1000).toFixed(1)} Gbps`
+                : `${iface.avg_in_mbps.toFixed(1)} Mbps`
               : "—"}
           </p>
         </div>
         <div className="bg-orange-50 dark:bg-orange-950/20 rounded-lg p-3 text-center">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Outbound</p>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Avg Outbound</p>
           <p className="text-lg font-bold text-orange-600 dark:text-orange-400">
-            {iface.current_out_mbps != null
-              ? iface.current_out_mbps >= 1000
-                ? `${(iface.current_out_mbps / 1000).toFixed(1)} Gbps`
-                : `${iface.current_out_mbps.toFixed(1)} Mbps`
+            {iface.avg_out_mbps != null
+              ? iface.avg_out_mbps >= 1000
+                ? `${(iface.avg_out_mbps / 1000).toFixed(1)} Gbps`
+                : `${iface.avg_out_mbps.toFixed(1)} Mbps`
               : "—"}
           </p>
         </div>
