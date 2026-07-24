@@ -1,10 +1,10 @@
 """
-The Interface Bandwidth summary must average across the selected range.
+The Interface Bandwidth summary reports Avg / Peak / Last across the range.
 
-It previously reported the last non-null sample, so a quiet final bucket made
+Avg previously reported the last non-null sample, so a quiet final bucket made
 a busy link look idle (WAN LinkNet over 1h: 0.63 Mbps shown vs 9.79 actual).
 """
-from app.api.interface_stats import InterfaceTimelinePoint, _mean_value
+from app.api.interface_stats import InterfaceTimelinePoint, _summarize
 
 
 def _tl(*vals):
@@ -12,15 +12,20 @@ def _tl(*vals):
             for i, v in enumerate(vals)]
 
 
-def test_mean_not_last_sample():
-    assert _mean_value(_tl(10.0, 20.0, 30.0, 0.0), "in_mbps") == 15.0
+def test_avg_is_the_mean_not_the_last_sample():
+    assert _summarize(_tl(10.0, 20.0, 30.0, 0.0), "in_mbps") == (15.0, 30.0, 0.0)
+
+
+def test_last_is_final_bucket_not_peak():
+    """The regression that started this: a quiet tail must not become the headline."""
+    assert _summarize(_tl(10.0, 90.0, 0.6), "in_mbps") == (33.53, 90.0, 0.6)
 
 
 def test_gaps_are_skipped_not_counted_as_zero():
-    """Counter resets and the seeded first bucket emit None — they must not drag the mean down."""
-    assert _mean_value(_tl(10.0, None, 20.0), "in_mbps") == 15.0
+    """Counter resets and the seeded first bucket emit None — max() would also raise on them."""
+    assert _summarize(_tl(10.0, None, 20.0), "in_mbps") == (15.0, 20.0, 20.0)
 
 
 def test_no_data_is_none_not_zero():
-    assert _mean_value([], "in_mbps") is None
-    assert _mean_value(_tl(None, None), "in_mbps") is None
+    assert _summarize([], "in_mbps") == (None, None, None)
+    assert _summarize(_tl(None, None), "in_mbps") == (None, None, None)
