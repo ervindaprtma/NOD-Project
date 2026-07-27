@@ -17,6 +17,7 @@ from app.opensearch.query import safe_search
 # session is yesterday's, closed). A gap over GAP splits a reconnect (rule 2); a
 # run whose last sample is older than GAP is "ended" (rule 3).
 SESSION_GAP_MS: int = 5 * 60 * 1000
+SESSION_MAX_MS: int = 9 * 60 * 60 * 1000   # SSL VPN sessions cap at 9h — a longer run is split
 _BUCKET_MS: int = 60_000
 _WIB_OFFSET_MS: int = 7 * 60 * 60 * 1000
 _BUCKET_MS_OF: dict[str, int] = {"60s": 60_000, "2m": 120_000, "5m": 300_000}
@@ -44,34 +45,46 @@ def sessionize(
     cannot see (§3.5b). When the duration field is present it also fixes the exact
     login second in `_session`.
 
-    Pure — no cluster. `user_buckets` maps username -> list of date_histogram
-    bucket-start epoch-ms. Returns one dict per session:
-    {username, session_started, last_seen, bytes_in, bytes_out, status}.
+    Pure — no cluster. `user_buckets` maps (username, device) -> list of
+    date_histogram bucket-start epoch-ms; keying on device keeps a user's sessions
+    on different FortiGates separate. Returns one dict per session:
+    {username, device, session_started, last_seen, bytes_in, bytes_out, status}.
     """
     sessions: list[dict] = []
-    for user, raw in user_buckets.items():
+    for key, raw in user_buckets.items():
         stamps = sorted(raw)
         if not stamps:
             continue
-        durs = (dur_by_bucket or {}).get(user, {})
+        durs = (dur_by_bucket or {}).get(key, {})
         run = [stamps[0]]
+        run_capped = False   # was the current run's start created by a 9h cap split?
         for ts in stamps[1:]:
             prev = run[-1]
             # session_duration is monotonic within one login, so any decrease is a reset.
             reset = ts in durs and prev in durs and durs[ts] < durs[prev]
-            if ts - prev > gap_ms or _wib_day(ts) != _wib_day(prev) or reset:
-                sessions.append(_session(user, run, now_ms, gap_ms, bucket_ms, bytes_by_bucket, durs))
+            real_split = ts - prev > gap_ms or _wib_day(ts) != _wib_day(prev) or reset
+            # A run longer than the 9h cap must be more than one session (the firewall
+            # caps at 9h; if its counter never reset, split on wall-clock instead).
+            over_max = ts - run[0] > SESSION_MAX_MS
+            if real_split or over_max:
+                sessions.append(_session(key, run, now_ms, gap_ms, bucket_ms,
+                                         bytes_by_bucket, durs, run_capped))
                 run = [ts]
+                # A pure cap split is the SAME login continuing — its duration still
+                # points at the original login, so don't use it for the exact start.
+                run_capped = over_max and not real_split
             else:
                 run.append(ts)
-        sessions.append(_session(user, run, now_ms, gap_ms, bucket_ms, bytes_by_bucket, durs))
+        sessions.append(_session(key, run, now_ms, gap_ms, bucket_ms,
+                                 bytes_by_bucket, durs, run_capped))
     return sessions
 
 
-def _session(user, run, now_ms, gap_ms, bucket_ms, bytes_by_bucket, durs=None) -> dict:
+def _session(key, run, now_ms, gap_ms, bucket_ms, bytes_by_bucket, durs=None, capped=False) -> dict:
+    username, device = key
     last_seen = run[-1] + bucket_ms          # bucket start + interval ≈ last activity edge
     started = run[0]
-    if durs and run[-1] in durs:
+    if durs and run[-1] in durs and not capped:
         # Exact login from the device's session age: login = last_sample − duration.
         # Clamped to 00:00 WIB (rule 1) and to the first observed bucket so it never
         # reports a start after the first sample.
@@ -80,12 +93,13 @@ def _session(user, run, now_ms, gap_ms, bucket_ms, bytes_by_bucket, durs=None) -
         started = max(day0, min(exact, run[0] + bucket_ms))
     b_in = b_out = 0
     if bytes_by_bucket is not None:
-        vals = [bytes_by_bucket[user][t] for t in run if t in bytes_by_bucket.get(user, {})]
+        vals = [bytes_by_bucket[key][t] for t in run if t in bytes_by_bucket.get(key, {})]
         if vals:                              # counter is cumulative per session -> the run's max
             b_in = max(v[0] for v in vals)
             b_out = max(v[1] for v in vals)
     return {
-        "username": user,
+        "username": username,
+        "device": device,
         "session_started": started,
         "last_seen": last_seen,
         "bytes_in": b_in,
@@ -104,13 +118,18 @@ async def fetch_session_buckets(
     bytes_out_field: str,
     bucket: str = "60s",
     dur_field: str | None = None,
-) -> tuple[dict[str, list[int]], dict[str, dict[int, tuple[int, int]]], dict[str, dict[int, int]]]:
-    """Composite agg over (username, 60s bucket) — paginates, so it never trips
-    search.max_buckets no matter how many users are online. When `dur_field` is
-    given, also captures the max device-reported session age per bucket."""
-    times: dict[str, list[int]] = defaultdict(list)
-    byb: dict[str, dict[int, tuple[int, int]]] = defaultdict(dict)
-    durs: dict[str, dict[int, int]] = defaultdict(dict)
+) -> tuple[
+    dict[tuple[str, str], list[int]],
+    dict[tuple[str, str], dict[int, tuple[int, int]]],
+    dict[tuple[str, str], dict[int, int]],
+]:
+    """Composite agg over (username, device, 60s bucket) — paginates, so it never
+    trips search.max_buckets no matter how many users are online. Keyed by
+    (username, device) so a user's sessions on different FortiGates stay separate.
+    When `dur_field` is given, also captures the max session age per bucket."""
+    times: dict[tuple[str, str], list[int]] = defaultdict(list)
+    byb: dict[tuple[str, str], dict[int, tuple[int, int]]] = defaultdict(dict)
+    durs: dict[tuple[str, str], dict[int, int]] = defaultdict(dict)
     after: dict | None = None
     for _ in range(500):  # ponytail: hard page cap so a broken after_key can't loop forever
         sub_aggs: dict = {
@@ -124,6 +143,7 @@ async def fetch_session_buckets(
                 "size": 1000,
                 "sources": [
                     {"user": {"terms": {"field": "tag.username.keyword"}}},
+                    {"device": {"terms": {"field": "tag.device.keyword", "missing_bucket": True}}},
                     {"t": {"date_histogram": {"field": "@timestamp", "fixed_interval": bucket}}},
                 ],
             },
@@ -141,15 +161,15 @@ async def fetch_session_buckets(
         agg = (await safe_search(client, index, body)).get("aggregations", {}).get("s", {})
         buckets = agg.get("buckets", [])
         for b in buckets:
-            user = b["key"]["user"]
+            key = (b["key"]["user"], b["key"].get("device") or "")
             ts = int(b["key"]["t"])
-            times[user].append(ts)
-            byb[user][ts] = (int((b.get("bin") or {}).get("value") or 0),
-                             int((b.get("bout") or {}).get("value") or 0))
+            times[key].append(ts)
+            byb[key][ts] = (int((b.get("bin") or {}).get("value") or 0),
+                            int((b.get("bout") or {}).get("value") or 0))
             if dur_field:
                 dv = (b.get("dur") or {}).get("value")
                 if dv is not None:
-                    durs[user][ts] = int(dv)
+                    durs[key][ts] = int(dv)
         after = agg.get("after_key")
         if not after or not buckets:
             break

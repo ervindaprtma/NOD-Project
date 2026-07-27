@@ -20,6 +20,7 @@ interface IPsecUser {
 interface VPNSessionHistoryItem {
   username: string;
   protocol: string;
+  device: string;
   site: string;
   session_started: number;
   last_seen: number;
@@ -31,13 +32,14 @@ interface VPNSessionHistoryItem {
 type SectionId = "ssl" | "ipsec";
 
 function fmtTs(ts: number): string {
-  const d = new Date(ts);
-  const now = Date.now();
-  // within 24h → time only; older → date + time
-  if (now - ts < 86_400_000) {
-    return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  }
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  // Always date + time + WIB. Session logic is WIB-based (midnight cuts, 9h cap),
+  // so pin the display to WIB and always show the date — a bare time is ambiguous
+  // across days (a session's start and end could land on different dates).
+  return new Date(ts).toLocaleString("en-US", {
+    timeZone: "Asia/Jakarta",
+    month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }) + " WIB";
 }
 
 export default function VPNPage() {
@@ -51,6 +53,11 @@ export default function VPNPage() {
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);
   const prevIntervalRef = useRef(DEFAULT_REFRESH_MS);
+
+  // Session History filters (client-side over the fetched rows)
+  const [fUser, setFUser] = useState("");
+  const [fType, setFType] = useState("all");     // all | SSL VPN | IPsec VPN
+  const [fDevice, setFDevice] = useState("all"); // all | <device>
 
   const token = typeof window !== "undefined" ? getAccessToken() : null;
 
@@ -98,6 +105,18 @@ export default function VPNPage() {
   const sslUsers = sslData?.data || [];
   const ipsecUsers = ipsecData?.data || [];
   const history = historyData?.data || null;
+
+  // Devices present in the fetched rows, for the Device dropdown.
+  const deviceOptions = Array.from(
+    new Set((history || []).map((h) => h.device).filter(Boolean))
+  ).sort();
+  // Apply the three filters client-side.
+  const filteredHistory = (history || []).filter(
+    (h) =>
+      (fType === "all" || h.protocol === fType) &&
+      (fDevice === "all" || h.device === fDevice) &&
+      (fUser === "" || h.username.toLowerCase().includes(fUser.trim().toLowerCase()))
+  );
 
   function handlePreset(seconds: number, label: string) {
     const now = Date.now();
@@ -279,11 +298,49 @@ export default function VPNPage() {
 
       {/* Session History Section */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-lg font-semibold">Session History</h2>
           <span className="text-[11px] text-muted-foreground">
-            Selected range · split at 00:00 WIB — {history ? `${history.length} session${history.length !== 1 ? "s" : ""}` : ""}
+            Selected range · split at 00:00 WIB — {history ? `${filteredHistory.length} of ${history.length} session${history.length !== 1 ? "s" : ""}` : ""}
           </span>
+        </div>
+
+        {/* Filters: username / type / device */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="text"
+            value={fUser}
+            onChange={(e) => setFUser(e.target.value)}
+            placeholder="Filter username…"
+            className="h-8 px-2 text-xs border rounded-md bg-background w-44 focus:outline-none focus:ring-1 focus:ring-primary/30"
+          />
+          <select
+            value={fType}
+            onChange={(e) => setFType(e.target.value)}
+            className="h-8 px-2 text-xs border rounded-md bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary/30"
+          >
+            <option value="all">All types</option>
+            <option value="SSL VPN">SSL VPN</option>
+            <option value="IPsec VPN">IPsec VPN</option>
+          </select>
+          <select
+            value={fDevice}
+            onChange={(e) => setFDevice(e.target.value)}
+            className="h-8 px-2 text-xs border rounded-md bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary/30"
+          >
+            <option value="all">All devices</option>
+            {deviceOptions.map((d) => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
+          {(fUser || fType !== "all" || fDevice !== "all") && (
+            <button
+              onClick={() => { setFUser(""); setFType("all"); setFDevice("all"); }}
+              className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground border rounded-md"
+            >
+              Clear
+            </button>
+          )}
         </div>
 
         {historyErr && (
@@ -293,7 +350,7 @@ export default function VPNPage() {
         )}
 
         <div className="bg-card border rounded-lg overflow-hidden">
-          <SessionHistoryTable items={history} loading={historyLoading} error={!!historyErr} />
+          <SessionHistoryTable items={filteredHistory} loading={historyLoading} error={!!historyErr} />
         </div>
       </div>
 
@@ -388,6 +445,7 @@ function SessionHistoryTable({
           <tr className="border-b bg-muted/50 text-muted-foreground">
             <th className={`text-left ${cell}`}>Username</th>
             <th className={`text-left ${cell}`}>Type</th>
+            <th className={`text-left ${cell}`}>Device</th>
             <th className={`text-left ${cell}`}>Session Started</th>
             <th className={`text-left ${cell}`}>Last Seen</th>
             <th className={`text-right ${cell}`}>Bytes In</th>
@@ -399,14 +457,14 @@ function SessionHistoryTable({
           {loading ? (
             Array.from({ length: 4 }).map((_, i) => (
               <tr key={i} className="border-b animate-pulse">
-                {[1, 2, 3, 4, 5, 6, 7].map((j) => (
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((j) => (
                   <td key={j} className={cell}><div className="h-3 bg-muted rounded" /></td>
                 ))}
               </tr>
             ))
           ) : !items || items.length === 0 ? (
             <tr>
-              <td colSpan={7} className="py-10 text-center text-muted-foreground">
+              <td colSpan={8} className="py-10 text-center text-muted-foreground">
                 No VPN sessions in this range
               </td>
             </tr>
@@ -424,6 +482,7 @@ function SessionHistoryTable({
                     {h.protocol === "SSL VPN" ? "SSL" : "IPsec"}
                   </span>
                 </td>
+                <td className={`${cell} font-mono text-[11px]`}>{h.device || "—"}</td>
                 <td className={`${cell} font-mono text-[11px]`}>{fmtTs(h.session_started)}</td>
                 <td className={`${cell} font-mono text-[11px]`}>{fmtTs(h.last_seen)}</td>
                 <td className={`${cell} text-right font-mono`}>{formatBytes(h.bytes_in)}</td>

@@ -147,6 +147,7 @@ async def get_vpn_sessions_history(
         VPNSessionHistoryItem(
             username=h["username"],
             protocol="SSL VPN",
+            device=h["device"],
             site=site_name,
             session_started=h["session_started"],
             last_seen=h["last_seen"],
@@ -159,6 +160,7 @@ async def get_vpn_sessions_history(
         VPNSessionHistoryItem(
             username=h["username"],
             protocol="IPsec VPN",
+            device=h["device"],
             site="",
             session_started=h["session_started"],
             last_seen=h["last_seen"],
