@@ -279,6 +279,81 @@ cat backup_20260620.sql | docker compose exec -T db psql -U nod_user nod_db
 
 ---
 
+### Migrate to a New VM / Host (keep credentials + sessions + logs)
+
+Moves all state — user password hashes, active sessions, activity logs, and
+encrypted notification secrets — to a new host with **no credential loss and no
+forced re-login** (when the domain stays the same).
+
+**Where the state lives:**
+
+| State | Location |
+|---|---|
+| User passwords | Postgres `users.hashed_password` — **bcrypt** (portable, no plaintext) |
+| Sessions | `refresh_tokens` table + client `__Host-nod_refresh_token` cookie (access tokens are stateless JWT, not stored) |
+| Activity / session logs | `user_activity_logs` table |
+| Notification secrets | `notification_configs` — **Fernet-encrypted with a key derived from `JWT_SECRET`** |
+| All DB data | Docker volume `network_project_postgres_data` |
+| Secrets | `.env` (gitignored) — `JWT_SECRET`, `POSTGRES_PASSWORD`, `OPENSEARCH_*`, notifier tokens |
+| TLS + proxy | `nginx/certs/*`, `nginx/nginx.conf` (tracked in git) |
+
+> ⚠️ **`JWT_SECRET` MUST be carried over verbatim.** It signs every session token
+> *and* derives the key that encrypts `notification_configs`. Change it and you
+> invalidate all sessions **and** permanently corrupt the stored notification
+> secrets. `POSTGRES_PASSWORD` must also match the migrated data.
+
+**On the OLD host:**
+
+```bash
+cd /path/to/network_project
+# Full logical dump (custom format) — users+hashes, refresh_tokens, activity logs,
+# notification_configs, and alembic_version all travel together.
+docker compose exec -T db pg_dump -U nod_user -d nod_db -Fc > nod_db.dump
+
+# Bundle the secrets git will NOT carry (certs + nginx.conf come with `git clone`).
+tar czf nod_secrets.tgz .env
+```
+
+Copy `nod_db.dump` and `nod_secrets.tgz` to the new host (scp/rsync).
+
+**On the NEW host:**
+
+```bash
+git clone https://github.com/ervindaprtma/NOD-Project.git network_project
+cd network_project
+tar xzf /path/nod_secrets.tgz            # restores .env verbatim (JWT_SECRET intact)
+
+docker compose up -d db                  # inits an empty volume using POSTGRES_PASSWORD from .env
+# wait until db is healthy, then restore INTO the fresh db (before backend/alembic runs):
+docker compose exec -T db pg_restore -U nod_user -d nod_db --clean --if-exists < nod_db.dump
+
+docker compose up -d --build             # backend's `alembic upgrade head` is a no-op (dump is already at head)
+```
+
+Verify: `curl -sk https://localhost/health` → all `ok`, and existing users log in
+with their **existing** passwords.
+
+**Alternative — byte-exact volume copy** (only if the new host runs the *same*
+Postgres major version, 15). `pg_dump` above is version-safe and preferred.
+
+```bash
+# OLD (stack stopped): tar the volume
+docker compose down
+docker run --rm -v network_project_postgres_data:/d -v "$PWD":/b alpine tar czf /b/pgdata.tgz -C /d .
+# NEW: recreate the volume from the tarball, then `docker compose up -d --build`
+docker volume create network_project_postgres_data
+docker run --rm -v network_project_postgres_data:/d -v "$PWD":/b alpine sh -c 'cd /d && tar xzf /b/pgdata.tgz'
+```
+
+**Notes**
+- Same domain (`nod.esign.id`) **+** same `JWT_SECRET` → active sessions survive
+  (the refresh cookie still validates). Different domain → users simply re-login;
+  no stored data is lost either way.
+- Point DNS at the new host and confirm it can reach the OpenSearch clusters
+  (`10.80.150.108`, `10.90.150.108`) before going live.
+
+---
+
 ## Check Logs
 
 ### View Logs

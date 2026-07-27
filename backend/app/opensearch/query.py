@@ -182,6 +182,8 @@ async def spread_long_sessions(
     gte_ms: int,
     lte_ms: int,
     key_filter_values: list | None = None,
+    name_of: Callable[[dict], str] | None = None,
+    source_fields: list[str] | None = None,
 ) -> None:
     """Re-distribute long sessions' bytes across their active window, in place.
 
@@ -192,6 +194,12 @@ async def spread_long_sessions(
     are touched. `key_filter_values` optionally restricts the fetch to those raw keys
     (cheaper when the caller knows the global top set). Bytes are conserved within the
     visible window; the pre-window slice of a session that started earlier is dropped.
+
+    For the hybrid service dimension a single doc field isn't enough — the series name is
+    resolve_service(application.name, port). Pass `name_of` (a callable over the hit
+    `_source`) plus `source_fields` (the fields it reads); when given, they override the
+    `key_field`/`key_name` single-field path so the re-spread lines up with the charted
+    series. `key_filter_values` is ignored in that mode (charted_names still gates).
     """
     from app.opensearch._common import FLOW_INDEX
 
@@ -205,15 +213,16 @@ async def spread_long_sessions(
         return lo <= t and (t + W) <= lte_ms  # matches drop_partial_tail (no partial tail)
 
     fetch_filter = base_filter + [{"range": {"flow.bytes": {"gte": _SPREAD_MIN_BYTES}}}]
-    if key_filter_values:
+    if key_filter_values and name_of is None:
         fetch_filter.append({"terms": {key_field: key_filter_values}})
 
+    src = source_fields if (name_of is not None and source_fields is not None) else [key_field]
     resp = await safe_search(client, FLOW_INDEX, {
         "size": _SPREAD_CAP,
         "timeout": "115s",
         "query": {"bool": {"filter": fetch_filter}},
         "sort": [{"flow.bytes": "desc"}],
-        "_source": ["flow.client.bytes", "flow.server.bytes", "flow.start.ms", "flow.end.ms", key_field],
+        "_source": ["flow.client.bytes", "flow.server.bytes", "flow.start.ms", "flow.end.ms", *src],
         "docvalue_fields": [{"field": "@timestamp", "format": "epoch_millis"}],
     })
     hits = resp.get("hits", {}).get("hits", [])
@@ -228,7 +237,7 @@ async def spread_long_sessions(
         b = float(int(s.get("flow.client.bytes", 0) or 0) + int(s.get("flow.server.bytes", 0) or 0))
         if b <= 0:
             continue
-        name = key_name(s.get(key_field))
+        name = name_of(s) if name_of is not None else key_name(s.get(key_field))
         if name not in charted_names:
             continue  # not a charted series — its bytes aren't shown anyway
         try:

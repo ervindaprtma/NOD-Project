@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
@@ -25,7 +26,7 @@ def _fmt(n: int) -> str:
     elif n < 1024**2:
         return f"{n / 1024:.1f} KB"
     elif n < 1024**3:
-        return f"{n / 1024**3:.2f} MB"
+        return f"{n / 1024**2:.2f} MB"
     else:
         return f"{n / 1024**3:.2f} GB"
 
@@ -108,25 +109,45 @@ async def get_ipsec_sessions(
 
 @router.get("/sessions-history", response_model=APIResponse[list[VPNSessionHistoryItem]])
 async def get_vpn_sessions_history(
-    gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
-    lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
+    gte_ms: int = Query(..., description="Start of the selected range (epoch ms)"),
+    lte_ms: int = Query(..., description="End of the selected range (epoch ms)"),
     site_name: str = Query(default="Site_FGT-DC_SSLVPN", description="SSL VPN measurement_name"),
     current_user=Depends(get_current_user),
 ):
-    """VPN session history across full window — no 60s clamp.
-    Returns merged SSL + IPsec list sorted by session_started desc.
+    """VPN sessions for the day(s) the selected range covers, one row per session.
+
+    A daily view: the range picks WHICH DAYS to show; every session on those days is
+    returned (not just the ones live at a sub-day window edge — that hid earlier
+    sessions when the page defaulted to a 15m preset). Sessions are cut at 00:00 WIB
+    (never span midnight — rule 1), split on a >5min log gap (reconnect — rule 2), and
+    end after >5min of silence (rule 3). We fetch from the WIB start-of-day of `gte_ms`
+    so each session's TRUE start is visible; buckets coarsen on wide ranges for speed.
     """
     t0 = time.monotonic()
 
+    wib = timezone(timedelta(hours=7))
+    day_start = datetime.fromtimestamp(gte_ms / 1000, wib).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    fetch_gte = int(day_start.timestamp() * 1000)
+    now_ms = int(datetime.now(wib).timestamp() * 1000)
+    # 60s ≤ 24h span keeps minute precision; wider ranges use 2m to cap bucket count
+    # (still fine for the 5min gap threshold), never coarser or reconnects blur.
+    bucket = "60s" if (lte_ms - fetch_gte) <= 86_400_000 else "2m"
+
     ssl_hist, ipsec_hist = await asyncio.gather(
-        sslvpn_qb.sslvpn_session_history(gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name),
-        ipsec_qb.ipsec_session_history(gte_ms=gte_ms, lte_ms=lte_ms),
+        sslvpn_qb.sslvpn_session_history(
+            gte_ms=fetch_gte, lte_ms=lte_ms, site_name=site_name,
+            now_ms=now_ms, bucket=bucket),
+        ipsec_qb.ipsec_session_history(
+            gte_ms=fetch_gte, lte_ms=lte_ms,
+            now_ms=now_ms, bucket=bucket),
     )
 
     merged = [
         VPNSessionHistoryItem(
             username=h["username"],
             protocol="SSL VPN",
+            device=h["device"],
             site=site_name,
             session_started=h["session_started"],
             last_seen=h["last_seen"],
@@ -139,6 +160,7 @@ async def get_vpn_sessions_history(
         VPNSessionHistoryItem(
             username=h["username"],
             protocol="IPsec VPN",
+            device=h["device"],
             site="",
             session_started=h["session_started"],
             last_seen=h["last_seen"],

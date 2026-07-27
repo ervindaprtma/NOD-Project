@@ -8,6 +8,13 @@ from __future__ import annotations
 from opensearchpy import AsyncOpenSearch
 from app.opensearch.client import get_ipsec_client
 from app.opensearch.query import safe_search
+from app.opensearch.sslvpn import (
+    _BUCKET_MS,
+    _BUCKET_MS_OF,
+    SESSION_GAP_MS,
+    fetch_session_buckets,
+    sessionize,
+)
 
 
 def _ipsec_filters(gte_ms: int, lte_ms: int) -> list[dict]:
@@ -154,38 +161,17 @@ async def ipsec_session_history(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,
     lte_ms: int = 0,
+    now_ms: int | None = None,
+    gap_ms: int = SESSION_GAP_MS,
+    bucket: str = "60s",
 ) -> list[dict]:
-    """Q-05: terms agg + min/max @timestamp per user for IPsec session history."""
+    """Per-session IPsec history — same reconstruction as SSL (gap-split, day-bounded)."""
     if client is None:
         client = get_ipsec_client()
-
-    body = {
-        "size": 0,
-        "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms)}},
-        "aggs": {
-            "by_user": {
-                "terms": {"field": "tag.username.keyword", "size": 500},
-                "aggs": {
-                    "session_started": {"min": {"field": "@timestamp"}},
-                    "last_seen": {"max": {"field": "@timestamp"}},
-                    "bytes_in": {"max": {"field": "ipsec_normalized.bytes_in"}},
-                    "bytes_out": {"max": {"field": "ipsec_normalized.bytes_out"}},
-                },
-            }
-        },
-    }
-
-    resp = await safe_search(client, "ipsec-*", body)
-    active_cutoff = lte_ms - 60_000
-    return [
-        {
-            "username": bucket["key"],
-            "session_started": int(bucket["session_started"]["value"]),
-            "last_seen": int(bucket["last_seen"]["value"]),
-            "bytes_in": int(bucket["bytes_in"]["value"] or 0),
-            "bytes_out": int(bucket["bytes_out"]["value"] or 0),
-            "status": "active" if int(bucket["last_seen"]["value"]) >= active_cutoff else "ended",
-        }
-        for bucket in resp.get("aggregations", {}).get("by_user", {}).get("buckets", [])
-        if bucket["doc_count"] > 0
-    ]
+    times, byb, durs = await fetch_session_buckets(
+        client, "ipsec-*", [], gte_ms, lte_ms,
+        "ipsec_normalized.bytes_in", "ipsec_normalized.bytes_out",
+        bucket=bucket, dur_field="ipsec_normalized.session_duration_seconds",
+    )
+    return sessionize(times, now_ms if now_ms is not None else lte_ms,
+                      gap_ms, _BUCKET_MS_OF.get(bucket, _BUCKET_MS), byb, durs)

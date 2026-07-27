@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 class TopServiceItem(BaseModel):
     service_name: str
-    service_port: int | str = 0
+    service_port: int | None = None  # None when the label is an AppID name, not a port
     total_bytes: int
     speed_mbps: float
     percentage: float

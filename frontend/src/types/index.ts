@@ -205,6 +205,76 @@ export interface InterfaceTimelinePoint { timestamp: number; in_mbps: number | n
 export interface InterfaceStatsItem { if_index: string; if_name: string; label: string; avg_in_mbps: number | null; avg_out_mbps: number | null; peak_in_mbps: number | null; peak_out_mbps: number | null; last_in_mbps: number | null; last_out_mbps: number | null; total_in_bytes: number; total_out_bytes: number; speed_mbps: number | null; oper_status: number | null; timeline: InterfaceTimelinePoint[]; }
 export interface InterfaceStatsData { interfaces: InterfaceStatsItem[]; }
 
+// ── Device Availability (device_uptime) ────────────────────────────
+// availability_pct is nullable on purpose: null means "unknown" (no basis to
+// judge), never 0% — a device onboarded mid-window is not an outage.
+
+export type DeviceStatus = "up" | "rebooted" | "not_reporting" | "collector_gap";
+
+export interface DeviceAvailabilityPoint {
+  ts_ms: number;
+  uptime_seconds: number | null;   // null = no poll landed in this bucket
+  polls: number;
+  expected: number;
+  availability_pct: number | null; // null = device could not have reported here
+  reboot: boolean;
+  collector_gap: boolean;
+}
+
+export interface RebootEvent {
+  at_ms: number;
+  downtime_seconds: number;
+  note: string | null;             // set for a 32-bit counter wrap — not an outage
+}
+
+export interface CollectorGap { start_ms: number; end_ms: number; duration_seconds: number; }
+
+export interface DeviceAvailabilityItem {
+  device_key: string;              // tag.source (IP) — stable; hostnames get renamed
+  hostname: string;
+  vendor: string;
+  site: string;
+  status: DeviceStatus;
+  sys_uptime_ticks: number;
+  uptime_seconds: number;
+  uptime_human_long: string;       // "7 days 10 hours 5 minutes"
+  uptime_human_short: string;      // "7d 10h"
+  boot_time_ms: number;
+  first_seen_ms: number | null;
+  last_seen_ms: number | null;
+  partial_history: boolean;        // onboarded mid-window — % clamped to its own span
+  wrap_risk: boolean;              // uptime near the ~497-day counter wrap
+  availability_pct: number | null;
+  expected_polls: number;
+  successful_polls: number;
+  excluded_collector_seconds: number;
+  reboots: RebootEvent[];
+  reboot_count: number;
+  total_downtime_seconds: number;
+  series: DeviceAvailabilityPoint[];
+}
+
+export interface DeviceAvailabilitySummary {
+  window: string;
+  window_seconds: number;
+  site: string;
+  devices_total: number;
+  devices_reporting: number;
+  devices_partial_history: number;
+  devices_with_reboots: number;
+  lowest_uptime_device: { hostname: string; uptime_seconds: number; uptime_human_short: string } | null;
+  reboots_total: number;
+  collector_gap_seconds: number;
+  collector_gaps: CollectorGap[];
+  history_start_ms: number | null;
+  history_sufficient: boolean;     // false → window reaches back further than the data
+}
+
+export interface DeviceAvailabilityData {
+  summary: DeviceAvailabilitySummary;
+  devices: DeviceAvailabilityItem[];
+}
+
 // ── HA Status ────────────────────────────────────────────────────
 
 export interface HAMember { memberIndex: number; role: string; syncStatus: string; priority: number; hostname: string; }
@@ -451,7 +521,7 @@ export interface SankeyLinkExt extends Omit<SankeyLink, "source" | "target"> {
 
 // ── Traffic Inbound v2.0 ──────────────────────────────────────────
 
-export interface TrafficInboundServiceItem { service_name: string; service_port: number | string; total_bytes: number; speed_mbps: number; percentage: number; }
+export interface TrafficInboundServiceItem { service_name: string; service_port: number | null; total_bytes: number; speed_mbps: number; percentage: number; }
 export interface TrafficInboundSummary {
   total_bytes: number;
   total_upload: number;

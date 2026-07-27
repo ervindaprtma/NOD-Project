@@ -21,6 +21,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api import (
     alerts,
     auth,
+    device_uptime,
     ha,
     interface_stats,
     logs,
@@ -201,6 +202,7 @@ app.include_router(traffic_internal.router)
 app.include_router(sdwan.router)
 app.include_router(ha.router)
 app.include_router(interface_stats.router)
+app.include_router(device_uptime.router)
 app.include_router(resources.router)
 app.include_router(vpn.router)
 app.include_router(raw_data.router)

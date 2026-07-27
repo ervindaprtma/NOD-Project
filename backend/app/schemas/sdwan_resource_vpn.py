@@ -160,6 +160,7 @@ class VPNSessionsResponse(BaseModel):
 class VPNSessionHistoryItem(BaseModel):
     username: str
     protocol: str  # "SSL VPN" | "IPsec VPN"
+    device: str = ""  # tag.device — the FortiGate the session was on (FGT-DC / FGT-DRC)
     site: str = ""
     session_started: int  # epoch ms
     last_seen: int  # epoch ms
