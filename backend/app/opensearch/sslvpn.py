@@ -29,12 +29,12 @@ def _wib_day(ms: int) -> int:
 
 
 def sessionize(
-    user_buckets: dict[str, list[int]],
+    user_buckets: dict[tuple[str, str], list[int]],
     now_ms: int,
     gap_ms: int = SESSION_GAP_MS,
     bucket_ms: int = _BUCKET_MS,
-    bytes_by_bucket: dict[str, dict[int, tuple[int, int]]] | None = None,
-    dur_by_bucket: dict[str, dict[int, int]] | None = None,
+    bytes_by_bucket: dict[tuple[str, str], dict[int, tuple[int, int]]] | None = None,
+    dur_by_bucket: dict[tuple[str, str], dict[int, int]] | None = None,
 ) -> list[dict]:
     """Split each user's minute-bucket timestamps into sessions.
 

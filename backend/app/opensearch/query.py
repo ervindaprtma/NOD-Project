@@ -216,7 +216,7 @@ async def spread_long_sessions(
     if key_filter_values and name_of is None:
         fetch_filter.append({"terms": {key_field: key_filter_values}})
 
-    src = source_fields if name_of is not None else [key_field]
+    src = source_fields if (name_of is not None and source_fields is not None) else [key_field]
     resp = await safe_search(client, FLOW_INDEX, {
         "size": _SPREAD_CAP,
         "timeout": "115s",
