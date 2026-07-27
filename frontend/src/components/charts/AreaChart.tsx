@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useId, useRef } from "react";
 import {
   AreaChart as RechartsAreaChart,
   Area,
@@ -10,6 +10,7 @@ import {
   Tooltip,
   Legend,
   ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
 } from "recharts";
 import { rangeFromIndices } from "@/lib/chartZoom";
@@ -85,6 +86,12 @@ interface AreaChartProps {
   // calls this with the mapped epoch bounds. Each datum must carry `tsMs`.
   onRangeSelect?: (gteMs: number, lteMs: number) => void;
   bucketMs?: number;
+  // Shaded x-ranges drawn behind the series — e.g. a window where no data was
+  // collected. Neutral + hatched on purpose: an absence of data is not a status,
+  // and the texture keeps it distinguishable from the drag-selection band.
+  bands?: { x1: any; x2: any; label?: string }[];
+  // Vertical event markers — e.g. a device reboot.
+  markers?: { x: any; label?: string }[];
 }
 
 // ── AreaChart Component ───────────────────────────────────────────
@@ -107,7 +114,10 @@ export function AreaChart({
   yAxisWidth = 60,
   onRangeSelect,
   bucketMs = 60_000,
+  bands,
+  markers,
 }: AreaChartProps) {
+  const hatchId = useId().replace(/:/g, "");
   const [startIdx, setStartIdx] = useState<number | null>(null);
   const [endIdx, setEndIdx] = useState<number | null>(null);
   const zoomable = !!onRangeSelect;
@@ -166,6 +176,31 @@ export function AreaChart({
           margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
           {...dragProps}
         >
+          {!!bands?.length && (
+            <defs>
+              <pattern
+                id={`hatch-${hatchId}`}
+                patternUnits="userSpaceOnUse"
+                width="6"
+                height="6"
+                patternTransform="rotate(45)"
+              >
+                <rect width="6" height="6" fill="hsl(var(--muted-foreground))" fillOpacity={0.08} />
+                <line x1="0" y1="0" x2="0" y2="6" stroke="hsl(var(--muted-foreground))" strokeWidth="2" strokeOpacity={0.28} />
+              </pattern>
+            </defs>
+          )}
+          {/* Behind the series: a gap is context, not data. */}
+          {bands?.map((b, i) => (
+            <ReferenceArea
+              key={`band-${i}`}
+              x1={b.x1}
+              x2={b.x2}
+              strokeOpacity={0}
+              fill={`url(#hatch-${hatchId})`}
+              label={b.label ? { value: b.label, position: "insideTop", fontSize: 9, fill: "hsl(var(--muted-foreground))" } : undefined}
+            />
+          ))}
           {showGridLines && (
             <CartesianGrid
               strokeDasharray="3 3"
@@ -196,6 +231,14 @@ export function AreaChart({
           )}
           <Tooltip
             content={<DefaultTooltip valueFormatter={valueFormatter} />}
+            // Explicit hover crosshair so the point under the pointer is obvious
+            // before you start dragging — the default is easy to miss on a short plot.
+            cursor={{
+              stroke: "hsl(var(--muted-foreground))",
+              strokeWidth: 1,
+              strokeDasharray: "3 3",
+              strokeOpacity: 0.6,
+            }}
           />
           {showLegend && categories.length > 1 && (
             <Legend
@@ -218,8 +261,31 @@ export function AreaChart({
               activeDot={{ r: 4, strokeWidth: 0 }}
             />
           ))}
+          {markers?.map((m, i) => (
+            <ReferenceLine
+              key={`marker-${i}`}
+              x={m.x}
+              stroke="hsl(var(--chart-2))"
+              strokeDasharray="3 3"
+              strokeWidth={1.5}
+              label={m.label ? { value: m.label, position: "top", fontSize: 9, fill: "hsl(var(--chart-2))" } : undefined}
+            />
+          ))}
           {zoomable && bandLeft != null && bandRight != null && bandLeft !== bandRight && (
-            <ReferenceArea x1={bandLeft} x2={bandRight} strokeOpacity={0} fill="hsl(var(--chart-1))" fillOpacity={0.15} />
+            // The drag selection is chrome, not data: it wears the primary/UI hue
+            // with a dashed border rather than a series colour, so it stays legible
+            // whatever the series underneath is (blue on Bandwidth, emerald on
+            // Availability) and never reads as another measurement.
+            <ReferenceArea
+              x1={bandLeft}
+              x2={bandRight}
+              fill="hsl(var(--primary))"
+              fillOpacity={0.16}
+              stroke="hsl(var(--primary))"
+              strokeOpacity={0.55}
+              strokeWidth={1}
+              strokeDasharray="3 3"
+            />
           )}
         </RechartsAreaChart>
       </ResponsiveContainer>

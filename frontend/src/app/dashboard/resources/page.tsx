@@ -2,10 +2,10 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import useSWR from "swr";
-import { swrFetcher, getAccessToken } from "@/lib/api";
+import { swrFetcher, getAccessToken, apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatPercent, formatNumber, getDefaultTimeRange, TAB_TRIGGER_CLASS, formatBucketLabelWIB } from "@/lib/constants";
-import type { ResourceData, HAStatusData, InterfaceStatsData, InterfaceStatsItem } from "@/types";
+import type { ResourceData, HAStatusData, InterfaceStatsData, InterfaceStatsItem, DeviceAvailabilityData, DeviceAvailabilityItem } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import { AreaChart } from "@/components/charts/AreaChart";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
@@ -21,7 +21,44 @@ const SITE_BADGES: Record<string, string> = {
 };
 
 // ── Tab index ─────────────────────────────────────────────────────
-type TabIndex = 0 | 1;
+type TabIndex = 0 | 1 | 2;
+
+const TAB_VALUES = ["resources", "bandwidth", "availability"] as const;
+
+// Availability is an SLA-period concept, so it owns its own window rather than
+// the page's 15m–24h presets.
+const AVAILABILITY_WINDOWS = [
+  { id: "24h", label: "24h", seconds: 86_400 },
+  { id: "7d", label: "7d", seconds: 604_800 },
+  { id: "30d", label: "30d", seconds: 2_592_000 },
+  { id: "90d", label: "90d", seconds: 7_776_000 },
+  { id: "365d", label: "365d", seconds: 31_536_000 },
+] as const;
+
+// Status chips are icon + text, never colour alone.
+const DEVICE_STATUS_STYLE: Record<string, { label: string; icon: string; cls: string }> = {
+  up: { label: "Up", icon: "●", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
+  rebooted: { label: "Rebooted", icon: "⟳", cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
+  not_reporting: { label: "Not reporting", icon: "◌", cls: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400" },
+  collector_gap: { label: "Collector gap", icon: "▨", cls: "bg-muted text-muted-foreground" },
+};
+
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function formatWIB(ms: number | null): string {
+  if (!ms) return "—";
+  return new Date(ms).toLocaleString("en-GB", {
+    timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
 
 export default function ResourcesPage() {
   const defaultRange = getDefaultTimeRange();
@@ -36,6 +73,9 @@ export default function ResourcesPage() {
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);
   const [tabIndex, setTabIndex] = useState<TabIndex>(0);
+  const [availWindow, setAvailWindow] = useState<string>("24h");
+  // Drag-to-zoom on the availability charts narrows the query to a sub-range.
+  const [availZoom, setAvailZoom] = useState<{ gteMs: number; lteMs: number } | null>(null);
   const prevIntervalRef = useRef(DEFAULT_REFRESH_MS);
 
   const token = typeof window !== "undefined" ? getAccessToken() : null;
@@ -98,6 +138,27 @@ export default function ResourcesPage() {
   );
 
   const ifStats = ifStatsData?.data?.interfaces ?? [];
+
+  // Device Availability (Tab 3) — its own window, independent of the page presets.
+  const availSwrKey = token && tabIndex === 2
+    ? availZoom
+      ? `/api/v1/device-uptime?site_name=${siteName}&gte_ms=${availZoom.gteMs}&lte_ms=${availZoom.lteMs}`
+      : `/api/v1/device-uptime?site_name=${siteName}&window=${availWindow}`
+    : null;
+
+  // Availability windows span up to 365d over telegraf-index*, which can take far
+  // longer than the 30s default — the backend itself waits ~115s. Give the client
+  // a longer leash so a slow-but-successful query isn't aborted into a false error.
+  const { data: availData, error: availError, isLoading: availLoading, isValidating: availValidating, mutate: mutateAvail } =
+    useSWR<{ data: DeviceAvailabilityData; meta: { query_took_ms: number; degraded?: boolean } }>(
+      availSwrKey,
+      (url: string) => apiFetch<{ data: DeviceAvailabilityData; meta: { query_took_ms: number; degraded?: boolean } }>(url, { timeoutMs: 120_000 }),
+      { refreshInterval: 0 }
+    );
+
+  const availability = availData?.data;
+  const availDevices: DeviceAvailabilityItem[] = availability?.devices ?? [];
+  const availSummary = availability?.summary;
 
   const deviceIDs = [...new Set([
     ...(resources?.timeline?.cpu || []).map((d) => d.device),
@@ -286,38 +347,42 @@ export default function ResourcesPage() {
           )}>
             {SITE_BADGES[siteName] || siteName}
           </span>
-          <div className="flex gap-1 bg-muted rounded-md p-1">
-            {TIME_PRESETS.map((p) => (
+          {/* Availability owns its own SLA-period window selector, so the page
+              time-range presets don't apply there — hide them on that tab. */}
+          {TAB_VALUES[tabIndex] !== "availability" && (
+            <div className="flex gap-1 bg-muted rounded-md p-1">
+              {TIME_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  onClick={() => handlePreset(p.seconds, p.label)}
+                  className={cn(
+                    "px-2.5 py-1 text-xs rounded-sm transition-colors",
+                    selectedPreset === p.label
+                      ? "bg-background text-foreground shadow ring-1 ring-black/5 dark:ring-white/20"
+                      : "text-muted-foreground hover:text-foreground hover:bg-background/50 dark:hover:bg-background/20"
+                  )}
+                >
+                  {p.label}
+                </button>
+              ))}
               <button
-                key={p.label}
-                onClick={() => handlePreset(p.seconds, p.label)}
+                onClick={() => setShowCustomPicker(true)}
                 className={cn(
                   "px-2.5 py-1 text-xs rounded-sm transition-colors",
-                  selectedPreset === p.label
+                  selectedPreset === "custom"
                     ? "bg-background text-foreground shadow ring-1 ring-black/5 dark:ring-white/20"
                     : "text-muted-foreground hover:text-foreground hover:bg-background/50 dark:hover:bg-background/20"
                 )}
+                title={customRangeLabel || "Select custom date/time range"}
               >
-                {p.label}
+                {selectedPreset === "custom" && customRangeLabel
+                  ? customRangeLabel.length > 20
+                    ? customRangeLabel.slice(0, 18) + "…"
+                    : customRangeLabel
+                  : "Custom"}
               </button>
-            ))}
-            <button
-              onClick={() => setShowCustomPicker(true)}
-              className={cn(
-                "px-2.5 py-1 text-xs rounded-sm transition-colors",
-                selectedPreset === "custom"
-                  ? "bg-background text-foreground shadow ring-1 ring-black/5 dark:ring-white/20"
-                  : "text-muted-foreground hover:text-foreground hover:bg-background/50 dark:hover:bg-background/20"
-              )}
-              title={customRangeLabel || "Select custom date/time range"}
-            >
-              {selectedPreset === "custom" && customRangeLabel
-                ? customRangeLabel.length > 20
-                  ? customRangeLabel.slice(0, 18) + "…"
-                  : customRangeLabel
-                : "Custom"}
-            </button>
-          </div>
+            </div>
+          )}
           {isZoomed && (
             <button
               onClick={resetZoom}
@@ -352,10 +417,14 @@ export default function ResourcesPage() {
       )}
 
       {/* ── Tab Group ────────────────────────────────────────────── */}
-      <Tabs value={tabIndex === 0 ? "resources" : "bandwidth"} onValueChange={(val) => setTabIndex(val === "resources" ? 0 : 1)}>
+      <Tabs
+        value={TAB_VALUES[tabIndex]}
+        onValueChange={(val) => setTabIndex(Math.max(0, TAB_VALUES.indexOf(val as typeof TAB_VALUES[number])) as TabIndex)}
+      >
         <TabsList className="mb-4 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex">
           <TabsTrigger value="resources" className={TAB_TRIGGER_CLASS}>Resource Usage</TabsTrigger>
           <TabsTrigger value="bandwidth" className={TAB_TRIGGER_CLASS}>Interface Bandwidth</TabsTrigger>
+          <TabsTrigger value="availability" className={TAB_TRIGGER_CLASS}>Availability</TabsTrigger>
         </TabsList>
 
           {/* ════════════════════════════════════════════════════════
@@ -649,6 +718,251 @@ export default function ResourcesPage() {
               )}
             </div>
           </TabsContent>
+
+          {/* ── Tab 3: Device Availability ─────────────────────────── */}
+          <TabsContent value="availability">
+            <div className="space-y-4">
+              {/* Window selector — owns its own range, not the page presets */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-muted-foreground mr-1">Window</span>
+                {AVAILABILITY_WINDOWS.map((w) => (
+                  <button
+                    key={w.id}
+                    onClick={() => setAvailWindow(w.id)}
+                    className={cn(
+                      "px-2.5 py-1 text-xs rounded-md border transition-colors",
+                      availWindow === w.id
+                        ? "bg-primary/10 text-primary border-primary/30 font-medium"
+                        : "bg-card text-muted-foreground border-border/60 hover:bg-muted/50"
+                    )}
+                  >
+                    {w.label}
+                  </button>
+                ))}
+                {availSummary && !availSummary.history_sufficient && !availZoom && (
+                  <span className="text-xs text-amber-600 dark:text-amber-400 ml-1">
+                    ⚠ history starts {formatWIB(availSummary.history_start_ms)} — longer windows are
+                    clamped to available data
+                  </span>
+                )}
+              </div>
+
+              {/* Zoomed: every figure below is for the selection, not the window —
+                  say so rather than let a dragged range masquerade as the SLA. */}
+              {availZoom && (
+                <div className="flex items-center gap-3 flex-wrap rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
+                  <span className="text-xs text-foreground">
+                    Showing selection{" "}
+                    <span className="font-medium">
+                      {formatWIB(availZoom.gteMs)} → {formatWIB(availZoom.lteMs)}
+                    </span>{" "}
+                    — figures below are for this range, not the {availWindow} window.
+                  </span>
+                  <button
+                    onClick={() => setAvailZoom(null)}
+                    className="text-xs px-2 py-1 rounded-md border border-border/60 bg-card hover:bg-muted/50"
+                  >
+                    ⟲ Reset zoom
+                  </button>
+                </div>
+              )}
+
+              {availLoading && (
+                <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg p-8 text-center">
+                  <p className="text-sm text-muted-foreground">Loading device availability…</p>
+                </div>
+              )}
+
+              {availError && (
+                <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg p-8 text-center space-y-3">
+                  <p className="text-sm text-destructive">
+                    Couldn&apos;t load device availability
+                    {(availError as { message?: string })?.message ? ` — ${(availError as { message?: string }).message}` : "."}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Wider windows (30d–365d) query a lot of data and can time out. Try again, or pick a shorter window.
+                  </p>
+                  <button
+                    onClick={() => mutateAvail()}
+                    disabled={availValidating}
+                    className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1.5 text-xs font-medium hover:bg-muted/50 transition-colors disabled:opacity-50"
+                  >
+                    {availValidating ? "Retrying…" : "↻ Retry"}
+                  </button>
+                </div>
+              )}
+
+              {/* Backend answered but the data source was slow/unavailable (safe_search
+                  returns an empty skeleton on timeout, flagged via meta.degraded). Say so
+                  and offer a retry instead of silently showing "no devices". */}
+              {!availLoading && !availError && availData?.meta?.degraded && (
+                <div className="rounded-lg border border-amber-300/60 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-900/20 p-4 flex items-center justify-between gap-3 flex-wrap">
+                  <p className="text-sm text-amber-800 dark:text-amber-300">
+                    ⚠ The data source was slow or unavailable for this window — results may be
+                    incomplete.
+                  </p>
+                  <button
+                    onClick={() => mutateAvail()}
+                    disabled={availValidating}
+                    className="inline-flex items-center gap-1 rounded-md border border-amber-400/60 px-3 py-1.5 text-xs font-medium text-amber-800 dark:text-amber-300 hover:bg-amber-100/60 dark:hover:bg-amber-900/30 transition-colors disabled:opacity-50"
+                  >
+                    {availValidating ? "Retrying…" : "↻ Retry"}
+                  </button>
+                </div>
+              )}
+
+              {!availLoading && !availError && availSummary && (
+                <>
+                  {/* Summary — counts, not a fleet average (availability is per device) */}
+                  <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg p-4 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20">
+                    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                      <span className="font-medium">
+                        {availSummary.devices_reporting} / {availSummary.devices_total} reporting
+                      </span>
+                      <span className="text-muted-foreground">
+                        {availSummary.reboots_total} reboot{availSummary.reboots_total === 1 ? "" : "s"}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {availSummary.collector_gaps.length} collector gap
+                        {availSummary.collector_gaps.length === 1 ? "" : "s"}
+                        {availSummary.collector_gap_seconds > 0 &&
+                          ` (${formatDuration(availSummary.collector_gap_seconds)})`}
+                      </span>
+                      {availSummary.lowest_uptime_device && (
+                        <span className="text-muted-foreground" title="Most recently booted device — smallest uptime, not lowest availability">
+                          Lowest uptime{" "}
+                          <span className="text-foreground font-medium">
+                            {availSummary.lowest_uptime_device.hostname}{" "}
+                            {availSummary.lowest_uptime_device.uptime_human_short}
+                          </span>
+                        </span>
+                      )}
+                      {availSummary.devices_partial_history > 0 && (
+                        <span className="text-muted-foreground">
+                          {availSummary.devices_partial_history} partial history
+                        </span>
+                      )}
+                    </div>
+                    {availSummary.collector_gaps.length > 0 && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        A collector gap means no data reached us from this site — it does not by
+                        itself mean the devices were down. Gaps are excluded from availability.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Device table */}
+                  {availDevices.length === 0 ? (
+                    <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg p-8 text-center">
+                      <p className="text-sm text-muted-foreground">
+                        No devices reporting uptime for this site.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-border/60 dark:border-border/40 text-xs text-muted-foreground">
+                            <th className="text-left font-medium px-4 py-2.5">Device</th>
+                            <th className="text-left font-medium px-4 py-2.5">Vendor</th>
+                            <th className="text-left font-medium px-4 py-2.5">Status</th>
+                            <th className="text-right font-medium px-4 py-2.5">Avail %</th>
+                            <th className="text-right font-medium px-4 py-2.5">UP for</th>
+                            <th className="text-left font-medium px-4 py-2.5">Booted (WIB)</th>
+                            <th className="text-right font-medium px-4 py-2.5">Reboots</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {availDevices.map((d) => {
+                            const st = DEVICE_STATUS_STYLE[d.status] ?? DEVICE_STATUS_STYLE.up;
+                            return (
+                              <tr
+                                key={d.device_key}
+                                className="border-b border-border/40 dark:border-border/20 last:border-0 hover:bg-muted/30"
+                              >
+                                <td className="px-4 py-2.5">
+                                  <div className="font-medium">{d.hostname}</div>
+                                  <div className="text-xs text-muted-foreground">{d.device_key}</div>
+                                </td>
+                                <td className="px-4 py-2.5 text-muted-foreground">{d.vendor}</td>
+                                <td className="px-4 py-2.5">
+                                  <span
+                                    className={cn(
+                                      "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium",
+                                      st.cls
+                                    )}
+                                  >
+                                    <span aria-hidden="true">{st.icon}</span>
+                                    {st.label}
+                                  </span>
+                                  {d.partial_history && (
+                                    <span
+                                      className="ml-1 text-xs text-muted-foreground"
+                                      title="Onboarded partway through the window — availability is measured from its first sample"
+                                    >
+                                      ◐
+                                    </span>
+                                  )}
+                                  {d.wrap_risk && (
+                                    <span
+                                      className="ml-1 text-xs text-amber-600 dark:text-amber-400"
+                                      title="Uptime counter is approaching its 32-bit wrap (~497 days)"
+                                    >
+                                      ⚠
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-2.5 text-right tabular-nums">
+                                  {d.availability_pct === null ? (
+                                    <span
+                                      className="text-muted-foreground"
+                                      title="Not enough history to judge — no estimate is shown rather than a misleading one"
+                                    >
+                                      —
+                                    </span>
+                                  ) : (
+                                    `${d.availability_pct.toFixed(2)}%`
+                                  )}
+                                </td>
+                                <td className="px-4 py-2.5 text-right tabular-nums whitespace-nowrap">
+                                  {d.uptime_human_long}
+                                </td>
+                                <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
+                                  {formatWIB(d.boot_time_ms)}
+                                </td>
+                                <td className="px-4 py-2.5 text-right tabular-nums">
+                                  {d.reboot_count}
+                                  {d.total_downtime_seconds > 0 && (
+                                    <div className="text-xs text-muted-foreground">
+                                      {formatDuration(d.total_downtime_seconds)} down
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Per-device history — small multiples, one card each */}
+                  {availDevices.length > 0 && (
+                    <div className="space-y-4">
+                      {availDevices.map((d) => (
+                        <DeviceAvailabilityCard
+                          key={d.device_key}
+                          device={d}
+                          gaps={availSummary.collector_gaps}
+                          onRangeSelect={(g, l) => setAvailZoom({ gteMs: g, lteMs: l })}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </TabsContent>
       </Tabs>
 
       <TimeRangePicker
@@ -880,6 +1194,135 @@ function ResourceAreaCard({
           bucketMs={bucketMs}
         />
       </div>
+    </div>
+  );
+}
+
+// ── Device Availability card ──────────────────────────────────────
+// Small multiples: one card per device rather than 11 series on one axis.
+// Two stacked panels share the x-axis — availability and uptime are different
+// scales, and a second y-axis on one plot is the classic way to mislead.
+function DeviceAvailabilityCard({
+  device,
+  gaps,
+  onRangeSelect,
+}: {
+  device: DeviceAvailabilityItem;
+  gaps: { start_ms: number; end_ms: number; duration_seconds: number }[];
+  onRangeSelect?: (gteMs: number, lteMs: number) => void;
+}) {
+  const st = DEVICE_STATUS_STYLE[device.status] ?? DEVICE_STATUS_STYLE.up;
+
+  const chartData = device.series.map((p, i) => ({
+    // Buckets here are 15m–1d, so seconds are noise; the date matters across days.
+    timestamp: formatBucketLabelWIB(p.ts_ms, i > 0 ? device.series[i - 1].ts_ms : null, false, true),
+    tsMs: p.ts_ms,
+    // Kept only as the "has data in this bucket" gate for hasSeries; counter-based
+    // availability is 100/0/null, so it's no longer charted as its own panel.
+    Availability: p.availability_pct,
+    // Uptime in days; null in an empty bucket so the line breaks rather than
+    // drawing a straight segment across a gap it has no data for.
+    Uptime: p.uptime_seconds == null ? null : p.uptime_seconds / 86400,
+  }));
+
+  const bucketMs =
+    chartData.length > 1 ? (chartData[1].tsMs - chartData[0].tsMs) || 60_000 : 60_000;
+
+  // Map gap ranges onto bucket labels so Recharts can place them on a category axis.
+  const labelAt = (ms: number) =>
+    chartData.find((d) => d.tsMs >= ms)?.timestamp ?? chartData[chartData.length - 1]?.timestamp;
+  const bands = gaps
+    .filter((g) => g.end_ms >= (chartData[0]?.tsMs ?? 0))
+    .map((g) => ({ x1: labelAt(g.start_ms), x2: labelAt(g.end_ms), label: "collector gap" }));
+
+  // Real reboots only — a counter wrap carries a note and is not an outage.
+  const markers = device.reboots
+    .filter((r) => r.note == null)
+    .map((r) => ({ x: labelAt(r.at_ms), label: `⟳ ${Math.round(r.downtime_seconds / 60)}m` }));
+
+  const hasSeries = chartData.some((d) => d.Availability != null);
+
+  return (
+    <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-5 space-y-3">
+      {/* Header doubles as the legend: identity, uptime duration, availability */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-baseline gap-2 min-w-0">
+          <span className="text-sm font-semibold font-mono truncate" title={device.hostname}>
+            {device.hostname}
+          </span>
+          <span className="text-[11px] text-muted-foreground truncate">
+            {device.vendor} · {device.device_key}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[11px] text-muted-foreground">
+            UP for <span className="text-foreground font-medium">{device.uptime_human_long}</span>
+          </span>
+          <span className="text-[11px] tabular-nums font-medium">
+            {device.availability_pct === null ? "—" : `${device.availability_pct.toFixed(2)}%`}
+          </span>
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium",
+              st.cls
+            )}
+          >
+            <span aria-hidden="true">{st.icon}</span>
+            {st.label}
+          </span>
+        </div>
+      </div>
+
+      {!hasSeries ? (
+        <p className="text-xs text-muted-foreground py-6 text-center">
+          No samples in this range.
+        </p>
+      ) : (
+        <>
+          {/* Uptime (days). A reset to zero is a reboot; collector gaps and reboot
+              markers ride along on this panel. The former poll-success panel was
+              removed — availability is now counter-based, so its series was a flat
+              100% line; the headline % in the header carries it instead. */}
+          <div>
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
+              Uptime (days)
+            </p>
+            <div className="h-[90px]">
+              <AreaChart
+                className="h-full"
+                data={chartData}
+                index="timestamp"
+                categories={["Uptime"]}
+                colors={["blue"]}
+                valueFormatter={(v: number) => (v == null ? "—" : `${v.toFixed(1)}d`)}
+                showLegend={false}
+                showGridLines={false}
+                showXAxis={true}
+                showYAxis={true}
+                autoMinValue
+                curveType="monotone"
+                showGradient={false}
+                yAxisWidth={44}
+                tickGap={40}
+                onRangeSelect={onRangeSelect}
+                bucketMs={bucketMs}
+                bands={bands}
+                markers={markers}
+              />
+            </div>
+          </div>
+
+          <p className="text-[10px] text-muted-foreground">
+            {bucketMs >= 86_400_000
+              ? `${Math.round(bucketMs / 86_400_000)}d buckets`
+              : bucketMs >= 3_600_000
+                ? `${Math.round(bucketMs / 3_600_000)}h buckets`
+                : `${Math.round(bucketMs / 60_000)}m buckets`}
+            {" · drag to zoom"}
+            {device.partial_history && " · onboarded mid-window, measured from its first sample"}
+          </p>
+        </>
+      )}
     </div>
   );
 }
