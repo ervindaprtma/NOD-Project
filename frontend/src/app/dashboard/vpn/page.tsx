@@ -79,6 +79,8 @@ export default function VPNPage() {
   const ipsecKey = token
     ? `/api/v1/vpn/ipsec?gte_ms=${currentGteMs}&lte_ms=${currentLteMs}`
     : null;
+  // Session history follows the selected range; the server cuts sessions at 00:00
+  // WIB and reconstructs true starts from that day's samples.
   const historyKey = token
     ? `/api/v1/vpn/sessions-history?gte_ms=${currentGteMs}&lte_ms=${currentLteMs}`
     : null;
@@ -280,7 +282,7 @@ export default function VPNPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Session History</h2>
           <span className="text-[11px] text-muted-foreground">
-            Full window — {history ? `${history.length} session${history.length !== 1 ? "s" : ""}` : ""}
+            Selected range · split at 00:00 WIB — {history ? `${history.length} session${history.length !== 1 ? "s" : ""}` : ""}
           </span>
         </div>
 
@@ -405,7 +407,7 @@ function SessionHistoryTable({
           ) : !items || items.length === 0 ? (
             <tr>
               <td colSpan={7} className="py-10 text-center text-muted-foreground">
-                No session history in this time window
+                No VPN sessions in this range
               </td>
             </tr>
           ) : (
