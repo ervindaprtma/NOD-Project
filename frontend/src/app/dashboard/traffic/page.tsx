@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import useSWR from "swr";
 import * as d3Sankey from "d3-sankey";
-import { swrFetcher, getAccessToken } from "@/lib/api";
+import { swrFetcherLong, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   TIME_PRESETS,
@@ -174,7 +174,7 @@ export default function TrafficPage() {
     error: summaryError,
     isLoading: summaryLoading,
   } = useSWR<{ success: boolean; data: TrafficFlowSummary; meta: ResponseMeta | null }>(
-    summaryKey, swrFetcher, { refreshInterval: 0 }
+    summaryKey, swrFetcherLong, { refreshInterval: 0 }
   );
 
   const {
@@ -182,7 +182,7 @@ export default function TrafficPage() {
     error: chartError,
     isLoading: chartLoading,
   } = useSWR<{ success: boolean; data: TrafficFlowChartData; meta: ResponseMeta | null }>(
-    chartKey, swrFetcher, { refreshInterval: 0 }
+    chartKey, swrFetcherLong, { refreshInterval: 0 }
   );
 
   const {
@@ -190,7 +190,7 @@ export default function TrafficPage() {
     error: tableError,
     isLoading: tableLoading,
   } = useSWR<{ success: boolean; data: TrafficFlowTableData; meta: ResponseMeta | null }>(
-    tableKey, swrFetcher, { refreshInterval: 0 }
+    tableKey, swrFetcherLong, { refreshInterval: 0 }
   );
 
   const {
@@ -198,7 +198,7 @@ export default function TrafficPage() {
     error: sankeyUploadError,
     isLoading: sankeyUploadLoading,
   } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(
-    sankeyUploadKey, swrFetcher, { refreshInterval: 0 }
+    sankeyUploadKey, swrFetcherLong, { refreshInterval: 0 }
   );
 
   const {
@@ -206,7 +206,7 @@ export default function TrafficPage() {
     error: sankeyDownloadError,
     isLoading: sankeyDownloadLoading,
   } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(
-    sankeyDownloadKey, swrFetcher, { refreshInterval: 0 }
+    sankeyDownloadKey, swrFetcherLong, { refreshInterval: 0 }
   );
 
   const summary: TrafficFlowSummary | undefined = summaryEnv?.data;
@@ -460,7 +460,7 @@ export default function TrafficPage() {
 
       {/* ── Tab Navigation ── */}
       <div className="mb-4">
-        <DegradedBanner metas={[summaryEnv?.meta, chartEnv?.meta, tableEnv?.meta]} />
+        <DegradedBanner metas={[summaryEnv?.meta, chartEnv?.meta, tableEnv?.meta, sankeyUploadEnv?.meta, sankeyDownloadEnv?.meta]} />
       </div>
 
       <Tabs defaultValue={activeTab === "overview" ? "overview" : "sankey"} onValueChange={(v) => setActiveTab(v as "overview" | "sankey")}>
@@ -559,7 +559,7 @@ export default function TrafficPage() {
             {/* ═══ ROW 5 — Throughput Charts ═══ */}
             <div className="space-y-4 mb-6">
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
-                <ChartHeader title="Total Throughput Over Time" isZoomed={isZoomed} onReset={resetZoom} />
+                <ChartHeader title="Total Throughput Over Time (up + down)" isZoomed={isZoomed} onReset={resetZoom} />
                 {chartLoading ? (
                   <SkeletonChart />
                 ) : chartError ? (
@@ -584,7 +584,7 @@ export default function TrafficPage() {
                 )}
               </div>
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
-                <ChartHeader title="App Throughput (Mbps)" isZoomed={isZoomed} onReset={resetZoom} />
+                <ChartHeader title="App Throughput (Mbps, up + down)" isZoomed={isZoomed} onReset={resetZoom} />
                 {chartLoading ? (
                   <SkeletonChart />
                 ) : chartError ? (

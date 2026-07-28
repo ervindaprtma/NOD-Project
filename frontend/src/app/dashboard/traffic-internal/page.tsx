@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import useSWR from "swr";
 import * as d3Sankey from "d3-sankey";
-import { swrFetcher, getAccessToken } from "@/lib/api";
+import { swrFetcherLong, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, getDefaultTimeRange, TAB_TRIGGER_CLASS, formatBucketLabelWIB } from "@/lib/constants";
 import type { TrafficInternalSummary, TrafficInternalChartData, TrafficInternalTableData, TrafficInternalTableRecord, SankeyResponse, SankeyNodeExt, SankeyLinkExt, ResponseMeta } from "@/types";
@@ -87,11 +87,11 @@ export default function TrafficInternalPage() {
   const sankeyUploadKey = token ? `/api/v1/traffic-internal/sankey?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&direction=upload${filterQS}` : null;
   const sankeyDownloadKey = token ? `/api/v1/traffic-internal/sankey?site_name=${siteName}&gte_ms=${currentGteMs}&lte_ms=${currentLteMs}&direction=download${filterQS}` : null;
 
-  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ success: boolean; data: TrafficInternalSummary; meta: ResponseMeta | null }>(summaryKey, swrFetcher, { refreshInterval: 0 });
-  const { data: chartEnv, error: chartError, isLoading: chartLoading } = useSWR<{ success: boolean; data: TrafficInternalChartData; meta: ResponseMeta | null }>(chartKey, swrFetcher, { refreshInterval: 0 });
-  const { data: tableEnv, error: tableError, isLoading: tableLoading } = useSWR<{ success: boolean; data: TrafficInternalTableData; meta: ResponseMeta | null }>(tableKey, swrFetcher, { refreshInterval: 0 });
-  const { data: sankeyUploadEnv, error: sankeyUploadError, isLoading: sankeyUploadLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyUploadKey, swrFetcher, { refreshInterval: 0 });
-  const { data: sankeyDownloadEnv, error: sankeyDownloadError, isLoading: sankeyDownloadLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyDownloadKey, swrFetcher, { refreshInterval: 0 });
+  const { data: summaryEnv, error: summaryError, isLoading: summaryLoading } = useSWR<{ success: boolean; data: TrafficInternalSummary; meta: ResponseMeta | null }>(summaryKey, swrFetcherLong, { refreshInterval: 0 });
+  const { data: chartEnv, error: chartError, isLoading: chartLoading } = useSWR<{ success: boolean; data: TrafficInternalChartData; meta: ResponseMeta | null }>(chartKey, swrFetcherLong, { refreshInterval: 0 });
+  const { data: tableEnv, error: tableError, isLoading: tableLoading } = useSWR<{ success: boolean; data: TrafficInternalTableData; meta: ResponseMeta | null }>(tableKey, swrFetcherLong, { refreshInterval: 0 });
+  const { data: sankeyUploadEnv, error: sankeyUploadError, isLoading: sankeyUploadLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyUploadKey, swrFetcherLong, { refreshInterval: 0 });
+  const { data: sankeyDownloadEnv, error: sankeyDownloadError, isLoading: sankeyDownloadLoading } = useSWR<{ success: boolean; data: SankeyResponse; meta: ResponseMeta | null }>(sankeyDownloadKey, swrFetcherLong, { refreshInterval: 0 });
 
   const summary: TrafficInternalSummary | undefined = summaryEnv?.data;
   const chart: TrafficInternalChartData | undefined = chartEnv?.data;
@@ -216,7 +216,7 @@ export default function TrafficInternalPage() {
       </div>
 
       <div className="mb-4">
-        <DegradedBanner metas={[summaryEnv?.meta, chartEnv?.meta, tableEnv?.meta]} />
+        <DegradedBanner metas={[summaryEnv?.meta, chartEnv?.meta, tableEnv?.meta, sankeyUploadEnv?.meta, sankeyDownloadEnv?.meta]} />
       </div>
 
       <Tabs defaultValue="overview">
@@ -253,14 +253,14 @@ export default function TrafficInternalPage() {
             {/* ROW 4 — Charts */}
             <div className="space-y-4 mb-6">
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
-                <ChartHeader title="Total Throughput Over Time" isZoomed={isZoomed} onReset={resetZoom} />
+                <ChartHeader title="Total Throughput Over Time (up + down)" isZoomed={isZoomed} onReset={resetZoom} />
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText /> : throughputTimeline.length > 0 ? (
                     <AreaChart data={throughputTimeline} categories={["mbps"]} index="timestamp" colors={["#3b82f6"]} showLegend={false} showGridLines={true} showXAxis={true} showYAxis={true} className="h-72"
                       onRangeSelect={applyBrushRange} bucketMs={(chart?.bucket_seconds || bucketSeconds) * 1000} />
                   ) : <EmptyState message="No throughput data" />}
               </div>
               <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
-                <ChartHeader title={`Service Throughput — ${chart?.bucket_seconds ?? bucketSeconds}s Buckets`} isZoomed={isZoomed} onReset={resetZoom} />
+                <ChartHeader title={`Service Throughput — ${chart?.bucket_seconds ?? bucketSeconds}s Buckets (up + down)`} isZoomed={isZoomed} onReset={resetZoom} />
                 {chartLoading ? <SkeletonChart /> : chartError ? <ErrorText /> : chart?.chart_data?.length ? (
                   <StackedBarChart data={(() => { const divSec = chart.bucket_seconds || bucketSeconds; let p: number | null = null; return chart.chart_data.map((row) => { const ms = typeof row.timestampMs === "number" ? row.timestampMs : (row.timestamp ? new Date(row.timestamp).getTime() : 0); const entry: Record<string, any> = { timestamp: ms ? formatBucketLabelWIB(ms, p) : row.timestamp, tsMs: ms }; p = ms || p; for (const svc of chart.service_names || []) { entry[svc] = parseFloat(((Number(row[svc]) || 0) * 8 / divSec / 1_000_000).toFixed(2)); } return entry; }); })()} serviceNames={chart.service_names || []} onRangeSelect={applyBrushRange} bucketMs={(chart?.bucket_seconds || bucketSeconds) * 1000} />
                 ) : <EmptyState message="No service throughput data" />}

@@ -250,6 +250,11 @@ export async function apiFetch<T = unknown>(
 // SWR fetcher
 export const swrFetcher = <T = unknown>(url: string) => apiFetch<T>(url);
 
+// For OpenSearch-heavy pages (traffic charts run multi-pass aggs; the backend waits
+// up to 115s) — outlast it so a slow-but-successful query isn't aborted client-side
+// into a false error at the 30s default.
+export const swrFetcherLong = <T = unknown>(url: string) => apiFetch<T>(url, { timeoutMs: 120_000 });
+
 export { ApiError };
 export default apiFetch;
 
