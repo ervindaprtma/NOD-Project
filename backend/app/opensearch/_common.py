@@ -284,7 +284,12 @@ def service_histogram_aggs(interval_str: str, app_top: list[str], port_top: list
                 "aggs": _bytes_sum(),
             }},
         }
-    return {"date_histogram": {"field": "@timestamp", "fixed_interval": interval_str}, "aggs": inner}
+    # min_doc_count=1 (matches traffic_flow): default 0 makes the date_histogram emit empty
+    # buckets that can extend well before gte (observed ~90min of spurious empty pre-window
+    # buckets), inflating bucket count and the chart x-axis. Real in-window slots a long flow
+    # is active in are re-created by spread_long_sessions' setdefault, so the leading-edge fill
+    # is unaffected.
+    return {"date_histogram": {"field": "@timestamp", "fixed_interval": interval_str, "min_doc_count": 1}, "aggs": inner}
 
 
 def collapse_chart_bucket(bucket: dict) -> dict[str, float]:
