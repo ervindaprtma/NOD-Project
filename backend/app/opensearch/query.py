@@ -163,7 +163,13 @@ def drop_partial_tail(buckets: list[dict], bucket_seconds: int, lte_ms: int) -> 
 # (flow.start.ms → flow.end.ms). Bounded + cheap: only sessions large enough to distort a
 # bucket are candidates, sorted by bytes, capped.
 _SPREAD_CAP = 6000
-_SPREAD_MIN_BYTES = 10_000_000  # 10 MB / 60s ≈ 1.3 Mbps — below this a session can't spike
+_SPREAD_MIN_BYTES = 1_000_000  # 1 MB. NOT a spike threshold — the `dur > W` check below is the
+# real eligibility gate; this is only a fetch-cost bound so we don't sort millions of tiny flows.
+# Lowered from 10 MB so small-but-long boundary sessions (RDP/DB/API keepalives that start before
+# the window and close inside it) also get re-spread across their active buckets, instead of
+# dumping their whole byte count into their close bucket and starving the leading/trailing edges.
+# ponytail: size-6000 fetch is sorted by bytes desc, so in a very busy window flows below the
+# 6000th-largest stay in the base histogram (logged when the cap is hit) — dedicated boundary pass if that ceiling ever bites.
 # Above this bucket size the spread is skipped: wide buckets (long time ranges) already
 # average session-close spikes away, so almost no session exceeds one bucket — the fix
 # would do nothing while still paying for a big sorted fetch. Keeps large-timeframe charts
@@ -212,7 +218,22 @@ async def spread_long_sessions(
     def _valid(t: int) -> bool:
         return lo <= t and (t + W) <= lte_ms  # matches drop_partial_tail (no partial tail)
 
-    fetch_filter = base_filter + [{"range": {"flow.bytes": {"gte": _SPREAD_MIN_BYTES}}}]
+    # Fetch by ACTIVITY OVERLAP, not @timestamp (= flow close/log time). A long flow
+    # active near a window edge usually closes just OUTSIDE [gte,lte], so the @timestamp
+    # filter drops it entirely and its in-window activity never reaches the trailing (or
+    # leading) buckets — measured ~72% of the last interim-interval's bytes lost. Overlap
+    # (start ≤ lte AND end ≥ gte) catches it. No double-count: such a flow's close bucket
+    # is outside bucket_svc, so the lump-removal below is a no-op, and the base histogram
+    # (still @timestamp-scoped) never counted it.
+    fetch_filter = [
+        f for f in base_filter
+        if not (isinstance(f, dict) and "range" in f and "@timestamp" in f["range"])
+    ]
+    fetch_filter += [
+        {"range": {"flow.bytes": {"gte": _SPREAD_MIN_BYTES}}},
+        {"range": {"flow.start.ms": {"lte": lte_ms}}},
+        {"range": {"flow.end.ms": {"gte": gte_ms}}},
+    ]
     if key_filter_values and name_of is None:
         fetch_filter.append({"terms": {key_field: key_filter_values}})
 
