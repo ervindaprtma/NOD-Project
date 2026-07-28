@@ -163,7 +163,13 @@ def drop_partial_tail(buckets: list[dict], bucket_seconds: int, lte_ms: int) -> 
 # (flow.start.ms → flow.end.ms). Bounded + cheap: only sessions large enough to distort a
 # bucket are candidates, sorted by bytes, capped.
 _SPREAD_CAP = 6000
-_SPREAD_MIN_BYTES = 10_000_000  # 10 MB / 60s ≈ 1.3 Mbps — below this a session can't spike
+_SPREAD_MIN_BYTES = 1_000_000  # 1 MB. NOT a spike threshold — the `dur > W` check below is the
+# real eligibility gate; this is only a fetch-cost bound so we don't sort millions of tiny flows.
+# Lowered from 10 MB so small-but-long boundary sessions (RDP/DB/API keepalives that start before
+# the window and close inside it) also get re-spread across their active buckets, instead of
+# dumping their whole byte count into their close bucket and starving the leading/trailing edges.
+# ponytail: size-6000 fetch is sorted by bytes desc, so in a very busy window flows below the
+# 6000th-largest stay in the base histogram (logged when the cap is hit) — dedicated boundary pass if that ceiling ever bites.
 # Above this bucket size the spread is skipped: wide buckets (long time ranges) already
 # average session-close spikes away, so almost no session exceeds one bucket — the fix
 # would do nothing while still paying for a big sorted fetch. Keeps large-timeframe charts
@@ -212,7 +218,22 @@ async def spread_long_sessions(
     def _valid(t: int) -> bool:
         return lo <= t and (t + W) <= lte_ms  # matches drop_partial_tail (no partial tail)
 
-    fetch_filter = base_filter + [{"range": {"flow.bytes": {"gte": _SPREAD_MIN_BYTES}}}]
+    # Fetch by ACTIVITY OVERLAP, not @timestamp (= flow close/log time). A long flow
+    # active near a window edge usually closes just OUTSIDE [gte,lte], so the @timestamp
+    # filter drops it entirely and its in-window activity never reaches the trailing (or
+    # leading) buckets — measured ~72% of the last interim-interval's bytes lost. Overlap
+    # (start ≤ lte AND end ≥ gte) catches it. No double-count: such a flow's close bucket
+    # is outside bucket_svc, so the lump-removal below is a no-op, and the base histogram
+    # (still @timestamp-scoped) never counted it.
+    fetch_filter = [
+        f for f in base_filter
+        if not (isinstance(f, dict) and "range" in f and "@timestamp" in f["range"])
+    ]
+    fetch_filter += [
+        {"range": {"flow.bytes": {"gte": _SPREAD_MIN_BYTES}}},
+        {"range": {"flow.start.ms": {"lte": lte_ms}}},
+        {"range": {"flow.end.ms": {"gte": gte_ms}}},
+    ]
     if key_filter_values and name_of is None:
         fetch_filter.append({"terms": {key_field: key_filter_values}})
 
@@ -260,6 +281,58 @@ async def spread_long_sessions(
             t += W
     if len(hits) >= _SPREAD_CAP:
         logger.info("spread_long_sessions: cap %d hit — smaller long sessions left in base", _SPREAD_CAP)
+
+
+async def log_zero_bucket_anomaly(
+    client: Any,
+    base_filter: list[dict],
+    *,
+    site_name: str,
+    traffic_path: str,
+    gte_ms: int,
+    lte_ms: int,
+    bucket_seconds: int,
+) -> None:
+    """Diagnostic-only: a chart came back with no non-zero buckets. Run a cheap
+    activity-overlap count and log ONLY when data actually exists (hits > 0) and the
+    chart query itself did NOT degrade — i.e. data is present for this exact filter+window
+    but never landed in a bucket (a logic/ingestion anomaly), as opposed to a genuinely
+    quiet window (hits == 0) or a known degraded read.
+
+    The probe runs in its own degradation_scope so that if THIS query fails it can never
+    flip the user's response to degraded. Cheap: size:0 count, and only on empty charts.
+    """
+    from app.opensearch._common import FLOW_INDEX
+
+    if _degraded_sink.get():
+        return  # chart already degraded — the zero is explained; nothing to diagnose
+
+    # Same @timestamp-stripped overlap predicate the spread fetch uses: "does any flow
+    # active in [gte,lte] exist for this filter set, regardless of close time?"
+    overlap = [
+        f for f in base_filter
+        if not (isinstance(f, dict) and "range" in f and "@timestamp" in f["range"])
+    ]
+    overlap += [
+        {"range": {"flow.start.ms": {"lte": lte_ms}}},
+        {"range": {"flow.end.ms": {"gte": gte_ms}}},
+    ]
+    with degradation_scope() as diag_sink:
+        resp = await safe_search(
+            client, FLOW_INDEX,
+            {"size": 0, "track_total_hits": True, "query": {"bool": {"filter": overlap}}},
+        )
+    if diag_sink or resp.get("_timed_out") or resp.get("_error"):
+        return  # the probe itself was unreliable — inconclusive, don't cry wolf
+
+    total = resp.get("hits", {}).get("total", {})
+    total_hits = total.get("value", 0) if isinstance(total, dict) else int(total or 0)
+    if total_hits > 0:
+        logger.warning(
+            "zero-bucket anomaly: chart empty but data exists — site=%s traffic_path=%s "
+            "gte_ms=%d lte_ms=%d bucket_seconds=%d total_hits=%d degraded=%s",
+            site_name, traffic_path, gte_ms, lte_ms, bucket_seconds, total_hits, False,
+        )
 
 
 async def safe_search(
