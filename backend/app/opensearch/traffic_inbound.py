@@ -17,7 +17,7 @@ from app.opensearch._common import (
     resolve_top_services, service_histogram_aggs, collapse_chart_bucket,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
-from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions
+from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
 
 SITE_SOURCE_IPS: dict[str, str] = {
     "Site_FGT-DC": "10.80.150.1",
@@ -242,6 +242,8 @@ async def flow_chart(
     app_buckets = top_resp["aggregations"].get("top_services", {}).get("buckets", [])
     charted_names, app_top, port_top, unclassified_labels = resolve_top_services(app_buckets, top_n)
     if not charted_names:
+        await log_zero_bucket_anomaly(client, base_filter, site_name=site_name,
+            traffic_path=path_filter, gte_ms=gte_ms, lte_ms=lte_ms, bucket_seconds=bucket_seconds)
         return {"chart_data": [], "service_names": [], "bucket_seconds": bucket_seconds}
 
     # Pass B: per-bucket values pinned to that top-N (by_app + unclassified-scoped by_port).

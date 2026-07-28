@@ -15,7 +15,7 @@ from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _multi_wildcard, _bytes_sum, BYTES_DESC,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
-from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions
+from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
 
 
 # ── Site config ──────────────────────────────────────────────────
@@ -300,6 +300,9 @@ async def flow_chart(
 
     # Sort by total bytes descending (not alphabetically) so frontend gets top apps first
     sorted_apps = [name for name, _ in sorted(app_totals.items(), key=lambda x: -x[1])]
+    if not app_totals:
+        await log_zero_bucket_anomaly(client, base_filter, site_name=site_name,
+            traffic_path=path_filter, gte_ms=gte_ms, lte_ms=lte_ms, bucket_seconds=bucket_seconds)
     return {"chart_data": chart_data, "app_names": sorted_apps, "bucket_seconds": bucket_seconds}
 
 
