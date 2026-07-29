@@ -25,7 +25,13 @@ def upgrade() -> None:
     bind = op.get_bind()
     existing = {c["name"] for c in sa.inspect(bind).get_columns("report_jobs")}
     if "sla_thresholds" not in existing:
-        op.add_column("report_jobs", sa.Column("sla_thresholds", JSONB, nullable=True))
+        op.add_column(
+            "report_jobs",
+            sa.Column(
+                "sla_thresholds", JSONB, nullable=True,
+                comment="R-04 only: {wan:{latency,jitter,packet_loss}, mpls:{...}} SLA ceilings",
+            ),
+        )
 
 
 def downgrade() -> None:
