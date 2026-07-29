@@ -317,18 +317,28 @@ def generate_docx_report(context: dict[str, Any], output_path: Path) -> Path:
     sla = rd.get("sdwan_sla", {})
     if sla:
         _add_heading_styled(doc, "SD-WAN SLA", level=2)
-        sla_links = sla.get("links", [])
-        if sla_links:
-            headers = ["Link", "Packet Loss", "Latency", "Status"]
+        thr = sla.get("thresholds") or {}
+        if thr:
+            def _thr_line(t):
+                t = t or {}
+                fmt = lambda v: "—" if v is None else v  # noqa: E731
+                return f"Latency ≤ {fmt(t.get('latency'))}ms · Jitter ≤ {fmt(t.get('jitter'))}ms · Loss ≤ {fmt(t.get('packet_loss'))}%"
+            doc.add_paragraph(f"SLA thresholds — WAN: {_thr_line(thr.get('wan'))}  |  MPLS: {_thr_line(thr.get('mpls'))}").paragraph_format.space_after = Pt(6)
+        summary = sla.get("sla_summary", [])
+        if summary:
+            headers = ["Site", "Link", "Type", "Latency (ms)", "Jitter (ms)", "Loss (%)", "SLA"]
             rows = []
-            for link in sla_links:
+            for s in summary:
                 rows.append([
-                    link.get("name", "—"),
-                    f"{link.get('packet_loss', 0):.2f}%" if isinstance(link.get("packet_loss"), (int, float)) else str(link.get("packet_loss", "—")),
-                    f"{link.get('latency_ms', 0):.1f} ms" if isinstance(link.get("latency_ms"), (int, float)) else str(link.get("latency_ms", "—")),
-                    link.get("status", "—"),
+                    s.get("site", "—"),
+                    s.get("link", "—"),
+                    s.get("link_type", "—"),
+                    f"{s.get('avg_latency', 0):.1f}",
+                    f"{s.get('avg_jitter', 0):.1f}",
+                    f"{s.get('avg_packet_loss', 0):.2f}",
+                    s.get("sla_compliance", "—"),
                 ])
-            _add_data_table(doc, headers, rows, col_widths=[1.5, 1.5, 1.5, 1.0])
+            _add_data_table(doc, headers, rows, col_widths=[0.7, 0.9, 0.6, 0.9, 0.9, 0.8, 0.9])
 
     # ── R-05 / R-08: Traffic Inbound ──────────────────────────────
     ti = rd.get("traffic_inbound", {})

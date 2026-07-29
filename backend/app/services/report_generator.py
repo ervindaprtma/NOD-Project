@@ -529,6 +529,45 @@ def render_compliance_gauge(
 # 3. CONTEXT BUILDER — produces report_data dict matching template macros
 # ══════════════════════════════════════════════════════════════════════════
 
+def _sla_link_compliance(
+    link_type: str,
+    avg_latency: float,
+    avg_jitter: float,
+    avg_packet_loss: float,
+    thresholds: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Judge one SD-WAN link against its type's SLA ceilings (R-04).
+
+    Higher is worse for all three metrics, so a breach is value > threshold. A metric
+    with no threshold set is not evaluated. With no thresholds at all for the link type,
+    falls back to the legacy 'packet loss ≥ 1%' rule so R-07/R-08 (no form) are unchanged.
+    """
+    tkey = "mpls" if str(link_type).upper() == "MPLS" else "wan"
+    t = (thresholds or {}).get(tkey) or {}
+    lat_t, jit_t, pl_t = t.get("latency"), t.get("jitter"), t.get("packet_loss")
+
+    lat_breach = lat_t is not None and avg_latency > lat_t
+    jit_breach = jit_t is not None and avg_jitter > jit_t
+    pl_breach = pl_t is not None and avg_packet_loss > pl_t
+
+    has_thresholds = any(v is not None for v in (lat_t, jit_t, pl_t))
+    if has_thresholds:
+        compliance = "Breached" if (lat_breach or jit_breach or pl_breach) else "Met"
+    else:
+        compliance = "Breached" if avg_packet_loss >= 1.0 else "Met"
+
+    return {
+        "sla_compliance": compliance,
+        "latency_threshold": lat_t,
+        "jitter_threshold": jit_t,
+        "packet_loss_threshold": pl_t,
+        "latency_breached": lat_breach,
+        "jitter_breached": jit_breach,
+        "packet_loss_breached": pl_breach,
+        "has_thresholds": has_thresholds,
+    }
+
+
 async def build_report_context(
     report_type: str,
     gte_ms: int,
@@ -536,6 +575,7 @@ async def build_report_context(
     sites: list[str] | None = None,
     sections: list[str] | None = None,
     table_interval: str | None = None,
+    sla_thresholds: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Fetch all required data from OpenSearch and build the full
@@ -1215,7 +1255,7 @@ async def build_report_context(
                         avg_jit    = jitters[i]         if i < len(jitters)       else 0.0
                         avg_pl     = packet_losses[i]   if i < len(packet_losses) else 0.0
 
-                        sla_summaries.append({
+                        row = {
                             "site": _site_label(site),
                             "site_id": site,
                             "link": link_label,
@@ -1223,8 +1263,11 @@ async def build_report_context(
                             "avg_latency": round(float(avg_lat), 1),
                             "avg_jitter": round(float(avg_jit), 1),
                             "avg_packet_loss": round(float(avg_pl), 2),
-                            "sla_compliance": "Met" if float(avg_pl) < 1.0 else "Breached",
-                        })
+                        }
+                        row.update(_sla_link_compliance(
+                            link_type, float(avg_lat), float(avg_jit), float(avg_pl), sla_thresholds
+                        ))
+                        sla_summaries.append(row)
 
                 # Link status cards — one card per link (all links per site),
                 # not just the primary link. Reuse already-fetched summary.
@@ -1270,6 +1313,8 @@ async def build_report_context(
                 sla["sla_summary"] = sla_summaries
             if sla_timelines:
                 sla["sla_timelines"] = sla_timelines
+            if sla_thresholds:
+                sla["thresholds"] = sla_thresholds
 
         except Exception as exc:
             logger.error("R-04 data fetch failed: %s", exc, exc_info=True)
@@ -2247,6 +2292,7 @@ async def _generate_multi_site_report(job, sites_ordered: list[str], gte_ms: int
             sites=[site],
             sections=job.sections,
             table_interval=getattr(job, "table_interval", None),
+            sla_thresholds=getattr(job, "sla_thresholds", None),
         )
 
         # Metadata
@@ -2339,6 +2385,7 @@ async def generate_report(job) -> str:
                     lte_ms=lte_ms,
                     sites=sites_ordered,
                     table_interval=getattr(job, "table_interval", None),
+                    sla_thresholds=getattr(job, "sla_thresholds", None),
                     sections=job.sections,
                 )
                 _apply_metadata(context, job)
@@ -2356,6 +2403,7 @@ async def generate_report(job) -> str:
         sites=sites_ordered,
         sections=job.sections,
         table_interval=getattr(job, "table_interval", None),
+        sla_thresholds=getattr(job, "sla_thresholds", None),
     )
 
     _apply_metadata(context, job)

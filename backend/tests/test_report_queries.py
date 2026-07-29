@@ -10,7 +10,12 @@ import pytest
 
 from app.api.interface_stats import _compute_throughput_timeline
 from app.opensearch import device_uptime, ipsec, sslvpn, traffic_inbound, traffic_internal
-from app.services.report_generator import _auto_interval_str, _report_title, build_report_context
+from app.services.report_generator import (
+    _auto_interval_str,
+    _report_title,
+    _sla_link_compliance,
+    build_report_context,
+)
 
 
 def test_interface_timeline_returns_triple():
@@ -93,6 +98,35 @@ async def test_r10_reads_window_from_table_interval(monkeypatch):
     dev = site["devices"][0]
     assert dev["availability_pct"] == 99.9 and dev["reboot_count"] == 0
     assert dev["booted"] != "—"              # boot_time_ms formatted, not dropped
+
+
+def test_r04_sla_compliance_by_link_type():
+    """R-04: each link is judged against ITS type's ceiling; breach = value over threshold."""
+    thr = {"wan": {"latency": 100, "jitter": 30, "packet_loss": 1},
+           "mpls": {"latency": 50, "jitter": 20, "packet_loss": 0.5}}
+
+    # WAN link over the latency ceiling → Breached, only latency flagged.
+    wan = _sla_link_compliance("WAN", avg_latency=140, avg_jitter=5, avg_packet_loss=0.2, thresholds=thr)
+    assert wan["sla_compliance"] == "Breached"
+    assert (wan["latency_breached"], wan["jitter_breached"], wan["packet_loss_breached"]) == (True, False, False)
+
+    # MPLS link within its (stricter) ceilings → Met. Same numbers a WAN link would pass too,
+    # but MPLS uses the mpls row, proving the type routing.
+    mpls = _sla_link_compliance("MPLS", avg_latency=40, avg_jitter=10, avg_packet_loss=0.3, thresholds=thr)
+    assert mpls["sla_compliance"] == "Met"
+
+    # A metric with no threshold is never a breach.
+    partial = _sla_link_compliance("WAN", avg_latency=999, avg_jitter=999, avg_packet_loss=0.0,
+                                   thresholds={"wan": {"packet_loss": 1}})
+    assert partial["latency_breached"] is False and partial["sla_compliance"] == "Met"
+
+
+def test_r04_legacy_fallback_without_thresholds():
+    """No thresholds (R-07/R-08 have no form) → legacy 'packet loss ≥ 1%' rule, unchanged."""
+    breached = _sla_link_compliance("WAN", 10, 1, 2.0, thresholds=None)
+    assert breached["sla_compliance"] == "Breached" and breached["has_thresholds"] is False
+    met = _sla_link_compliance("WAN", 10, 1, 0.5, thresholds=None)
+    assert met["sla_compliance"] == "Met"
 
 
 @pytest.mark.asyncio

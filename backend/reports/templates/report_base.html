@@ -1079,21 +1079,31 @@ body {
 </div>
 {% endif %}
 
+{% if data.thresholds %}
+{% macro _thr(t) %}{% if t %}Latency ≤ {{ t.latency if t.latency is not none else '—' }}ms · Jitter ≤ {{ t.jitter if t.jitter is not none else '—' }}ms · Loss ≤ {{ t.packet_loss if t.packet_loss is not none else '—' }}%{% else %}not set{% endif %}{% endmacro %}
+<div class="card" style="margin-bottom:10px;font-size:8.5pt;">
+    <strong>SLA thresholds applied</strong> —
+    <span style="margin-left:6px;"><strong>WAN:</strong> {{ _thr(data.thresholds.wan) }}</span>
+    <span style="margin-left:12px;"><strong>MPLS:</strong> {{ _thr(data.thresholds.mpls) }}</span>
+</div>
+{% endif %}
+
 {% if data.sla_summary %}
 <div class="table-card">
     <h3 style="padding:10px 14px 4px;font-size:10pt;font-weight:600;">SLA Compliance Summary</h3>
     <table>
         <thead>
-            <tr><th>Site</th><th>Link</th><th class="num-col">Avg Latency (ms)</th><th class="num-col">Avg Jitter (ms)</th><th class="num-col">Avg Packet Loss (%)</th><th>SLA</th></tr>
+            <tr><th>Site</th><th>Link</th><th>Type</th><th class="num-col">Avg Latency (ms)</th><th class="num-col">Avg Jitter (ms)</th><th class="num-col">Avg Packet Loss (%)</th><th>SLA</th></tr>
         </thead>
         <tbody>
         {% for s in data.sla_summary %}
             <tr>
                 <td>{{ s.site }}</td>
                 <td>{{ s.link | default('Primary') }}</td>
-                <td class="num-col">{{ s.avg_latency | default('—') }}</td>
-                <td class="num-col">{{ s.avg_jitter | default('—') }}</td>
-                <td class="num-col">{{ s.avg_packet_loss | default('—') }}</td>
+                <td>{{ s.link_type | default('WAN') }}</td>
+                <td class="num-col"{% if s.latency_breached %} style="color:hsl(var(--danger-text));font-weight:600;"{% endif %}>{{ s.avg_latency | default('—') }}</td>
+                <td class="num-col"{% if s.jitter_breached %} style="color:hsl(var(--danger-text));font-weight:600;"{% endif %}>{{ s.avg_jitter | default('—') }}</td>
+                <td class="num-col"{% if s.packet_loss_breached %} style="color:hsl(var(--danger-text));font-weight:600;"{% endif %}>{{ s.avg_packet_loss | default('—') }}</td>
                 <td>{{ badge('success' if s.sla_compliance == 'Met' else 'danger', s.sla_compliance | default('—')) }}</td>
             </tr>
         {% endfor %}

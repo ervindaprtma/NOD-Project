@@ -204,6 +204,12 @@ export default function ReportsPage() {
   const [useCustom, setUseCustom] = useState(false);
   const [tableInterval, setTableInterval] = useState("1h");
   const [availWindow, setAvailWindow] = useState("24h");
+  // R-04 SLA ceilings by link type (breach = measured value above threshold). Sensible
+  // defaults; the operator adjusts before generating.
+  const [slaThresholds, setSlaThresholds] = useState({
+    wan: { latency: 100, jitter: 30, packet_loss: 1 },
+    mpls: { latency: 50, jitter: 20, packet_loss: 0.5 },
+  });
   const canGenerateReports = hasMinRole("operator");
   const [generating, setGenerating] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -306,6 +312,7 @@ export default function ReportsPage() {
           sections: selectedSections.length > 0 ? selectedSections : undefined,
           table_interval:
             reportType === "R-09" ? tableInterval : reportType === "R-10" ? availWindow : undefined,
+          sla_thresholds: reportType === "R-04" ? slaThresholds : undefined,
         }),
         },
       );
@@ -554,6 +561,47 @@ export default function ReportsPage() {
                 >
                   {ti.label}
                 </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* SLA Thresholds (R-04 only) */}
+        {reportType === "R-04" && (
+          <div>
+            <label className="text-sm font-medium mb-2 block">SLA Thresholds</label>
+            <p className="text-xs text-muted-foreground mb-2">
+              A link is marked <span className="font-medium">Breached</span> when a measured value exceeds its type&apos;s ceiling.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {(["wan", "mpls"] as const).map((lt) => (
+                <div key={lt} className="border rounded-md p-3 bg-muted/30">
+                  <div className="text-xs font-semibold uppercase mb-2">{lt}</div>
+                  <div className="space-y-2">
+                    {([
+                      { k: "latency", label: "Latency (ms)", step: 1 },
+                      { k: "jitter", label: "Jitter (ms)", step: 1 },
+                      { k: "packet_loss", label: "Packet Loss (%)", step: 0.1 },
+                    ] as const).map(({ k, label, step }) => (
+                      <div key={k} className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">{label}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={step}
+                          value={slaThresholds[lt][k]}
+                          onChange={(e) =>
+                            setSlaThresholds((prev) => ({
+                              ...prev,
+                              [lt]: { ...prev[lt], [k]: e.target.value === "" ? 0 : Number(e.target.value) },
+                            }))
+                          }
+                          className="w-24 px-2 py-1 text-xs rounded-md border bg-background text-right"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>

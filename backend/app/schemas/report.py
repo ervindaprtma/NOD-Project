@@ -9,6 +9,20 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+class SLAMetricThresholds(BaseModel):
+    """One link-type's SLA ceilings (breach = measured value ABOVE the threshold).
+    Any metric left None is not evaluated."""
+    latency: Optional[float] = Field(default=None, ge=0)      # ms
+    jitter: Optional[float] = Field(default=None, ge=0)       # ms
+    packet_loss: Optional[float] = Field(default=None, ge=0)  # %
+
+
+class SLAThresholds(BaseModel):
+    """R-04 SLA thresholds, split by link type (WAN vs MPLS)."""
+    wan: Optional[SLAMetricThresholds] = None
+    mpls: Optional[SLAMetricThresholds] = None
+
+
 class ReportGenerateRequest(BaseModel):
     report_type: str = Field(..., pattern=r"^(R-01|R-02|R-03|R-04|R-05|R-06|R-07|R-08|R-09|R-10)$")
     output_format: str = Field(default="pdf", pattern=r"^(pdf|html|docx)$")
@@ -27,6 +41,11 @@ class ReportGenerateRequest(BaseModel):
         pattern=r"^(15m|30m|1h|2h|4h|6h|12h|24h|7d|30d|90d|365d)$",
         description="R-09: interval for detail table rows (15m–24h). "
         "R-10: availability/SLA window (24h/7d/30d/90d/365d).",
+    )
+    sla_thresholds: Optional[SLAThresholds] = Field(
+        default=None,
+        description="R-04 only: per-link-type SLA ceilings (WAN/MPLS × latency/jitter/packet_loss). "
+        "Links exceeding their type's threshold are marked Breached.",
     )
 
 
