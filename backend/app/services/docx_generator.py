@@ -317,18 +317,28 @@ def generate_docx_report(context: dict[str, Any], output_path: Path) -> Path:
     sla = rd.get("sdwan_sla", {})
     if sla:
         _add_heading_styled(doc, "SD-WAN SLA", level=2)
-        sla_links = sla.get("links", [])
-        if sla_links:
-            headers = ["Link", "Packet Loss", "Latency", "Status"]
+        thr = sla.get("thresholds") or {}
+        if thr:
+            def _thr_line(t):
+                t = t or {}
+                fmt = lambda v: "—" if v is None else v  # noqa: E731
+                return f"Latency ≤ {fmt(t.get('latency'))}ms · Jitter ≤ {fmt(t.get('jitter'))}ms · Loss ≤ {fmt(t.get('packet_loss'))}%"
+            doc.add_paragraph(f"SLA thresholds — WAN: {_thr_line(thr.get('wan'))}  |  MPLS: {_thr_line(thr.get('mpls'))}").paragraph_format.space_after = Pt(6)
+        summary = sla.get("sla_summary", [])
+        if summary:
+            headers = ["Site", "Link", "Type", "Latency (ms)", "Jitter (ms)", "Loss (%)", "SLA"]
             rows = []
-            for link in sla_links:
+            for s in summary:
                 rows.append([
-                    link.get("name", "—"),
-                    f"{link.get('packet_loss', 0):.2f}%" if isinstance(link.get("packet_loss"), (int, float)) else str(link.get("packet_loss", "—")),
-                    f"{link.get('latency_ms', 0):.1f} ms" if isinstance(link.get("latency_ms"), (int, float)) else str(link.get("latency_ms", "—")),
-                    link.get("status", "—"),
+                    s.get("site", "—"),
+                    s.get("link", "—"),
+                    s.get("link_type", "—"),
+                    f"{s.get('avg_latency', 0):.1f}",
+                    f"{s.get('avg_jitter', 0):.1f}",
+                    f"{s.get('avg_packet_loss', 0):.2f}",
+                    s.get("sla_compliance", "—"),
                 ])
-            _add_data_table(doc, headers, rows, col_widths=[1.5, 1.5, 1.5, 1.0])
+            _add_data_table(doc, headers, rows, col_widths=[0.7, 0.9, 0.6, 0.9, 0.9, 0.8, 0.9])
 
     # ── R-05 / R-08: Traffic Inbound ──────────────────────────────
     ti = rd.get("traffic_inbound", {})
@@ -366,6 +376,50 @@ def generate_docx_report(context: dict[str, Any], output_path: Path) -> Path:
         _add_heading_styled(doc, "Executive Summary", level=2)
         if es.get("narrative"):
             doc.add_paragraph(es["narrative"]).paragraph_format.space_after = Pt(6)
+
+    # ── R-10: Device Availability ─────────────────────────────────
+    da = rd.get("device_availability", {})
+    if da.get("sites"):
+        _add_heading_styled(doc, f"Device Availability — {da.get('window', '24h')} window", level=2)
+        for site_d in da["sites"]:
+            s = site_d.get("summary", {})
+            _add_heading_styled(doc, site_d.get("site_label", "—"), level=3)
+            _add_kpi(doc, "Reporting", f"{s.get('devices_reporting', 0)} / {s.get('devices_total', 0)}", "devices reporting")
+            _add_kpi(doc, "Reboots", str(s.get("reboots_total", 0)), "in window")
+            if not site_d.get("history_sufficient", True):
+                doc.add_paragraph(
+                    f"Insufficient history — telemetry does not cover the full {da.get('window')} window; "
+                    "availability for the missing period is unknown, not 100%."
+                ).paragraph_format.space_after = Pt(6)
+            devices = site_d.get("devices", [])
+            if devices:
+                headers = ["Device", "Vendor", "Status", "Availability", "UP for", "Booted (WIB)", "Reboots", "Downtime"]
+                rows = []
+                for d in devices:
+                    ap = d.get("availability_pct")
+                    rows.append([
+                        d.get("hostname", "—"),
+                        d.get("vendor", "—"),
+                        d.get("status", "—"),
+                        f"{ap:.2f}%" if isinstance(ap, (int, float)) else "—",
+                        d.get("uptime_human", "—"),
+                        d.get("booted", "—"),
+                        str(d.get("reboot_count", 0)),
+                        d.get("downtime_human", "—"),
+                    ])
+                _add_data_table(doc, headers, rows, col_widths=[1.1, 0.8, 0.9, 0.9, 1.0, 1.1, 0.6, 0.8])
+            gaps = site_d.get("collector_gaps", [])
+            if gaps:
+                _add_heading_styled(doc, "Collector Gaps", level=4)
+                _add_data_table(
+                    doc, ["Start", "End", "Duration"],
+                    [[g.get("start", "—"), g.get("end", "—"), g.get("duration", "—")] for g in gaps],
+                    col_widths=[1.6, 1.6, 1.0],
+                )
+                doc.add_paragraph(
+                    "A collector gap means Telegraf sent no data for the whole site — a monitoring "
+                    "outage, not proven device downtime. Excluded from availability %."
+                ).paragraph_format.space_after = Pt(6)
 
     # ── Footer (timestamp) ────────────────────────────────────────
     doc.add_paragraph("")  # spacer

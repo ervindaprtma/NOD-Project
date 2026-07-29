@@ -67,6 +67,7 @@ async def generate_report(
         sites=body.sites if body.sites else ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"],
         sections=body.sections,
         table_interval=body.table_interval,
+        sla_thresholds=body.sla_thresholds.model_dump() if body.sla_thresholds else None,
     )
     db.add(job)
     await db.commit()

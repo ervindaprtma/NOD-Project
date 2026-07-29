@@ -1079,21 +1079,31 @@ body {
 </div>
 {% endif %}
 
+{% if data.thresholds %}
+{% macro _thr(t) %}{% if t %}Latency ≤ {{ t.latency if t.latency is not none else '—' }}ms · Jitter ≤ {{ t.jitter if t.jitter is not none else '—' }}ms · Loss ≤ {{ t.packet_loss if t.packet_loss is not none else '—' }}%{% else %}not set{% endif %}{% endmacro %}
+<div class="card" style="margin-bottom:10px;font-size:8.5pt;">
+    <strong>SLA thresholds applied</strong> —
+    <span style="margin-left:6px;"><strong>WAN:</strong> {{ _thr(data.thresholds.wan) }}</span>
+    <span style="margin-left:12px;"><strong>MPLS:</strong> {{ _thr(data.thresholds.mpls) }}</span>
+</div>
+{% endif %}
+
 {% if data.sla_summary %}
 <div class="table-card">
     <h3 style="padding:10px 14px 4px;font-size:10pt;font-weight:600;">SLA Compliance Summary</h3>
     <table>
         <thead>
-            <tr><th>Site</th><th>Link</th><th class="num-col">Avg Latency (ms)</th><th class="num-col">Avg Jitter (ms)</th><th class="num-col">Avg Packet Loss (%)</th><th>SLA</th></tr>
+            <tr><th>Site</th><th>Link</th><th>Type</th><th class="num-col">Avg Latency (ms)</th><th class="num-col">Avg Jitter (ms)</th><th class="num-col">Avg Packet Loss (%)</th><th>SLA</th></tr>
         </thead>
         <tbody>
         {% for s in data.sla_summary %}
             <tr>
                 <td>{{ s.site }}</td>
                 <td>{{ s.link | default('Primary') }}</td>
-                <td class="num-col">{{ s.avg_latency | default('—') }}</td>
-                <td class="num-col">{{ s.avg_jitter | default('—') }}</td>
-                <td class="num-col">{{ s.avg_packet_loss | default('—') }}</td>
+                <td>{{ s.link_type | default('WAN') }}</td>
+                <td class="num-col"{% if s.latency_breached %} style="color:hsl(var(--danger-text));font-weight:600;"{% endif %}>{{ s.avg_latency | default('—') }}</td>
+                <td class="num-col"{% if s.jitter_breached %} style="color:hsl(var(--danger-text));font-weight:600;"{% endif %}>{{ s.avg_jitter | default('—') }}</td>
+                <td class="num-col"{% if s.packet_loss_breached %} style="color:hsl(var(--danger-text));font-weight:600;"{% endif %}>{{ s.avg_packet_loss | default('—') }}</td>
                 <td>{{ badge('success' if s.sla_compliance == 'Met' else 'danger', s.sla_compliance | default('—')) }}</td>
             </tr>
         {% endfor %}
@@ -1681,6 +1691,99 @@ body {
 
 
 {## ════════════════════════════════════════════════════════════════════════
+    SECTION: R-10 — DEVICE AVAILABILITY
+    Expects report_data.device_availability:
+      .window, .sites[] = { site_label, summary, devices[], collector_gaps[], history_sufficient }
+  ════════════════════════════════════════════════════════════════════════ #}
+{% macro _avail_badge(status) %}
+{% if status == 'up' %}<span class="badge badge-success">Up</span>
+{% elif status == 'rebooted' %}<span class="badge badge-warning">Rebooted</span>
+{% elif status == 'not_reporting' %}<span class="badge badge-danger">Not reporting</span>
+{% else %}<span class="badge">Collector gap</span>{% endif %}
+{% endmacro %}
+
+{% macro section_device_availability(data) %}
+{% if data.sites %}
+<h2 class="section-title" style="margin-bottom:16px;">Device Availability <span class="timeframe-badge">{{ data.window | default('24h') }} window</span></h2>
+{% for site_d in data.sites %}
+{% set s = site_d.summary %}
+<h3 style="margin:12px 0 8px 0;font-size:11pt;">{{ site_d.site_label }}</h3>
+
+{# ── Per-site summary KPIs ── #}
+<div class="kpi-grid">
+    {{ kpi_card('Reporting', (s.devices_reporting | default(0)) ~ ' / ' ~ (s.devices_total | default(0)), 'success' if s.devices_reporting == s.devices_total else 'warning', 'devices reporting') }}
+    {{ kpi_card('Reboots', s.reboots_total | default(0), 'warning' if s.reboots_total else 'info', 'in window') }}
+    {{ kpi_card('Collector gaps', s.collector_gaps | length, 'warning' if s.collector_gaps else 'success', 'telegraf silence') }}
+    {% if s.lowest_uptime_device %}{{ kpi_card('Lowest uptime', s.lowest_uptime_device.uptime_human_short, 'info', s.lowest_uptime_device.hostname) }}{% endif %}
+</div>
+
+{% if not site_d.history_sufficient %}
+<div class="card" style="border-left:3px solid #f59e0b;">
+    <p style="margin:0;font-size:8.5pt;">⚠ Insufficient history — telemetry does not cover the full {{ data.window }} window; availability for the missing period is unknown, not 100%.</p>
+</div>
+{% endif %}
+
+{# ── Per-device SLA table ── #}
+{% if site_d.devices %}
+<div class="table-card" style="margin-bottom:16px;">
+    <table>
+        <thead>
+            <tr>
+                <th>Device</th>
+                <th>Vendor</th>
+                <th class="num-col">Status</th>
+                <th class="num-col">Availability</th>
+                <th>UP for</th>
+                <th>Booted (WIB)</th>
+                <th class="num-col">Reboots</th>
+                <th class="num-col">Downtime</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for d in site_d.devices %}
+            <tr>
+                <td><strong>{{ d.hostname }}</strong>{% if d.wrap_risk %} ⚠{% endif %}{% if d.partial_history %} ◷{% endif %}</td>
+                <td>{{ d.vendor }}</td>
+                <td class="num-col">{{ _avail_badge(d.status) }}</td>
+                <td class="num-col">{% if d.availability_pct is not none %}{{ '%.2f' | format(d.availability_pct) }}%{% else %}—{% endif %}</td>
+                <td>{{ d.uptime_human }}</td>
+                <td>{{ d.booted }}</td>
+                <td class="num-col">{{ d.reboot_count }}</td>
+                <td class="num-col">{{ d.downtime_human }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{# ── Collector-gap appendix ── #}
+{% if site_d.collector_gaps %}
+<div class="table-card" style="margin-bottom:16px;">
+    <h3 style="padding:8px 12px;margin:0;font-size:9pt;border-bottom:1px solid hsl(var(--border));">Collector Gaps — {{ site_d.site_label }}</h3>
+    <table>
+        <thead><tr><th>Start</th><th>End</th><th class="num-col">Duration</th></tr></thead>
+        <tbody>
+        {% for g in site_d.collector_gaps %}
+            <tr><td>{{ g.start }}</td><td>{{ g.end }}</td><td class="num-col">{{ g.duration }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <p style="padding:8px 12px;margin:0;font-size:8pt;font-style:italic;color:hsl(var(--muted-foreground));">
+        A collector gap means Telegraf sent no data for the whole site — this is a monitoring outage, not proven device downtime. These periods are excluded from availability %.
+    </p>
+</div>
+{% endif %}
+{% endfor %}
+{% else %}
+<div class="card">
+    <p class="no-data">Device availability data is not available for the selected window.</p>
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{## ════════════════════════════════════════════════════════════════════════
     SECTION: R-08 — ALL-IN-ONE
     Renders all sections in logical order:
     R-07 (Exec Summary) → R-01 (Traffic Overview) → R-02 (Resources) → R-03 (VPN) → R-04 (SD-WAN) → R-05 (Inbound) → R-06 (Internal)
@@ -1766,6 +1869,11 @@ body {
     {# R-09: Interface Bandwidth #}
     {% if report_type == 'R-09' %}
         {{ section_interface_bandwidth(report_data.interface_bandwidth | default({})) }}
+    {% endif %}
+
+    {# R-10: Device Availability #}
+    {% if report_type == 'R-10' %}
+        {{ section_device_availability(report_data.device_availability | default({})) }}
     {% endif %}
 
 {% else %}

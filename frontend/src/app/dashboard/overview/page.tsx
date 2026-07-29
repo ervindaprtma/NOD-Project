@@ -3,10 +3,10 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { swrFetcher, getAccessToken } from "@/lib/api";
+import { swrFetcher, swrFetcherLong, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, formatNumber, getDefaultTimeRange } from "@/lib/constants";
-import type { OverviewData, TopASOrg, WanInterfaceSummary, SiteWanBandwidth, ResourceData, TrafficFlowSummary, TrafficInboundSummary } from "@/types";
+import type { OverviewData, TopASOrg, WanInterfaceSummary, SiteWanBandwidth, ResourceData, TrafficFlowSummary, TrafficInboundSummary, DeviceAvailabilityData } from "@/types";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"] as const;
@@ -14,6 +14,17 @@ const SITE_SHORT: Record<string, string> = {
   "Site_FGT-DC": "DC",
   "Site_FGT-DRC": "DRC",
   "Site_FGT_Office": "Office",
+};
+
+// Availability is an SLA window (24h/7d/30d), independent of the page's short range.
+const AVAIL_WINDOWS = ["24h", "7d", "30d"] as const;
+
+// Per-device status → dot + text colour (matches the Availability tab on Resources).
+const AVAIL_STATUS: Record<string, { dot: string; cls: string }> = {
+  up: { dot: "bg-emerald-500", cls: "text-emerald-700 dark:text-emerald-400" },
+  rebooted: { dot: "bg-amber-500", cls: "text-amber-700 dark:text-amber-400" },
+  not_reporting: { dot: "bg-red-500", cls: "text-red-700 dark:text-red-400" },
+  collector_gap: { dot: "bg-slate-400", cls: "text-slate-600 dark:text-slate-400" },
 };
 
 // ── Interface sort order (WAN first, MPLS second; vendor grouping) ──
@@ -103,6 +114,17 @@ export default function OverviewPage() {
   const { data: inbData0 } = useSWR<{ data: TrafficInboundSummary }>(inbKeys[0], swrFetcher, { refreshInterval: 0 });
   const { data: inbData1 } = useSWR<{ data: TrafficInboundSummary }>(inbKeys[1], swrFetcher, { refreshInterval: 0 });
   const inbDatas = [inbData0, inbData1];
+
+  // ── Per-site Availability (own SLA window, not the page range) ──
+  const [availWindow, setAvailWindow] = useState<(typeof AVAIL_WINDOWS)[number]>("24h");
+  type AvailEnv = { data: DeviceAvailabilityData; meta?: { degraded?: boolean } };
+  const availKeys = SITES.map(s =>
+    token ? `/api/v1/device-uptime?site_name=${s}&window=${availWindow}` : null
+  );
+  const { data: avail0 } = useSWR<AvailEnv>(availKeys[0], swrFetcherLong, { refreshInterval: 0 });
+  const { data: avail1 } = useSWR<AvailEnv>(availKeys[1], swrFetcherLong, { refreshInterval: 0 });
+  const { data: avail2 } = useSWR<AvailEnv>(availKeys[2], swrFetcherLong, { refreshInterval: 0 });
+  const availDatas = [avail0, avail1, avail2];
 
   function selectPreset(preset: typeof TIME_PRESETS[0]) {
     const now = Date.now();
@@ -287,7 +309,30 @@ export default function OverviewPage() {
         </ClickCard>
       </div>
 
-      {/* ═══ ROW 3 — WAN/MPLS Bandwidth (full width) ═══ */}
+      {/* ═══ ROW 3 — Site Availability (per-site up/down, own SLA window) ═══ */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Site Availability</h2>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-card border rounded-lg p-1">
+              {AVAIL_WINDOWS.map((w) => (
+                <button key={w} onClick={() => setAvailWindow(w)}
+                  className={cn("px-2 py-0.5 text-[11px] font-medium rounded transition-colors",
+                    availWindow === w ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{w}</button>
+              ))}
+            </div>
+            <span className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground" onClick={() => router.push("/dashboard/resources")}>View details →</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {SITES.map((site, idx) => (
+            <SiteAvailabilityCard key={`avail-${site}`} label={SITE_SHORT[site]} env={availDatas[idx]}
+              onClick={() => router.push("/dashboard/resources")} />
+          ))}
+        </div>
+      </div>
+
+      {/* ═══ ROW 4 — WAN/MPLS Bandwidth (full width) ═══ */}
       <ClickCard onClick={() => router.push("/dashboard/resources")}>
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h2 className="text-sm font-semibold">WAN/MPLS Bandwidth</h2>
@@ -334,7 +379,7 @@ export default function OverviewPage() {
         })()}
       </ClickCard>
 
-      {/* ═══ ROW 4 — Top Client Internet (3 sites) ═══ */}
+      {/* ═══ ROW 5 — Top Client Internet (3 sites) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {SITES.map((site, idx) => (
           <ClickCard key={`client-${site}`} onClick={() => router.push("/dashboard/traffic")}>
@@ -358,7 +403,7 @@ export default function OverviewPage() {
         ))}
       </div>
 
-      {/* ═══ ROW 5 — Top Application Internet Usage (3 sites) ═══ */}
+      {/* ═══ ROW 6 — Top Application Internet Usage (3 sites) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {SITES.map((site, idx) => (
           <ClickCard key={`app-${site}`} onClick={() => router.push("/dashboard/traffic")}>
@@ -382,7 +427,7 @@ export default function OverviewPage() {
         ))}
       </div>
 
-      {/* ═══ ROW 6 — Top Destination Internet AS Org (3 sites) ═══ */}
+      {/* ═══ ROW 7 — Top Destination Internet AS Org (3 sites) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {SITES.map((site, idx) => (
           <ClickCard key={`as-${site}`} onClick={() => router.push("/dashboard/traffic")}>
@@ -406,7 +451,7 @@ export default function OverviewPage() {
         ))}
       </div>
 
-      {/* ═══ ROW 7 — Inbound VIP (DC + DRC) ═══ */}
+      {/* ═══ ROW 8 — Inbound VIP (DC + DRC) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {inboundSites.map((site, idx) => (
           <ClickCard key={`inb-${site}`} onClick={() => router.push("/dashboard/traffic-inbound")}>
@@ -430,7 +475,7 @@ export default function OverviewPage() {
         ))}
       </div>
 
-      {/* ═══ ROW 8 — Top Customer AS — Inbound VIP (DC + DRC) ═══ */}
+      {/* ═══ ROW 9 — Top Customer AS — Inbound VIP (DC + DRC) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {inboundSites.map((site, idx) => (
           <ClickCard key={`cas-${site}`} onClick={() => router.push("/dashboard/traffic-inbound")}>
@@ -595,4 +640,69 @@ function SkeletonCard() {
 
 function EmptyText() {
   return <p className="text-xs text-muted-foreground py-6 text-center">No data available</p>;
+}
+
+// Per-site availability summary. Counts + worst-device %, never a fleet average
+// (design §2b). Separate SLA window (24h/7d/30d), independent of the page range.
+function SiteAvailabilityCard({ label, env, onClick }: {
+  label: string;
+  env?: { data: DeviceAvailabilityData; meta?: { degraded?: boolean } };
+  onClick?: () => void;
+}) {
+  const pill = "px-1.5 py-0.5 text-[10px] font-medium rounded-full";
+  const head = (body: React.ReactNode) => (
+    <ClickCard onClick={onClick}>
+      <div className="flex items-center justify-between mb-1.5"><h3 className="text-xs font-semibold">{label}</h3></div>
+      {body}
+    </ClickCard>
+  );
+  if (!env) return head(<SkeletonBars count={3} />);
+  if (env.meta?.degraded) return head(<p className="text-xs text-muted-foreground py-4 text-center">Availability unavailable</p>);
+  const devices = env.data?.devices ?? [];
+  const summary = env.data?.summary;
+  if (devices.length === 0) return head(<p className="text-xs text-muted-foreground py-4 text-center">No devices reporting</p>);
+
+  const total = summary?.devices_total ?? devices.length;
+  // "reporting" (up + rebooted + gap) matches the Resources Availability tab: a device that
+  // rebooted in-window is still up now, so it counts here — the reboot shows via the pill + count.
+  const reporting = summary?.devices_reporting ?? devices.filter(d => d.status !== "not_reporting").length;
+  const statuses = devices.map(d => d.status);
+  const overall = statuses.includes("not_reporting")
+      ? { t: "Issue", c: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400", d: "✕" }
+    : statuses.includes("rebooted")
+      ? { t: "Reboot", c: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400", d: "▲" }
+    : statuses.includes("collector_gap")
+      ? { t: "Monitoring gap", c: "bg-slate-100 text-slate-700 dark:bg-slate-800/40 dark:text-slate-300", d: "◐" }
+      : { t: "All Up", c: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400", d: "●" };
+  // null availability = "unknown" (partial history), not 0 — exclude from the worst-case.
+  const avails = devices.map(d => d.availability_pct).filter((v): v is number => v != null);
+  const minAvail = avails.length ? Math.min(...avails) : null;
+
+  return (
+    <ClickCard onClick={onClick}>
+      <div className="flex items-center justify-between mb-1.5">
+        <h3 className="text-xs font-semibold">{label}</h3>
+        <span className={cn(pill, overall.c)}>{overall.d} {overall.t}</span>
+      </div>
+      <div className="flex items-baseline gap-2 mb-2">
+        <span className="text-lg font-bold">{reporting}/{total}<span className="text-xs font-normal text-muted-foreground"> up</span></span>
+        <span className="text-[11px] text-muted-foreground">min avail {minAvail != null ? `${minAvail}%` : "—"} · {summary?.reboots_total ?? 0} reboots</span>
+      </div>
+      <div className="space-y-1 border-t border-muted/40 pt-1.5">
+        {devices.map((d) => {
+          const st = AVAIL_STATUS[d.status] || AVAIL_STATUS.up;
+          return (
+            <div key={d.device_key} className="flex items-center gap-1.5 text-[11px]">
+              <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", st.dot)} />
+              <span className="truncate flex-1" title={d.hostname}>{d.hostname}</span>
+              {d.wrap_risk && <span title="Uptime near the ~497-day counter wrap" className="text-amber-500">⚠</span>}
+              {d.partial_history && <span title="Onboarded mid-window — % measured from first sample" className="text-slate-400">◷</span>}
+              <span className={cn("font-medium tabular-nums", st.cls)}>{d.availability_pct != null ? `${d.availability_pct}%` : "—"}</span>
+              <span className="text-muted-foreground w-12 text-right">{d.uptime_human_short}</span>
+            </div>
+          );
+        })}
+      </div>
+    </ClickCard>
+  );
 }

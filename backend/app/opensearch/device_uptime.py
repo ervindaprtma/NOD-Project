@@ -35,8 +35,11 @@ TICKS_PER_SECOND: int = 100
 WRAP_MAX: int = 4_294_967_295          # 2**32 - 1 ~= 497.1 days
 WRAP_GUARD: int = 4_200_000_000        # ~486d: above this a decrease may be a wrap, not a reboot
 
-# A device is "not reporting" once it misses two consecutive scrapes.
-STALE_AFTER_MS: int = POLL_INTERVAL_SECONDS * 2 * 1000
+# A device is "not reporting" only after this much CONTINUOUS silence. At a 30s telegraf
+# poll a missed scrape or two is normal jitter (SNMP timeout / packet loss) and the uptime
+# counter keeps climbing across it — so we wait 300s (~10 missed polls) before calling it
+# down. Prevents a false "Issue" on a healthy device that merely dropped a poll or two.
+STALE_AFTER_MS: int = 300 * 1000
 
 # Below this many devices a site-wide silence is ambiguous, so we do not
 # blame the collector (design §2d).

@@ -456,6 +456,81 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_conditions": ["==", "<"],
         "example_threshold": 1,
     },
+    # device_uptime (§11.1) — availability alerting. Per-device metrics need a
+    # device (target_key); leave it blank for "any device at the site". Use a
+    # ≥5min window: at a 30s poll that's ~10 samples, so a dropped scrape or two
+    # never trips a false alarm. collector_gap is site-level (leave device blank).
+    {
+        "data_source": "device_uptime",
+        "field_key": "not_reporting",
+        "display_name": "Device Not Reporting",
+        "description": "1 when the device has been silent >300s (genuinely down). A site-wide "
+                       "Telegraf outage reads 'collector_gap' instead, so this never storms. Use == 1.",
+        "unit": "state",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": ["==", ">="],
+        "example_threshold": 1,
+    },
+    {
+        "data_source": "device_uptime",
+        "field_key": "collector_gap",
+        "display_name": "Collector Connectivity Lost (site)",
+        "description": "1 when every device at the site went silent together — Telegraf lost "
+                       "connectivity, not the devices. Site-level: leave the device blank. Use == 1.",
+        "unit": "state",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": ["==", ">="],
+        "example_threshold": 1,
+    },
+    {
+        "data_source": "device_uptime",
+        "field_key": "reboot_count",
+        "display_name": "Reboot Count",
+        "description": "Reboots detected in the window (uptime counter reset). Use >= 1.",
+        "unit": "count",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": [">=", ">"],
+        "example_threshold": 1,
+    },
+    {
+        "data_source": "device_uptime",
+        "field_key": "availability_pct",
+        "display_name": "Availability %",
+        "description": "Counter-based uptime over the window. Blank device = worst device at the "
+                       "site. Reads 'unknown' (holds, never fires) when history is insufficient. Use < 99.9.",
+        "unit": "%",
+        "category": "state",
+        "valid_aggregations": ["min", "avg"],
+        "valid_conditions": ["<", "<="],
+        "example_threshold": 99.9,
+    },
+    {
+        "data_source": "device_uptime",
+        "field_key": "uptime_seconds",
+        "display_name": "Uptime (seconds)",
+        "description": "Seconds since last boot — a small value means 'came back up recently'. "
+                       "Blank device = lowest uptime at the site. Use <.",
+        "unit": "s",
+        "category": "state",
+        "valid_aggregations": ["min"],
+        "valid_conditions": ["<", "<="],
+        "example_threshold": 3600,
+    },
+    {
+        "data_source": "device_uptime",
+        "field_key": "wrap_risk",
+        "display_name": "Counter Wrap Approaching",
+        "description": "1 when uptime nears the 32-bit SNMP counter wrap (~486d) — schedule a "
+                       "reboot before the counter rolls. Use == 1.",
+        "unit": "state",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": ["==", ">="],
+        "example_threshold": 1,
+    },
 ]
 
 
@@ -484,7 +559,7 @@ async def seed_field_catalog() -> int:
         # engine-honored fields reach existing DBs — appid_flow (per-path fix, old byte
         # keys were never honored), ha_resource (Phase E mem/session depth), and
         # interface_stats (new source). Delete+reinsert per source; others untouched.
-        managed = {"appid_flow", "ha_resource", "interface_stats"}
+        managed = {"appid_flow", "ha_resource", "interface_stats", "device_uptime"}
         await db.execute(
             delete(AlertFieldCatalog).where(AlertFieldCatalog.data_source.in_(managed))
         )

@@ -180,6 +180,17 @@ async def _run_group_query(
                     gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC"
                 )
 
+            elif data_source == "device_uptime":
+                from app.opensearch import device_uptime as du_qb
+
+                # {summary, devices} for the eval window. The explicit gte/lte win over
+                # the named window, and resolve_range picks the bucket from the span
+                # (a 5min window → 1min buckets → enough shape for silence/gap detection).
+                # All device rules for a (site, window) share this one query.
+                result = await du_qb.device_availability(
+                    site_name=site_name or "Site_FGT-DC", gte_ms=gte_ms, lte_ms=lte_ms
+                )
+
             else:
                 logger.warning("Unsupported data_source for group query: %s", data_source)
                 return None
@@ -247,6 +258,54 @@ def _extract_interface_stats(
     return float(iface.get(base, {}).get(agg, 0.0) or 0.0)
 
 
+def _extract_device_uptime(
+    metric_field: str, target_key: str | None, group_result: dict[Any, Any]
+) -> float | None:
+    """Select one value from device_availability()'s {summary, devices} result.
+
+    Metrics (§11.1): not_reporting / reboot_count / uptime_seconds / wrap_risk /
+    availability_pct are per-device; collector_gap is site-level.
+
+    target_key is the device IP (tag.source). Blank = "any device at the site":
+    the metric reduces to the worst case across devices, so one down/rebooting
+    device fires the rule.
+
+    Two deliberate None (→ hold, never a false fire):
+      • a named device absent from the window — evaluate on nothing, not a fake 0;
+      • availability_pct unknown (insufficient history) — never breach an SLA on a
+        fabricated number.
+
+    The storm guard is split: a site-wide Telegraf outage makes every silent device
+    read status "collector_gap" (not "not_reporting") in the data layer, so per-device
+    rules go quiet on their own; collector_gap here is the one positive signal that fires.
+    """
+    devices = group_result.get("devices", []) or []
+
+    if metric_field == "collector_gap":
+        return 1.0 if any(d.get("status") == "collector_gap" for d in devices) else 0.0
+
+    if target_key:
+        devices = [d for d in devices if d.get("device_key") == target_key]
+        if not devices:
+            return None  # named device not in window → hold
+    if not devices:
+        return None
+
+    if metric_field == "not_reporting":
+        return 1.0 if any(d.get("status") == "not_reporting" for d in devices) else 0.0
+    if metric_field == "wrap_risk":
+        return 1.0 if any(d.get("wrap_risk") for d in devices) else 0.0
+    if metric_field == "reboot_count":
+        return float(max((d.get("reboot_count", 0) or 0) for d in devices))
+    if metric_field == "uptime_seconds":
+        vals = [d["uptime_seconds"] for d in devices if d.get("uptime_seconds") is not None]
+        return float(min(vals)) if vals else None
+    if metric_field == "availability_pct":
+        vals = [d["availability_pct"] for d in devices if d.get("availability_pct") is not None]
+        return float(min(vals)) if vals else None  # unknown → hold
+    return None
+
+
 def _extract_per_rule_value(
     rule: AlertRule,
     group_result: float | list[Any] | dict[Any, Any] | None,
@@ -292,6 +351,11 @@ def _extract_per_rule_value(
                     rule.metric_field, rule.target_key, rule.aggregation, group_result
                 )
             return 0.0
+
+        if rule.data_source == "device_uptime":
+            if isinstance(group_result, dict):
+                return _extract_device_uptime(rule.metric_field, rule.target_key, group_result)
+            return None
 
         return None
 
@@ -626,6 +690,12 @@ def _extract_per_rule_value_flat(
             # false-fire. (Add a clause-level target_key if composite interface rules are
             # ever needed.)
             return 0.0
+        if data_source == "device_uptime":
+            # No clause-level target_key → "any device at the site" reduction, which is
+            # resolvable without one (unlike interface_stats). collector_gap is site-level.
+            if isinstance(group_result, dict):
+                return _extract_device_uptime(metric_field, None, group_result)
+            return None
         return None
     except (TypeError, ValueError, IndexError):
         return None

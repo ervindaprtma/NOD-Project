@@ -46,12 +46,15 @@ const DATA_SOURCES = [
   { value: "vpn_ssl", label: "SSL VPN" },
   { value: "vpn_ipsec", label: "IPsec VPN" },
   { value: "interface_stats", label: "Interface Bandwidth" },
+  { value: "device_uptime", label: "Device Availability" },
 ];
 
 // interface_stats requires a canonical site (the interface picker keys off it) and a
 // window ≥ 2 min (the counter→rate derivative needs 2 histogram buckets).
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
 const IFACE_MIN_WINDOW = 2;
+// device_uptime: ≥5 min so a dropped 30s poll or two can't trip a false "down" (§11.2).
+const DEVICE_MIN_WINDOW = 5;
 
 const AGGREGATIONS = ["avg", "max", "min", "sum", "count"];
 const CONDITIONS = [">", "<", ">=", "<=", "=="];
@@ -191,6 +194,33 @@ export default function AlertsPage() {
 
   const ifaceWindowTooShort = isIface && form.evaluation_window_minutes < IFACE_MIN_WINDOW;
 
+  // Track AL: device_uptime needs a canonical site (device picker keys off it). Unlike
+  // interfaces the device is OPTIONAL — blank = "any device at the site", and collector_gap
+  // is site-level so it must stay blank.
+  const isDevice = form.data_source === "device_uptime";
+  const isSiteLevelMetric = isDevice && form.metric_field === "collector_gap";
+  const { data: deviceData } = useSWR<{ data: { key: string; label: string }[] }>(
+    showModal && isDevice && SITES.includes(form.site_name)
+      ? `/api/v1/alerts/devices?site_name=${form.site_name}`
+      : null,
+    swrFetcher
+  );
+  const devices = deviceData?.data || [];
+
+  useEffect(() => {
+    if (!showModal || !isDevice) return;
+    if (!SITES.includes(form.site_name)) {
+      setForm((prev) => ({ ...prev, site_name: SITES[0] }));
+    }
+    // collector_gap is site-level: never carry a device on it.
+    if (isSiteLevelMetric && form.target_key) {
+      setForm((prev) => ({ ...prev, target_key: "" }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDevice, isSiteLevelMetric, form.site_name, form.target_key, showModal]);
+
+  const deviceWindowTooShort = isDevice && form.evaluation_window_minutes < DEVICE_MIN_WINDOW;
+
   const { data: logsData } = useSWR<{ data: { id: string; rule_name: string; severity: string; metric_value_at_firing: number; fired_at: string; resolved_at: string | null }[] }>(
     showHistory ? "/api/v1/alerts/logs?limit=50" : null,
     swrFetcher
@@ -281,10 +311,12 @@ export default function AlertsPage() {
 
   async function saveRule() {
     setSaving(true);
-    // target_key only applies to interface_stats; clear it otherwise. Empty template → null.
+    // target_key applies to interface_stats (required) and device_uptime (optional; blank =
+    // any device / site-level). Cleared for every other source. Empty string → null.
+    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime";
     const payload = {
       ...form,
-      target_key: form.data_source === "interface_stats" ? form.target_key : null,
+      target_key: keepsTargetKey ? (form.target_key || null) : null,
       notification_template_id: form.notification_template_id || null,
     };
     try {
@@ -802,6 +834,28 @@ export default function AlertsPage() {
                 </div>
               )}
 
+              {/* Device picker (device_uptime only) → target_key. Optional: blank = any device. */}
+              {isDevice && !isSiteLevelMetric && (
+                <div>
+                  <label className="text-xs font-medium">Device</label>
+                  <select
+                    value={form.target_key}
+                    onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  >
+                    <option value="">Any device at the site</option>
+                    {devices.map((d) => (
+                      <option key={d.key} value={d.key}>{d.label} ({d.key})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {isSiteLevelMetric && (
+                <p className="text-xs text-muted-foreground">
+                  Collector-gap is a site-level signal — it fires once when the whole site goes silent, so no device is selected.
+                </p>
+              )}
+
               {/* Agg + Condition + Threshold */}
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -841,17 +895,22 @@ export default function AlertsPage() {
                   <label className="text-xs font-medium">Eval Window (min)</label>
                   <input
                     type="number"
-                    min={isIface ? IFACE_MIN_WINDOW : 1}
+                    min={isIface ? IFACE_MIN_WINDOW : isDevice ? DEVICE_MIN_WINDOW : 1}
                     value={form.evaluation_window_minutes}
                     onChange={(e) => setForm({ ...form, evaluation_window_minutes: Number(e.target.value) })}
                     className={cn(
                       "w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1",
-                      ifaceWindowTooShort && "border-red-400"
+                      (ifaceWindowTooShort || deviceWindowTooShort) && "border-red-400"
                     )}
                   />
                   {ifaceWindowTooShort && (
                     <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
                       Interface bandwidth needs ≥ {IFACE_MIN_WINDOW} min (rate derivative).
+                    </p>
+                  )}
+                  {deviceWindowTooShort && (
+                    <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
+                      Device availability needs ≥ {DEVICE_MIN_WINDOW} min (else a dropped poll false-fires).
                     </p>
                   )}
                 </div>
@@ -928,7 +987,7 @@ export default function AlertsPage() {
                 </button>
                 <button
                   onClick={saveRule}
-                  disabled={saving || !form.name || ifaceWindowTooShort || (isIface && !form.target_key)}
+                  disabled={saving || !form.name || ifaceWindowTooShort || deviceWindowTooShort || (isIface && !form.target_key)}
                   className="px-4 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : editingRule ? "Update" : "Create"}

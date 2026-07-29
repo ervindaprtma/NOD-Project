@@ -493,6 +493,10 @@ class ReportJob(Base):
         String(10), nullable=True,
         comment="R-09 only: interval for detail table rows (15m/30m/1h/2h/4h/6h/12h/24h)"
     )
+    sla_thresholds: Mapped[Optional[dict]] = mapped_column(
+        JSONB, nullable=True,
+        comment="R-04 only: {wan:{latency,jitter,packet_loss}, mpls:{...}} SLA ceilings"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────

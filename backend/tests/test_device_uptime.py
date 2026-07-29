@@ -412,3 +412,21 @@ def test_device_that_goes_silent_and_never_returns_is_charged_as_downtime():
     assert d["status"] == "not_reporting"
     assert d["availability_pct"] < 95.0                     # ~2h of the 24h charged as down
     assert d["total_downtime_seconds"] >= 2 * 3_600 - 900
+
+
+def test_short_silence_under_the_threshold_is_not_a_false_issue():
+    """A gap shorter than STALE_AFTER_MS (300s) is normal poll jitter (a dropped SNMP
+    scrape or two), NOT an outage: the device must read `up` at 100%, never
+    `not_reporting`. Guards the exact false alarm the 300s threshold exists to prevent —
+    at the old 60s threshold this same device would have been flagged down."""
+    bm, n, gte, lte = 900_000, 96, 0, 24 * HOUR
+    base = _ticks(100 * 86_400)
+    last = lte - 200_000                                    # last sample 200s before end (< 300s)
+    dev = _agg("10.0.0.51", "jittery", base + (n - 1) * 900,
+               _series(gte, bm, n, doc_of=lambda i: 30, tick_of=lambda i: base + i * 900),
+               gte + 15_000, last, n * 30)
+    d = shape_result({"by_device": {"buckets": [dev]}},
+                     gte, lte, bucket_seconds=900, site_tag="dc", window="24h")["devices"][0]
+    assert d["status"] == "up"                              # not "not_reporting"
+    assert d["availability_pct"] == 100.0                   # a dropped poll is not downtime
+    assert d["total_downtime_seconds"] == 0

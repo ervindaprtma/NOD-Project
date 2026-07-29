@@ -48,6 +48,7 @@ const REPORT_TYPES = [
   { id: "R-07", title: "Executive Summary", desc: "KPI dashboard, 1-page overview" },
   { id: "R-08", title: "All-in-One", desc: "Combined report: all sections" },
   { id: "R-09", title: "Interface Bandwidth", desc: "WAN/MPLS per-interface throughput, avg In/Out, time-range table" },
+  { id: "R-10", title: "Device Availability", desc: "Per-device SLA %, uptime, reboots, downtime & collector gaps per site" },
 ];
 
 const SITES = [
@@ -100,7 +101,20 @@ const SECTIONS: Record<string, { id: string; label: string }[]> = {
     { id: "timeline", label: "Bandwidth Timeline" },
     { id: "detail_table", label: "Detail Table" },
   ],
+  "R-10": [
+    { id: "summary", label: "Per-Site Summary" },
+    { id: "device_table", label: "Device SLA Table" },
+    { id: "collector_gaps", label: "Collector Gaps" },
+  ],
 };
+
+const AVAIL_WINDOWS = [
+  { label: "24h", value: "24h" },
+  { label: "7d", value: "7d" },
+  { label: "30d", value: "30d" },
+  { label: "90d", value: "90d" },
+  { label: "365d", value: "365d" },
+];
 
 const FORMATS = [
   { id: "pdf", label: "PDF", ext: ".pdf" },
@@ -189,6 +203,13 @@ export default function ReportsPage() {
   const [customLte, setCustomLte] = useState("");
   const [useCustom, setUseCustom] = useState(false);
   const [tableInterval, setTableInterval] = useState("1h");
+  const [availWindow, setAvailWindow] = useState("24h");
+  // R-04 SLA ceilings by link type (breach = measured value above threshold). Sensible
+  // defaults; the operator adjusts before generating.
+  const [slaThresholds, setSlaThresholds] = useState({
+    wan: { latency: 100, jitter: 30, packet_loss: 1 },
+    mpls: { latency: 50, jitter: 20, packet_loss: 0.5 },
+  });
   const canGenerateReports = hasMinRole("operator");
   const [generating, setGenerating] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -253,6 +274,15 @@ export default function ReportsPage() {
   // ── Generate ────────────────────────────────────────────
 
   async function handleGenerate() {
+    // R-10 is scoped by its Availability Window, not the report time range; the range
+    // is required by the API but ignored server-side, so send a fixed dummy and skip the
+    // 24h-range warning entirely (a stale >24h custom range must not block it).
+    if (reportType === "R-10") {
+      const now = Date.now();
+      await doGenerate(now - 3600_000, now);
+      return;
+    }
+
     const { gte, lte } = getTimeRange();
     const durationSec = (lte - gte) / 1000;
 
@@ -280,7 +310,9 @@ export default function ReportsPage() {
           time_range_end: lte,
           sites: selectedSites,
           sections: selectedSections.length > 0 ? selectedSections : undefined,
-          table_interval: reportType === "R-09" ? tableInterval : undefined,
+          table_interval:
+            reportType === "R-09" ? tableInterval : reportType === "R-10" ? availWindow : undefined,
+          sla_thresholds: reportType === "R-04" ? slaThresholds : undefined,
         }),
         },
       );
@@ -450,7 +482,8 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Time Range */}
+        {/* Time Range — hidden for R-10, which is scoped by its own Availability Window */}
+        {reportType !== "R-10" && (
         <div>
           <label className="text-sm font-medium mb-2 block">Time Range</label>
           <div className="flex flex-wrap items-center gap-2">
@@ -508,6 +541,7 @@ export default function ReportsPage() {
             )}
           </div>
         </div>
+        )}
 
         {/* Table Interval (R-09 only) */}
         {reportType === "R-09" && (
@@ -529,6 +563,73 @@ export default function ReportsPage() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* SLA Thresholds (R-04 only) */}
+        {reportType === "R-04" && (
+          <div>
+            <label className="text-sm font-medium mb-2 block">SLA Thresholds</label>
+            <p className="text-xs text-muted-foreground mb-2">
+              A link is marked <span className="font-medium">Breached</span> when a measured value exceeds its type&apos;s ceiling.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {(["wan", "mpls"] as const).map((lt) => (
+                <div key={lt} className="border rounded-md p-3 bg-muted/30">
+                  <div className="text-xs font-semibold uppercase mb-2">{lt}</div>
+                  <div className="space-y-2">
+                    {([
+                      { k: "latency", label: "Latency (ms)", step: 1 },
+                      { k: "jitter", label: "Jitter (ms)", step: 1 },
+                      { k: "packet_loss", label: "Packet Loss (%)", step: 0.1 },
+                    ] as const).map(({ k, label, step }) => (
+                      <div key={k} className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">{label}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={step}
+                          value={slaThresholds[lt][k]}
+                          onChange={(e) =>
+                            setSlaThresholds((prev) => ({
+                              ...prev,
+                              [lt]: { ...prev[lt], [k]: e.target.value === "" ? 0 : Number(e.target.value) },
+                            }))
+                          }
+                          className="w-24 px-2 py-1 text-xs rounded-md border bg-background text-right"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Availability Window (R-10 only) */}
+        {reportType === "R-10" && (
+          <div>
+            <label className="text-sm font-medium mb-2 block">Availability Window</label>
+            <div className="flex flex-wrap gap-1 bg-muted rounded-md p-1">
+              {AVAIL_WINDOWS.map((w) => (
+                <button
+                  key={w.value}
+                  onClick={() => setAvailWindow(w.value)}
+                  className={cn(
+                    "px-2.5 py-1 text-xs rounded-sm transition-colors",
+                    availWindow === w.value
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {w.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Availability is measured over this SLA window, independent of the time range above.
+            </p>
           </div>
         )}
 
