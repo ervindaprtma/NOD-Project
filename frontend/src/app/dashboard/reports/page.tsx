@@ -268,6 +268,15 @@ export default function ReportsPage() {
   // ── Generate ────────────────────────────────────────────
 
   async function handleGenerate() {
+    // R-10 is scoped by its Availability Window, not the report time range; the range
+    // is required by the API but ignored server-side, so send a fixed dummy and skip the
+    // 24h-range warning entirely (a stale >24h custom range must not block it).
+    if (reportType === "R-10") {
+      const now = Date.now();
+      await doGenerate(now - 3600_000, now);
+      return;
+    }
+
     const { gte, lte } = getTimeRange();
     const durationSec = (lte - gte) / 1000;
 
@@ -466,7 +475,8 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Time Range */}
+        {/* Time Range — hidden for R-10, which is scoped by its own Availability Window */}
+        {reportType !== "R-10" && (
         <div>
           <label className="text-sm font-medium mb-2 block">Time Range</label>
           <div className="flex flex-wrap items-center gap-2">
@@ -524,6 +534,7 @@ export default function ReportsPage() {
             )}
           </div>
         </div>
+        )}
 
         {/* Table Interval (R-09 only) */}
         {reportType === "R-09" && (
