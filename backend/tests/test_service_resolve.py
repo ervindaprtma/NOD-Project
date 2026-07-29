@@ -1,6 +1,33 @@
 """M0: hybrid service resolver — flow.application.name first, port fallback.
 See design_service_field_migration.md §3."""
 from app.opensearch._common import resolve_service
+from app.port_service_map import port_to_service
+
+
+def test_misleading_iana_names_are_aliased_to_operator_names():
+    """IANA mnemonics that mislead a NOC operator render as the expected name."""
+    assert port_to_service(53) == "DNS"        # not "domain"
+    assert port_to_service(445) == "SMB"       # not "microsoft-ds"
+    assert port_to_service(3389) == "RDP"      # not "ms-wbt-server"
+    assert port_to_service(587) == "SMTP-Submission"  # not "submission"
+    assert port_to_service(135) == "MS-RPC"    # not "epmap"
+    assert port_to_service(520) == "RIP"       # not "route"
+
+
+def test_already_clear_iana_names_are_left_alone():
+    assert port_to_service(22) == "ssh"
+    assert port_to_service(443) == "https"
+    assert port_to_service(5432) == "postgresql"
+
+
+def test_alias_never_overrides_a_classified_app_name():
+    """The alias map only touches the PORT fallback. A flow FortiGate already named
+    keeps that name — a DNS/RDP alias must never replace the raw application name."""
+    assert resolve_service("HTTPS", 53) == "HTTPS"     # port 53 aliases to DNS, but app wins
+    assert resolve_service("SIP", 3389) == "SIP"       # port 3389 aliases to RDP, but app wins
+    # only the unclassified path reaches the alias
+    assert resolve_service("app-0", 53) == "DNS"
+    assert resolve_service("app-0", 3389) == "RDP"
 
 
 def test_classified_app_wins_over_port():
