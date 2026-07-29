@@ -6,9 +6,11 @@ checker misses because the call sites use dynamic dicts.
 """
 import inspect
 
+import pytest
+
 from app.api.interface_stats import _compute_throughput_timeline
-from app.opensearch import ipsec, sslvpn, traffic_inbound, traffic_internal
-from app.services.report_generator import _auto_interval_str
+from app.opensearch import device_uptime, ipsec, sslvpn, traffic_inbound, traffic_internal
+from app.services.report_generator import _auto_interval_str, _report_title, build_report_context
 
 
 def test_interface_timeline_returns_triple():
@@ -50,3 +52,57 @@ def test_unknown_site_matches_nothing():
     for mod in (traffic_inbound, traffic_internal):
         assert mod._site_filter("Site_Does_Not_Exist") == {"match_none": {}}
         assert "term" in mod._site_filter("Site_FGT-DC")
+
+
+@pytest.mark.asyncio
+async def test_r10_reads_window_from_table_interval(monkeypatch):
+    """
+    R-10 has no dedicated window column: it carries the SLA window in
+    `table_interval`. Guards that build_report_context routes it into
+    device_availability(window=...) and maps the result into the template shape.
+    """
+    assert _report_title("R-10") == "Device Availability Report"
+
+    captured = {}
+
+    async def fake_availability(site_name, window, **kwargs):
+        captured["window"] = window
+        return {
+            "summary": {"devices_total": 1, "devices_reporting": 1, "reboots_total": 0,
+                        "collector_gaps": [{"start_ms": 0, "end_ms": 60_000, "duration_seconds": 60}],
+                        "history_sufficient": False},
+            "devices": [{"hostname": "SW-1", "vendor": "cisco", "status": "up",
+                         "availability_pct": 99.9, "uptime_human_long": "1 day",
+                         "boot_time_ms": 1_700_000_000_000, "reboot_count": 0,
+                         "total_downtime_seconds": 42, "wrap_risk": False, "partial_history": True}],
+        }
+
+    monkeypatch.setattr(device_uptime, "device_availability", fake_availability)
+
+    ctx = await build_report_context(
+        report_type="R-10", gte_ms=0, lte_ms=1,
+        sites=["Site_FGT-DC"], table_interval="30d",
+    )
+    da = ctx["report_data"]["device_availability"]
+    assert captured["window"] == "30d"       # table_interval → window, not the 0..1 range
+    assert da["window"] == "30d"
+    site = da["sites"][0]
+    assert site["site_label"] == "DC"
+    assert site["history_sufficient"] is False
+    assert len(site["collector_gaps"]) == 1
+    dev = site["devices"][0]
+    assert dev["availability_pct"] == 99.9 and dev["reboot_count"] == 0
+    assert dev["booted"] != "—"              # boot_time_ms formatted, not dropped
+
+
+@pytest.mark.asyncio
+async def test_r10_bad_window_falls_back_to_24h(monkeypatch):
+    """A table_interval that isn't a valid availability window must not reach the query."""
+    async def fake_availability(site_name, window, **kwargs):
+        return {"summary": {"collector_gaps": []}, "devices": []}
+
+    monkeypatch.setattr(device_uptime, "device_availability", fake_availability)
+    ctx = await build_report_context(
+        report_type="R-10", gte_ms=0, lte_ms=1, sites=["Site_FGT-DC"], table_interval="15m",
+    )
+    assert ctx["report_data"]["device_availability"]["window"] == "24h"

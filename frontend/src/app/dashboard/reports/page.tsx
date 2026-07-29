@@ -48,6 +48,7 @@ const REPORT_TYPES = [
   { id: "R-07", title: "Executive Summary", desc: "KPI dashboard, 1-page overview" },
   { id: "R-08", title: "All-in-One", desc: "Combined report: all sections" },
   { id: "R-09", title: "Interface Bandwidth", desc: "WAN/MPLS per-interface throughput, avg In/Out, time-range table" },
+  { id: "R-10", title: "Device Availability", desc: "Per-device SLA %, uptime, reboots, downtime & collector gaps per site" },
 ];
 
 const SITES = [
@@ -100,7 +101,20 @@ const SECTIONS: Record<string, { id: string; label: string }[]> = {
     { id: "timeline", label: "Bandwidth Timeline" },
     { id: "detail_table", label: "Detail Table" },
   ],
+  "R-10": [
+    { id: "summary", label: "Per-Site Summary" },
+    { id: "device_table", label: "Device SLA Table" },
+    { id: "collector_gaps", label: "Collector Gaps" },
+  ],
 };
+
+const AVAIL_WINDOWS = [
+  { label: "24h", value: "24h" },
+  { label: "7d", value: "7d" },
+  { label: "30d", value: "30d" },
+  { label: "90d", value: "90d" },
+  { label: "365d", value: "365d" },
+];
 
 const FORMATS = [
   { id: "pdf", label: "PDF", ext: ".pdf" },
@@ -189,6 +203,7 @@ export default function ReportsPage() {
   const [customLte, setCustomLte] = useState("");
   const [useCustom, setUseCustom] = useState(false);
   const [tableInterval, setTableInterval] = useState("1h");
+  const [availWindow, setAvailWindow] = useState("24h");
   const canGenerateReports = hasMinRole("operator");
   const [generating, setGenerating] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -280,7 +295,8 @@ export default function ReportsPage() {
           time_range_end: lte,
           sites: selectedSites,
           sections: selectedSections.length > 0 ? selectedSections : undefined,
-          table_interval: reportType === "R-09" ? tableInterval : undefined,
+          table_interval:
+            reportType === "R-09" ? tableInterval : reportType === "R-10" ? availWindow : undefined,
         }),
         },
       );
@@ -529,6 +545,32 @@ export default function ReportsPage() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Availability Window (R-10 only) */}
+        {reportType === "R-10" && (
+          <div>
+            <label className="text-sm font-medium mb-2 block">Availability Window</label>
+            <div className="flex flex-wrap gap-1 bg-muted rounded-md p-1">
+              {AVAIL_WINDOWS.map((w) => (
+                <button
+                  key={w.value}
+                  onClick={() => setAvailWindow(w.value)}
+                  className={cn(
+                    "px-2.5 py-1 text-xs rounded-sm transition-colors",
+                    availWindow === w.value
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {w.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Availability is measured over this SLA window, independent of the time range above.
+            </p>
           </div>
         )}
 

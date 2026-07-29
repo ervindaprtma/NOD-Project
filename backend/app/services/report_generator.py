@@ -115,6 +115,11 @@ FRONTEND_TO_BACKEND_SECTION = {
         "timeline": "interface_bandwidth",
         "detail_table": "interface_bandwidth",
     },
+    "R-10": {
+        "summary": "device_availability",
+        "device_table": "device_availability",
+        "collector_gaps": "device_availability",
+    },
 }
 
 
@@ -2021,6 +2026,52 @@ async def build_report_context(
 
         context["report_data"]["interface_bandwidth"] = ibw
 
+    # ── R-10: Device Availability ───────────────────────────────────
+    if report_type == "R-10" and (not sections or "device_availability" in sections):
+        from app.opensearch import device_uptime as du
+
+        # R-10 carries its SLA window in table_interval (24h/7d/30d/90d/365d),
+        # NOT the report's generic range — availability is a period concept.
+        window = table_interval if table_interval in du.WINDOW_SECONDS else "24h"
+        da_sites: list[dict[str, Any]] = []
+        for site in site_list:
+            try:
+                result = await du.device_availability(site_name=site, window=window)
+            except Exception as exc:
+                logger.error("R-10 device availability fetch failed for %s: %s", site, exc, exc_info=True)
+                continue
+            summary = result.get("summary", {})
+            devices = []
+            for d in result.get("devices", []):
+                devices.append({
+                    "hostname": d.get("hostname", "—"),
+                    "vendor": d.get("vendor", "—"),
+                    "status": d.get("status", "—"),
+                    "availability_pct": d.get("availability_pct"),
+                    "uptime_human": d.get("uptime_human_long", "—"),
+                    "booted": format_time_ms(d["boot_time_ms"]) if d.get("boot_time_ms") else "—",
+                    "reboot_count": d.get("reboot_count", 0),
+                    "downtime_human": du.format_uptime_short(d.get("total_downtime_seconds", 0)),
+                    "wrap_risk": d.get("wrap_risk", False),
+                    "partial_history": d.get("partial_history", False),
+                })
+            gaps = [
+                {
+                    "start": format_time_ms(g["start_ms"]),
+                    "end": format_time_ms(g["end_ms"]),
+                    "duration": du.format_uptime_short(g["duration_seconds"]),
+                }
+                for g in summary.get("collector_gaps", [])
+            ]
+            da_sites.append({
+                "site_label": _site_label(site),
+                "summary": summary,
+                "devices": devices,
+                "collector_gaps": gaps,
+                "history_sufficient": summary.get("history_sufficient", True),
+            })
+        context["report_data"]["device_availability"] = {"window": window, "sites": da_sites}
+
     # ── Attach all charts ───────────────────────────────────────────
     context["charts"] = {
         k: base64.b64encode(v).decode() if isinstance(v, bytes) else v
@@ -2173,6 +2224,7 @@ def _report_title(report_type: str) -> str:
         "R-07": "Executive Summary Report",
         "R-08": "All-in-One Network Observability Report",
         "R-09": "Interface Bandwidth Usage Report",
+        "R-10": "Device Availability Report",
     }
     return mapping.get(report_type, "NOD Report")
 
