@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 class AlertRuleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     severity: str = Field(..., pattern=r"^(INFO|WARNING|CRITICAL)$")
-    data_source: str = Field(..., pattern=r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec|interface_stats)$")
+    data_source: str = Field(..., pattern=r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec|interface_stats|device_uptime)$")
     metric_field: str = Field(..., min_length=1, max_length=255)
     aggregation: str = Field(..., pattern=r"^(avg|max|min|sum|count)$")
     condition: str = Field(..., pattern=r"^(>|<|>=|<=|==)$")
@@ -30,7 +30,7 @@ class AlertRuleCreate(BaseModel):
 class AlertRuleUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     severity: Optional[str] = Field(default=None, pattern=r"^(INFO|WARNING|CRITICAL)$")
-    data_source: Optional[str] = Field(default=None, pattern=r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec|interface_stats)$")
+    data_source: Optional[str] = Field(default=None, pattern=r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec|interface_stats|device_uptime)$")
     metric_field: Optional[str] = Field(default=None, min_length=1, max_length=255)
     aggregation: Optional[str] = Field(default=None, pattern=r"^(avg|max|min|sum|count)$")
     condition: Optional[str] = Field(default=None, pattern=r"^(>|<|>=|<=|==)$")

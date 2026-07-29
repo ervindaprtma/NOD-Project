@@ -497,6 +497,19 @@ async def test_alert_rule(
             metric_value = _extract_interface_stats(
                 rule.metric_field, rule.target_key, rule.aggregation, iface_summary
             ) if isinstance(iface_summary, dict) else 0.0
+        elif rule.data_source == "device_uptime":
+            # Same summary + extractor the engine uses, so the dry-run matches live.
+            from app.opensearch import device_uptime as du_qb
+            from app.services.alert_engine import _extract_device_uptime
+            avail = await du_qb.device_availability(
+                site_name=rule.site_name or "Site_FGT-DC", gte_ms=gte_ms, lte_ms=lte_ms
+            )
+            extracted = _extract_device_uptime(
+                rule.metric_field, rule.target_key, avail
+            ) if isinstance(avail, dict) else None
+            # None = "unknown" (device absent / insufficient history) — the engine holds;
+            # for the dry-run surface it as 0 so the operator sees "not breaching".
+            metric_value = extracted if extracted is not None else 0.0
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -592,3 +605,23 @@ async def get_site_interfaces(
     order = SITE_IFACE_SORT_ORDER.get(site_name, {})
     keys = sorted(iface_map.keys(), key=lambda k: order.get(k, 999))
     return APIResponse.ok(data=[{"key": k, "label": iface_map[k]} for k in keys])
+
+
+@router.get("/devices")
+async def get_site_devices(
+    site_name: str,
+    current_user: User = Depends(require_role("viewer")),
+) -> APIResponse[list[dict]]:
+    """Track AL: per-site device list for the builder's device picker (→ target_key).
+
+    key is the device IP (tag.source, the stable identity the engine matches on);
+    label is the hostname. Sourced from live telemetry via device_availability().
+    """
+    from app.opensearch import device_uptime as du_qb
+
+    avail = await du_qb.device_availability(site_name=site_name, window="24h")
+    devices = avail.get("devices", []) if isinstance(avail, dict) else []
+    return APIResponse.ok(data=[
+        {"key": d["device_key"], "label": d.get("hostname") or d["device_key"]}
+        for d in devices
+    ])
