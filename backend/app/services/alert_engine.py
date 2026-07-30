@@ -9,11 +9,12 @@ so one OpenSearch query serves N rules instead of N queries.
 """
 from __future__ import annotations
 
+import html
 import logging
 import re
 import time as _time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -30,6 +31,10 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 scheduler = AsyncIOScheduler()
+
+# Notification timestamps render in WIB (UTC+7, no DST) to match operators' local time
+# and the Grafana-style templates. SSE/API times stay UTC ISO — the frontend localizes those.
+_WIB = timezone(timedelta(hours=7))
 
 # Phase C: last-run telemetry for the engine-health endpoint. Set at the end of
 # each evaluate_all_rules() tick. Process-local (matches the in-process scheduler).
@@ -459,7 +464,7 @@ async def _advance_state_machine(
     metric_value: float,
     condition_met: bool,
     db: AsyncSession,
-    notify_queue: list[tuple[AlertRule, float]] | None = None,
+    notify_queue: list[tuple[AlertRule, float, str]] | None = None,
 ) -> None:
     """Shared state machine for single and composite rules (P5).
 
@@ -519,7 +524,7 @@ async def _advance_state_machine(
                     # not the alerting, turning a 15-minute debounce on a 60s tick into
                     # ~15 messages before the rule had even fired.
                     if notify_queue is not None:
-                        notify_queue.append((rule, metric_value))
+                        notify_queue.append((rule, metric_value, "firing"))
 
                     # SSE stays per-rule (real-time)
                     await sse_broadcast("alert",
@@ -540,7 +545,7 @@ async def _advance_state_machine(
 
                     # Enqueue re-notification (batch)
                     if notify_queue is not None:
-                        notify_queue.append((rule, metric_value))
+                        notify_queue.append((rule, metric_value, "firing"))
 
                     await sse_broadcast("alert",
                         rule_id=rule.id,
@@ -552,9 +557,17 @@ async def _advance_state_machine(
 
     else:
         if state.state in ("FIRING", "PENDING"):
+            was_firing = state.state == "FIRING"
             state.state = "RESOLVED"
             state.pending_since = None
             await db.flush()
+
+            # Recovery notification — same channels that got the alert now get the
+            # all-clear. Only for a rule that actually FIRED: a PENDING→RESOLVED rule
+            # was still debouncing and never notified, so a "recovered" message would
+            # reference an alert the operator never received.
+            if was_firing and notify_queue is not None:
+                notify_queue.append((rule, metric_value, "resolved"))
 
             log_result = await db.execute(
                 select(AlertLog)
@@ -699,7 +712,7 @@ def _extract_per_rule_value_flat(
         return None
     except (TypeError, ValueError, IndexError):
         return None
-async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> None:
+async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) -> None:
     """Send batched notifications — one grouped message per channel (P7).
 
     Instead of one message per rule, aggregates all pending notifications
@@ -712,14 +725,20 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
     if not notify_queue:
         return
 
-    now_str = datetime.now(timezone.utc).strftime("%d %b %Y %H:%M UTC")
+    now_str = datetime.now(_WIB).strftime("%d %b %Y %H:%M:%S WIB")
+
+    # Adapt the header/subject to content: an all-clear batch reads as a recovery; any
+    # still-firing rule keeps the alert framing.
+    n_res = sum(1 for _, _, ev in notify_queue if ev == "resolved")
+    n_fire = len(notify_queue) - n_res
+    title = "✅ NOD Recovery Summary" if n_res and not n_fire else "🛑 NOD Alert Summary"
 
     # Build aggregated message
-    lines = [f"🛑  NOD Alert Summary — {now_str}", "━" * 35]
+    lines = [f"{title} — {now_str}", "━" * 35]
     sev_emoji = {"CRITICAL": "🔴", "WARNING": "⚠️", "INFO": "ℹ️"}
 
     # §9.5: pre-fetch all referenced templates in one query
-    template_ids = {r.template_id for r, _ in notify_queue if r.template_id}
+    template_ids = {r.template_id for r, _, _ in notify_queue if r.template_id}
     template_body: dict[str, str] = {}
     if template_ids:
         from app.db.models import AlertTemplate
@@ -740,7 +759,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
     # with none fall to the admin-chosen default. Only ACTIVE templates render; an
     # inactive/retired one is skipped and the rule falls through. Prefer line_template
     # (the batch line), fall back to body_template.
-    nt_ids = {r.notification_template_id for r, _ in notify_queue if r.notification_template_id}
+    nt_ids = {r.notification_template_id for r, _, _ in notify_queue if r.notification_template_id}
     nt_line: dict[str, str] = {}
     default_line: str | None = None
     try:
@@ -765,8 +784,9 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
     except Exception as e:
         logger.error("Failed to fetch notification templates: %s", e)
 
-    for rule, mv in notify_queue:
+    for rule, mv, event in notify_queue:
         sev = sev_emoji.get(rule.severity, "🔔")
+        resolved = event == "resolved"
         # Resolution: assigned (active) template → active default → AlertTemplate body →
         # hardcoded. nt_line only holds active templates, so an inactive assignment falls
         # through to the default here.
@@ -775,7 +795,12 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
             or default_line
             or (template_body.get(rule.template_id) if rule.template_id else None)
         )
-        if tmpl_text:
+        # A recovery only renders through the template if that template branches on
+        # `event` ({% if event == 'resolved' %}…) — otherwise an alert-worded template
+        # would describe a resolved rule as if it were still firing. Templates that don't
+        # mention `event` fall to the event-aware hardcoded line below. ponytail: substring
+        # test, not a parse — mentioning `event` is how a template opts into recovery text.
+        if tmpl_text and (not resolved or "event" in tmpl_text):
             # The seeded AlertTemplates use flat var names ({{ name }}, {{ metric_value }});
             # §11.1 NotificationTemplates use nested {{ rule.* }}. Provide both so either renders.
             ctx = {
@@ -799,6 +824,9 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
                 "fired_at": now_str,
+                # Fire vs resolve — lets one template render both ({% if event == 'resolved' %}).
+                "event": event,
+                "event_label": "Resolved" if resolved else "Firing",
             }
             try:
                 lines.append(_render_template(tmpl_text, ctx))
@@ -807,8 +835,26 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
                 # ponytail: render error falls back to hardcoded line — never
                 # lose the alert to a template typo
                 logger.error("Template render failed for rule %s: %s — falling back to hardcoded", rule.id, e)
-        lines.append(f"{sev} [{rule.severity}] {rule.name} @ {rule.site_name or '—'}: {mv}")
-    body = "\n".join(lines)
+        # Escape name/site — a rule name with a stray '<' must not break HTML mode if the
+        # batch turns out HTML (from another rule's template). Plain mode is unaffected.
+        nm = html.escape(rule.name)
+        st = html.escape(rule.site_name or "—")
+        if resolved:
+            lines.append(f"✅ [RESOLVED] {nm} @ {st}: recovered (now {mv})")
+        else:
+            lines.append(f"{sev} [{rule.severity}] {nm} @ {st}: {mv}")
+
+    # If any rule rendered an HTML template, send the rich blocks as one HTML message
+    # (grouped, matching the Grafana style) and drop the plain summary header. Otherwise
+    # the classic plain-text digest. `outputs` are the per-rule strings after header+rule.
+    outputs = lines[2:]
+    is_html = any("<b>" in s for s in outputs)
+    if is_html:
+        body = "\n\n".join(outputs)
+        parse_mode: str | None = "HTML"
+    else:
+        body = "\n".join(lines)
+        parse_mode = None
 
     # Load channels and send — only the ones the firing rules actually want
     # (§9.3: was sending to every enabled channel; now respects rule.notify_channels)
@@ -817,7 +863,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
         from app.db.models import NotificationConfig as NotifCfg
         from app.services.notifier_helper import send_alert
 
-        fired_channels = {ch for rule, _ in notify_queue for ch in rule.notify_channels}
+        fired_channels = {ch for rule, _, _ in notify_queue for ch in rule.notify_channels}
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(
@@ -829,7 +875,8 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float]]) -> No
             channels = result.scalars().all()
             for ch in channels:
                 try:
-                    await send_alert(ch.channel, ch.config, subject="NOD Alert Summary", body=body)
+                    await send_alert(ch.channel, ch.config, subject=title, body=body,
+                                     parse_mode=parse_mode)
                 except Exception as e:
                     logger.error("Batch notify failed for %s: %s", ch.channel, e)
     except Exception as e:
@@ -872,7 +919,7 @@ async def _run_evaluation_cycle() -> None:
             composite_rules = [r for r in active_rules if r.kind == "composite"]
 
             # ── 1. Single rules (P1 batched) ──
-            notify_queue: list[tuple[AlertRule, float]] = []
+            notify_queue: list[tuple[AlertRule, float, str]] = []
             groups: dict[tuple, list[AlertRule]] = defaultdict(list)
             for rule in single_rules:
                 key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)

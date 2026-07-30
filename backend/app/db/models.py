@@ -129,6 +129,10 @@ class AlertRule(Base):
     # Null for sources that address a single metric or encode the sub-entity in
     # metric_field (sdwan link, traffic path).
     target_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # interface_stats only: operator-entered link max (Mbps). When set, the % threshold is
+    # stored as Mbps (threshold_value = link_max × %); this remembers the max so the UI can
+    # show the % again on edit. Null = absolute-Mbps rule. Eval is unchanged (Mbps compare).
+    link_max_mbps: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     aggregation: Mapped[str] = mapped_column(
         String(10), nullable=False
     )  # avg, max, min, sum, count

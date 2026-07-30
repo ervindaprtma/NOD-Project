@@ -118,6 +118,7 @@ export default function RawDataPage() {
   const isTimeout = (error as any)?.code === "TIMEOUT";
   const records = data?.data || [];
   const total = data?.meta?.total || 0;
+  const sessions = data?.meta?.total_sessions || 0;
   const queryTook = data?.meta?.query_took_ms;
   // The search_after cursor returned by the API (includes _id tiebreaker)
   const nextCursor = (data?.meta?.search_after as (number | string)[] | null) || null;
@@ -334,7 +335,11 @@ export default function RawDataPage() {
           </div>
         </div>
         <span className="text-xs text-muted-foreground">
-          {total > 0 ? `~${total.toLocaleString()} total records` : ""}
+          {total > 0
+            ? `~${total.toLocaleString()} total records${
+                sessions > 0 ? ` · ~${sessions.toLocaleString()} sessions` : ""
+              }`
+            : ""}
         </span>
       </div>
 

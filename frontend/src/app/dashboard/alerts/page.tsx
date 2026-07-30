@@ -68,6 +68,7 @@ interface RuleForm {
   data_source: string;
   metric_field: string;
   target_key: string;
+  link_max_mbps: number | null;   // interface throughput: set → "% of link max" mode
   aggregation: string;
   condition: string;
   threshold_value: number;
@@ -86,6 +87,7 @@ const emptyForm: RuleForm = {
   data_source: "ha_resource",
   metric_field: "ha_member.cpu_usage",
   target_key: "",
+  link_max_mbps: null,
   aggregation: "avg",
   condition: ">",
   threshold_value: 80,
@@ -93,8 +95,19 @@ const emptyForm: RuleForm = {
   sustained_for_minutes: 2,
   notify_channels: ["telegram"],
   notification_template_id: "",
-  site_name: "",
+  site_name: "Site_FGT-DC",
   enabled: true,
+};
+
+// Minimal shape of a rule template from GET /api/v1/alerts/templates. locked_fields
+// keys map 1:1 to RuleForm fields (single-rule templates); composite templates carry
+// `clauses` instead, so those keys are simply absent and the form keeps its defaults.
+type AlertTemplateLite = {
+  id: string;
+  name: string;
+  icon: string;
+  category: string;
+  locked_fields: Record<string, string | number | undefined>;
 };
 
 export default function AlertsPage() {
@@ -142,6 +155,14 @@ export default function AlertsPage() {
     swrFetcher
   );
   const messageTemplates = templatesData?.data || [];
+
+  // Rule-template gallery (v3 §3.12) — fetched from the backend seeder, not hardcoded,
+  // so new templates (e.g. Device Availability Uptime) appear without a frontend change.
+  const { data: ruleTemplatesData } = useSWR<{ data: AlertTemplateLite[] }>(
+    "/api/v1/alerts/templates",
+    swrFetcher
+  );
+  const ruleTemplates = ruleTemplatesData?.data || [];
   // Constrain agg/condition to the chosen field; fall back to full lists pre-load.
   const metricAggs = selectedField?.valid_aggregations?.length ? selectedField.valid_aggregations : AGGREGATIONS;
   const metricConds = selectedField?.valid_conditions?.length ? selectedField.valid_conditions : CONDITIONS;
@@ -221,6 +242,16 @@ export default function AlertsPage() {
 
   const deviceWindowTooShort = isDevice && form.evaluation_window_minutes < DEVICE_MIN_WINDOW;
 
+  // SD-WAN link Up/Down: metric status_linkN, 0=Up / >=1=Down. A Down/Up toggle drives
+  // condition+threshold instead of raw numeric inputs.
+  const isSdwanStatus = form.data_source === "sdwan_sla" && form.metric_field.startsWith("status_link");
+  const sdwanWantsUp = form.condition === "==" && form.threshold_value === 0;
+  // Interface throughput: absolute Mbps, or % of an operator-entered link max (link_max_mbps
+  // set → % mode; threshold_value stays Mbps = max × %).
+  const isThroughput = isIface && form.metric_field === "iface.throughput_mbps";
+  const thrIsPct = form.link_max_mbps != null;
+  const thrPct = thrIsPct && form.link_max_mbps ? Math.round((form.threshold_value / form.link_max_mbps) * 100) : 90;
+
   const { data: logsData } = useSWR<{ data: { id: string; rule_name: string; severity: string; metric_value_at_firing: number; fired_at: string; resolved_at: string | null }[] }>(
     showHistory ? "/api/v1/alerts/logs?limit=50" : null,
     swrFetcher
@@ -295,6 +326,7 @@ export default function AlertsPage() {
       data_source: rule.data_source,
       metric_field: rule.metric_field,
       target_key: rule.target_key || "",
+      link_max_mbps: rule.link_max_mbps ?? null,
       aggregation: rule.aggregation,
       condition: rule.condition,
       threshold_value: rule.threshold_value,
@@ -314,9 +346,12 @@ export default function AlertsPage() {
     // target_key applies to interface_stats (required) and device_uptime (optional; blank =
     // any device / site-level). Cleared for every other source. Empty string → null.
     const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime";
+    // link_max_mbps only rides along with interface throughput's %-of-max mode.
+    const keepsLinkMax = form.data_source === "interface_stats" && form.metric_field === "iface.throughput_mbps";
     const payload = {
       ...form,
       target_key: keepsTargetKey ? (form.target_key || null) : null,
+      link_max_mbps: keepsLinkMax ? form.link_max_mbps : null,
       notification_template_id: form.notification_template_id || null,
     };
     try {
@@ -489,25 +524,33 @@ export default function AlertsPage() {
           <span className="text-[10px] text-muted-foreground">Quick-start from pre-built templates</span>
         </div>
         <div className="flex flex-wrap gap-2">
-          {[
-            { icon: "📶", name: "SD-WAN SLA Breach", cat: "performance" },
-            { icon: "🔒", name: "VPN Tunnel Down", cat: "availability" },
-            { icon: "🚦", name: "WAN Congestion", cat: "performance" },
-            { icon: "📈", name: "Throughput Spike", cat: "capacity" },
-            { icon: "🔑", name: "SSL VPN Capacity", cat: "capacity" },
-            { icon: "🔗", name: "IPsec Tunnel Status", cat: "availability" },
-          ].map((t) => (
+          {ruleTemplates.map((t) => (
             <button
-              key={t.name}
+              key={t.id}
               onClick={() => {
                 if (!canManageAlerts) return;
+                const lf = t.locked_fields || {};
                 setEditingRule(null);
-                setForm({ ...emptyForm, name: `[Template] ${t.name}` });
+                // Pre-fill the form from the template's locked_fields so the rule opens
+                // with the correct data_source + metric + defaults already selected.
+                // Only keys present are applied (composite templates keep form defaults).
+                setForm({
+                  ...emptyForm,
+                  name: `[Template] ${t.name}`,
+                  ...(lf.data_source ? { data_source: String(lf.data_source) } : {}),
+                  ...(lf.metric_field ? { metric_field: String(lf.metric_field) } : {}),
+                  ...(lf.aggregation ? { aggregation: String(lf.aggregation) } : {}),
+                  ...(lf.condition ? { condition: String(lf.condition) } : {}),
+                  ...(lf.threshold_value != null ? { threshold_value: Number(lf.threshold_value) } : {}),
+                  ...(lf.evaluation_window_minutes != null ? { evaluation_window_minutes: Number(lf.evaluation_window_minutes) } : {}),
+                  ...(lf.sustained_for_minutes != null ? { sustained_for_minutes: Number(lf.sustained_for_minutes) } : {}),
+                  ...(lf.severity ? { severity: String(lf.severity) } : {}),
+                });
                 setShowModal(true);
               }}
               disabled={!canManageAlerts}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border bg-background hover:bg-muted transition-colors disabled:opacity-50"
-              title={t.cat}
+              title={t.category}
             >
               <span>{t.icon}</span>
               <span>{t.name}</span>
@@ -719,23 +762,16 @@ export default function AlertsPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium">Site Name</label>
-                  {isIface ? (
-                    <select
-                      value={SITES.includes(form.site_name) ? form.site_name : SITES[0]}
-                      onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: "" })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                    >
-                      {SITES.map((s) => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={form.site_name}
-                      onChange={(e) => setForm({ ...form, site_name: e.target.value })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1 font-mono"
-                      placeholder="DC, DRC, Office"
-                    />
-                  )}
+                  {/* Canonical sites only — free text silently fell back to DC in the engine
+                      (site_name or "Site_FGT-DC"). Reset target_key: the device/interface
+                      picker is keyed on the site. */}
+                  <select
+                    value={SITES.includes(form.site_name) ? form.site_name : SITES[0]}
+                    onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: "" })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  >
+                    {SITES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
                 </div>
               </div>
 
@@ -856,38 +892,134 @@ export default function AlertsPage() {
                 </p>
               )}
 
-              {/* Agg + Condition + Threshold */}
-              <div className="grid grid-cols-3 gap-3">
+              {/* Threshold controls — specialized for SD-WAN link state & interface throughput */}
+              {isSdwanStatus ? (
                 <div>
-                  <label className="text-xs font-medium">Aggregation</label>
-                  <select
-                    value={form.aggregation}
-                    onChange={(e) => setForm({ ...form, aggregation: e.target.value })}
-                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                  >
-                    {metricAggs.map((a) => <option key={a} value={a}>{a}</option>)}
-                  </select>
+                  <label className="text-xs font-medium">Alert when link is</label>
+                  <div className="flex mt-1 rounded-md border overflow-hidden w-fit">
+                    {([["Down", ">=", 1], ["Up", "==", 0]] as const).map(([lbl, cond, thr]) => {
+                      const active = lbl === "Up" ? sdwanWantsUp : !sdwanWantsUp;
+                      return (
+                        <button
+                          key={lbl}
+                          type="button"
+                          onClick={() => setForm({ ...form, aggregation: "max", condition: cond, threshold_value: thr })}
+                          className={
+                            "px-4 py-1.5 text-sm " +
+                            (active
+                              ? (lbl === "Down" ? "bg-red-600 text-white" : "bg-emerald-600 text-white")
+                              : "bg-background hover:bg-muted")
+                          }
+                        >
+                          {lbl === "Down" ? "🔴 Down" : "🟢 Up"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Fires when the link is {sdwanWantsUp ? "Up (status = 0)" : "Down (status ≥ 1)"} — debounced by the sustain window.
+                  </p>
                 </div>
-                <div>
-                  <label className="text-xs font-medium">Condition</label>
-                  <select
-                    value={form.condition}
-                    onChange={(e) => setForm({ ...form, condition: e.target.value })}
-                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                  >
-                    {metricConds.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
+              ) : isThroughput ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium">Aggregation</label>
+                      <select
+                        value={form.aggregation}
+                        onChange={(e) => setForm({ ...form, aggregation: e.target.value })}
+                        className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      >
+                        {metricAggs.map((a) => <option key={a} value={a}>{a}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium">Threshold mode</label>
+                      <div className="flex mt-1 rounded-md border overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setForm({ ...form, link_max_mbps: null, condition: ">" })}
+                          className={"flex-1 px-2 py-1.5 text-xs " + (!thrIsPct ? "bg-blue-600 text-white" : "bg-background hover:bg-muted")}
+                        >
+                          Absolute Mbps
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { const max = form.link_max_mbps || 1000; setForm({ ...form, link_max_mbps: max, condition: ">", threshold_value: Math.round(max * 90 / 100) }); }}
+                          className={"flex-1 px-2 py-1.5 text-xs " + (thrIsPct ? "bg-blue-600 text-white" : "bg-background hover:bg-muted")}
+                        >
+                          % of Link Max
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  {!thrIsPct ? (
+                    <div>
+                      <label className="text-xs font-medium">Threshold (Mbps)</label>
+                      <input
+                        type="number"
+                        value={form.threshold_value}
+                        onChange={(e) => setForm({ ...form, threshold_value: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      />
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium">Link Max (Mbps)</label>
+                        <input
+                          type="number"
+                          value={form.link_max_mbps ?? 0}
+                          onChange={(e) => { const max = Number(e.target.value); setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * thrPct / 100) }); }}
+                          className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium">Alert above (%)</label>
+                        <input
+                          type="number"
+                          value={thrPct}
+                          onChange={(e) => { const pct = Number(e.target.value); const max = form.link_max_mbps || 1000; setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * pct / 100) }); }}
+                          className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                        />
+                        <p className="text-[10px] text-muted-foreground mt-1">= {form.threshold_value} Mbps peak</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <label className="text-xs font-medium">Threshold{selectedField?.unit ? ` (${selectedField.unit})` : ""}</label>
-                  <input
-                    type="number"
-                    value={form.threshold_value}
-                    onChange={(e) => setForm({ ...form, threshold_value: Number(e.target.value) })}
-                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                  />
+              ) : (
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-xs font-medium">Aggregation</label>
+                    <select
+                      value={form.aggregation}
+                      onChange={(e) => setForm({ ...form, aggregation: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    >
+                      {metricAggs.map((a) => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">Condition</label>
+                    <select
+                      value={form.condition}
+                      onChange={(e) => setForm({ ...form, condition: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    >
+                      {metricConds.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">Threshold{selectedField?.unit ? ` (${selectedField.unit})` : ""}</label>
+                    <input
+                      type="number"
+                      value={form.threshold_value}
+                      onChange={(e) => setForm({ ...form, threshold_value: Number(e.target.value) })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Window + Sustained */}
               <div className="grid grid-cols-2 gap-3">

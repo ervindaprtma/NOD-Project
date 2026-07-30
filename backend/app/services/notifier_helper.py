@@ -64,6 +64,7 @@ async def load_channel_configs(min_severity: str | None = None) -> dict[str, dic
 async def send_alert(
     channel: str, config: dict, subject: str, body: str,
     severity: str = "CRITICAL", raise_on_error: bool = False,
+    parse_mode: str | None = None,
 ) -> bool:
     """Dispatch an alert via the named channel. Returns True on success.
 
@@ -71,6 +72,10 @@ async def send_alert(
     the batch — so failures are logged and return False. The test endpoint passes
     raise_on_error=True to get the real reason (NotifierError) surfaced to the admin
     instead of an opaque failure.
+
+    parse_mode (e.g. "HTML") only applies to Telegram — the HTML-styled templates. Other
+    channels ignore it (Discord/email don't take it), so those would show raw tags; the
+    HTML templates are Telegram-first.
     """
     from app.services.notifiers import ALERT_DISPATCH, NotifierError
 
@@ -84,6 +89,8 @@ async def send_alert(
         # ponytail: smtp is the only channel needing a subject.
         if channel == "smtp":
             ok = await fn(subject=subject, body=body, config=config)
+        elif channel == "telegram":
+            ok = await fn(message=body, config=config, parse_mode=parse_mode)
         else:
             ok = await fn(message=body, config=config)
     except NotifierError as e:

@@ -52,6 +52,20 @@ def test_vpn_histograms_accept_report_intervals():
         assert '"calendar_interval": interval' not in src, f"{mod.__name__} rejects {produced}"
 
 
+def test_sessions_counted_by_correlation_id_not_connection_id():
+    """A 'session' = one client-port↔server-port connection = one flow.correlation_id.
+    connection_id is a coarse conversation key (one value spans tens of thousands of
+    client ports) and under-counts sessions ~180x — it must never come back as the
+    session_count field. Guards all three traffic surfaces (Internet/Inbound/Internal)."""
+    from app.opensearch import traffic_flow, traffic_inbound, traffic_internal
+    for mod in (traffic_flow, traffic_inbound, traffic_internal):
+        src = inspect.getsource(mod)
+        assert '"session_count": {"cardinality": {"field": "flow.correlation_id"}}' in src, \
+            f"{mod.__name__} must count sessions by correlation_id"
+        assert '"session_count": {"cardinality": {"field": "flow.connection_id"}}' not in src, \
+            f"{mod.__name__} regressed to connection_id for session_count"
+
+
 def test_unknown_site_matches_nothing():
     """An empty IP term fails the shard instead of returning no hits."""
     for mod in (traffic_inbound, traffic_internal):

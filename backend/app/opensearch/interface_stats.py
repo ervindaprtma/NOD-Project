@@ -263,7 +263,7 @@ async def interface_stats_summary(
     out: dict = {}
     for b in resp.get("aggregations", {}).get("by_interface", {}).get("buckets", []):
         speed = b.get("speed", {}).get("value") or 0.0
-        rx, tx, util = [], [], []
+        rx, tx, util, thr = [], [], [], []
         for tb in b.get("by_time", {}).get("buckets", []):
             di = tb.get("in_d", {}).get("value")
             do = tb.get("out_d", {}).get("value")
@@ -275,11 +275,13 @@ async def interface_stats_summary(
             tx_mbps = do * 8 / secs / 1e6
             rx.append(rx_mbps)
             tx.append(tx_mbps)
+            thr.append(max(rx_mbps, tx_mbps))   # busier direction, absolute Mbps
             if speed > 0:
                 util.append(max(rx_mbps, tx_mbps) / speed * 100)
         stat = lambda v: {"avg": (sum(v) / len(v) if v else 0.0), "max": (max(v) if v else 0.0)}
         out[b["key"]] = {
             "rx_mbps": stat(rx), "tx_mbps": stat(tx), "utilization_pct": stat(util),
+            "throughput_mbps": stat(thr),   # busier direction; absolute-Mbps + %-of-link-max alerts
             "oper_status": b.get("oper", {}).get("value"),
             "label": iface_map.get(b["key"], b["key"]),
         }

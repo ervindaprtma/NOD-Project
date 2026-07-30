@@ -270,6 +270,9 @@ async def sla_summary(
         aggs[f"max_latency_link{i}"] = {"max": {"field": f"{site_name}.latency_link{i}"}}
         aggs[f"avg_jitter_link{i}"] = {"avg": {"field": f"{site_name}.jitter_link{i}"}}
         aggs[f"avg_packet_loss_link{i}"] = {"avg": {"field": f"{site_name}.packet_loss_link{i}"}}
+        # Link state: 0=Up, non-zero=Down. max over the window → Down (>0) if it dropped
+        # at any point; sustained_for on the rule debounces flaps.
+        aggs[f"max_status_link{i}"] = {"max": {"field": f"{site_name}.status_link{i}"}}
 
     body = {
         "size": 0,
@@ -285,6 +288,8 @@ async def sla_summary(
         "max_latency": [(a.get(f"max_latency_link{i}", {}).get("value") or 0.0) for i in range(1, n_links + 1)],
         "avg_jitter": [(a.get(f"avg_jitter_link{i}", {}).get("value") or 0.0) for i in range(1, n_links + 1)],
         "avg_packet_loss": [(a.get(f"avg_packet_loss_link{i}", {}).get("value") or 0.0) for i in range(1, n_links + 1)],
+        # metric_field "status_linkN" → base "status"; 0=Up, >0=Down (see _parse_sdwan_metric_field).
+        "status": [(a.get(f"max_status_link{i}", {}).get("value") or 0.0) for i in range(1, n_links + 1)],
         "labels": [labels.get(f"link{i}", f"link{i}") for i in range(1, n_links + 1)],
         "link_types": [types.get(f"link{i}", "WAN") for i in range(1, n_links + 1)],
     }

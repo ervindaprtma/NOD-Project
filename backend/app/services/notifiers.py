@@ -128,19 +128,27 @@ async def _email_with_attachment(subject: str, body: str, file_path: str, recipi
         return False
 
 
-async def _telegram_alert(message: str, config: dict | None = None) -> bool:
+async def _telegram_alert(message: str, config: dict | None = None,
+                          parse_mode: str | None = None) -> bool:
     token = (config or {}).get("bot_token", settings.TELEGRAM_BOT_TOKEN)
     chat = (config or {}).get("chat_id", settings.TELEGRAM_CHAT_ID)
+    # parse_mode comes from the explicit arg or the channel config; "HTML" enables the
+    # <b>…</b> Grafana-style templates. Default None = plain text (unchanged).
+    mode = parse_mode or (config or {}).get("parse_mode")
     if not token or not chat:
         raise NotifierError("Telegram bot_token or chat_id is missing.")
     try:
         async with httpx.AsyncClient(timeout=_T) as c:
-            # Plain text — no parse_mode. Metric fields contain '_' (e.g.
-            # active_sslvpn_users_count), which Telegram's Markdown parser rejects with
-            # a 400 "can't parse entities", silently dropping real alerts.
+            # Default is plain text (no parse_mode): metric fields contain '_', which the
+            # Markdown parser rejects — but HTML mode is '_'-safe, so HTML templates opt in
+            # via parse_mode="HTML". In HTML mode, dynamic values MUST be escaped (|e in the
+            # template) so `<`/`>` operators don't break parsing.
+            payload = {"chat_id": chat, "text": message}
+            if mode:
+                payload["parse_mode"] = mode
             r = await c.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat, "text": message},
+                json=payload,
             )
     except httpx.RequestError as e:
         # DNS/connect/timeout — the server can't reach Telegram (egress/firewall).
@@ -152,6 +160,16 @@ async def _telegram_alert(message: str, config: dict | None = None) -> bool:
             desc = r.json().get("description") or r.text
         except Exception:
             desc = r.text
+        # Safety net: a malformed HTML body ("can't parse entities") must never lose the
+        # alert. Retry once as plain text — tags show literally, but the message gets there.
+        if mode and r.status_code == 400 and "parse" in desc.lower():
+            async with httpx.AsyncClient(timeout=_T) as c:
+                r2 = await c.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat, "text": message},
+                )
+            if r2.status_code == 200:
+                return True
         raise NotifierError(f"Telegram API {r.status_code}: {desc}")
     return True
 

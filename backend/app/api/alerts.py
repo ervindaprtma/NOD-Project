@@ -326,6 +326,7 @@ async def create_alert_rule(
         data_source=body.data_source,
         metric_field=body.metric_field,
         target_key=body.target_key,
+        link_max_mbps=body.link_max_mbps,
         aggregation=body.aggregation,
         condition=body.condition,
         threshold_value=body.threshold_value,

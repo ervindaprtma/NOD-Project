@@ -24,6 +24,7 @@ class AlertRuleCreate(BaseModel):
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
     target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
+    link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     enabled: bool = True
 
 
@@ -42,6 +43,7 @@ class AlertRuleUpdate(BaseModel):
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
     target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
+    link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     enabled: Optional[bool] = None
 
 
@@ -52,6 +54,7 @@ class AlertRuleRead(BaseModel):
     data_source: str
     metric_field: str
     target_key: Optional[str] = None
+    link_max_mbps: Optional[float] = None
     aggregation: str
     condition: str
     threshold_value: float
