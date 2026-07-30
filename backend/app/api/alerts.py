@@ -327,6 +327,10 @@ async def create_alert_rule(
         metric_field=body.metric_field,
         target_key=body.target_key,
         link_max_mbps=body.link_max_mbps,
+        kind=body.kind,
+        notify_when=body.notify_when,
+        # Composite clauses are stored as plain dicts (JSONB); the engine reads them via .get().
+        clauses=[c.model_dump() for c in body.clauses],
         aggregation=body.aggregation,
         condition=body.condition,
         threshold_value=body.threshold_value,

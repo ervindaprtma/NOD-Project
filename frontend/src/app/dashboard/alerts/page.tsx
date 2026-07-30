@@ -61,10 +61,23 @@ const CONDITIONS = [">", "<", ">=", "<=", "=="];
 const SEVERITIES = ["INFO", "WARNING", "CRITICAL"];
 const CHANNELS = ["whatsapp", "telegram", "smtp", "discord"];
 
+// One clause of a composite rule. Shares the rule's site + window; target_key is the
+// interface ifIndex (interface_stats) or device IP (device_uptime), else blank.
+interface ClauseForm {
+  data_source: string;
+  metric_field: string;
+  aggregation: string;
+  condition: string;
+  threshold_value: number;
+  target_key: string;
+}
+
 interface RuleForm {
   name: string;
   severity: string;
   kind: "single" | "composite";
+  notify_when: "any" | "all";   // composite: Any=OR, All=AND
+  clauses: ClauseForm[];
   data_source: string;
   metric_field: string;
   target_key: string;
@@ -84,6 +97,8 @@ const emptyForm: RuleForm = {
   name: "",
   severity: "WARNING",
   kind: "single",
+  notify_when: "any",
+  clauses: [],
   data_source: "ha_resource",
   metric_field: "ha_member.cpu_usage",
   target_key: "",
@@ -149,6 +164,15 @@ export default function AlertsPage() {
   const fields = catalogData?.data || [];
   const selectedField = fields.find((f) => f.field_key === form.metric_field) || null;
 
+  const isComposite = form.kind === "composite";
+  // Full catalog (all sources) for the composite clause editor — one call, filtered client-side.
+  const { data: allFieldsData } = useSWR<{ data: AlertFieldCatalog[] }>(
+    showModal && isComposite ? "/api/v1/alerts/fields" : null,
+    swrFetcher
+  );
+  const catalogAll = allFieldsData?.data || [];
+  const fieldsForSource = (ds: string) => catalogAll.filter((f) => f.data_source === ds);
+
   // Message templates for the assignment dropdown (§11.1). Loaded while the modal is open.
   const { data: templatesData } = useSWR<{ data: NotificationTemplate[] }>(
     showModal ? "/api/v1/config/notification-templates" : null,
@@ -179,6 +203,64 @@ export default function AlertsPage() {
     }));
   }
 
+  // ── Composite clause editor helpers ──────────────────────────────
+  function makeClause(ds: string): ClauseForm {
+    const f = fieldsForSource(ds)[0];
+    return {
+      data_source: ds,
+      metric_field: f?.field_key || "",
+      aggregation: f?.valid_aggregations?.[0] || "avg",
+      condition: f?.valid_conditions?.[0] || ">",
+      threshold_value: f?.example_threshold ?? 0,
+      target_key: "",
+    };
+  }
+  const updateClauses = (fn: (cs: ClauseForm[]) => ClauseForm[]) =>
+    setForm((prev) => ({ ...prev, clauses: fn(prev.clauses) }));
+  const addClause = () => updateClauses((cs) => [...cs, makeClause("sdwan_sla")]);
+  const removeClause = (i: number) => updateClauses((cs) => cs.filter((_, idx) => idx !== i));
+  const patchClause = (i: number, patch: Partial<ClauseForm>) =>
+    updateClauses((cs) => cs.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+  // Changing a clause's source resets its metric/agg/condition to that source's first field.
+  function setClauseSource(i: number, ds: string) {
+    const f = fieldsForSource(ds)[0];
+    patchClause(i, {
+      data_source: ds, metric_field: f?.field_key || "", target_key: "",
+      aggregation: f?.valid_aggregations?.[0] || "avg",
+      condition: f?.valid_conditions?.[0] || ">",
+      threshold_value: f?.example_threshold ?? 0,
+    });
+  }
+  function setClauseMetric(i: number, key: string) {
+    const c = form.clauses[i];
+    const f = fieldsForSource(c.data_source).find((x) => x.field_key === key);
+    patchClause(i, {
+      metric_field: key,
+      aggregation: f?.valid_aggregations?.includes(c.aggregation) ? c.aggregation : (f?.valid_aggregations?.[0] || "avg"),
+      condition: f?.valid_conditions?.includes(c.condition) ? c.condition : (f?.valid_conditions?.[0] || ">"),
+      threshold_value: f?.example_threshold ?? c.threshold_value,
+    });
+  }
+
+  // A clause added before the full catalog loaded has an empty metric_field — fill it
+  // from the first field of its source once the catalog arrives.
+  useEffect(() => {
+    if (!isComposite || catalogAll.length === 0) return;
+    if (!form.clauses.some((c) => !c.metric_field)) return;
+    setForm((prev) => ({
+      ...prev,
+      clauses: prev.clauses.map((c) => {
+        if (c.metric_field) return c;
+        const f = catalogAll.find((x) => x.data_source === c.data_source);
+        return f
+          ? { ...c, metric_field: f.field_key, aggregation: f.valid_aggregations?.[0] || c.aggregation,
+              condition: f.valid_conditions?.[0] || c.condition, threshold_value: f.example_threshold ?? c.threshold_value }
+          : c;
+      }),
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isComposite, catalogAll, form.clauses]);
+
   // When the data source changes (or catalog first loads), if the current metric
   // isn't offered by this source, snap to the first cataloged field.
   useEffect(() => {
@@ -189,10 +271,11 @@ export default function AlertsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fields, form.metric_field, showModal]);
 
-  // Phase E: interface_stats needs a canonical site + an interface (target_key).
+  // Phase E: interface_stats needs a canonical site + an interface (target_key). Composite
+  // clauses may also target interfaces/devices, so fetch the site's lists whenever composite.
   const isIface = form.data_source === "interface_stats";
   const { data: ifaceData } = useSWR<{ data: { key: string; label: string }[] }>(
-    showModal && isIface && SITES.includes(form.site_name)
+    showModal && (isIface || isComposite) && SITES.includes(form.site_name)
       ? `/api/v1/alerts/interfaces?site_name=${form.site_name}`
       : null,
     swrFetcher
@@ -221,7 +304,7 @@ export default function AlertsPage() {
   const isDevice = form.data_source === "device_uptime";
   const isSiteLevelMetric = isDevice && form.metric_field === "collector_gap";
   const { data: deviceData } = useSWR<{ data: { key: string; label: string }[] }>(
-    showModal && isDevice && SITES.includes(form.site_name)
+    showModal && (isDevice || isComposite) && SITES.includes(form.site_name)
       ? `/api/v1/alerts/devices?site_name=${form.site_name}`
       : null,
     swrFetcher
@@ -241,6 +324,15 @@ export default function AlertsPage() {
   }, [isDevice, isSiteLevelMetric, form.site_name, form.target_key, showModal]);
 
   const deviceWindowTooShort = isDevice && form.evaluation_window_minutes < DEVICE_MIN_WINDOW;
+
+  // Composite is valid only with ≥2 fully-specified clauses; an interface clause needs its
+  // ifIndex or the engine can't resolve which interface (→ reads 0).
+  const compositeInvalid =
+    isComposite &&
+    (form.clauses.length < 2 ||
+      form.clauses.some(
+        (c) => !c.metric_field || (c.data_source === "interface_stats" && !c.target_key)
+      ));
 
   // SD-WAN link Up/Down: metric status_linkN, 0=Up / >=1=Down. A Down/Up toggle drives
   // condition+threshold instead of raw numeric inputs.
@@ -323,6 +415,15 @@ export default function AlertsPage() {
       name: rule.name,
       severity: rule.severity,
       kind: rule.kind || "single",
+      notify_when: rule.notify_when || "any",
+      clauses: (rule.clauses || []).map((c) => ({
+        data_source: String(c.data_source ?? ""),
+        metric_field: String(c.metric_field ?? ""),
+        aggregation: String(c.aggregation ?? "avg"),
+        condition: String(c.condition ?? ">"),
+        threshold_value: Number(c.threshold_value ?? 0),
+        target_key: c.target_key ? String(c.target_key) : "",
+      })),
       data_source: rule.data_source,
       metric_field: rule.metric_field,
       target_key: rule.target_key || "",
@@ -348,11 +449,29 @@ export default function AlertsPage() {
     const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime";
     // link_max_mbps only rides along with interface throughput's %-of-max mode.
     const keepsLinkMax = form.data_source === "interface_stats" && form.metric_field === "iface.throughput_mbps";
+
+    // Composite: clauses drive evaluation. The DB still requires the top-level metric
+    // columns (NOT NULL), so mirror clause[0] into them — the engine ignores them for a
+    // composite rule but the list view shows something sensible. Clean each clause's
+    // target_key (only interface/device carry one).
+    const cleanClauses = form.clauses.map((c) => ({
+      ...c,
+      target_key: (c.data_source === "interface_stats" || c.data_source === "device_uptime")
+        ? (c.target_key || null) : null,
+    }));
+    const c0 = form.clauses[0];
+    const composite = form.kind === "composite" && c0
+      ? { data_source: c0.data_source, metric_field: c0.metric_field, aggregation: c0.aggregation,
+          condition: c0.condition, threshold_value: c0.threshold_value, target_key: null, link_max_mbps: null }
+      : {};
+
     const payload = {
       ...form,
       target_key: keepsTargetKey ? (form.target_key || null) : null,
       link_max_mbps: keepsLinkMax ? form.link_max_mbps : null,
       notification_template_id: form.notification_template_id || null,
+      clauses: form.kind === "composite" ? cleanClauses : [],
+      ...composite,
     };
     try {
       if (editingRule) {
@@ -798,18 +917,37 @@ export default function AlertsPage() {
                     <option value="composite">Composite</option>
                   </select>
                 </div>
-                <div>
-                  <label className="text-xs font-medium">Data Source</label>
-                  <select
-                    value={form.data_source}
-                    onChange={(e) => setForm({ ...form, data_source: e.target.value })}
-                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                  >
-                    {DATA_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
-                </div>
+                {!isComposite ? (
+                  <div>
+                    <label className="text-xs font-medium">Data Source</label>
+                    <select
+                      value={form.data_source}
+                      onChange={(e) => setForm({ ...form, data_source: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    >
+                      {DATA_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-xs font-medium">Notify when</label>
+                    <div className="flex mt-1 rounded-md border overflow-hidden">
+                      {([["all", "All (AND)"], ["any", "Any (OR)"]] as const).map(([val, lbl]) => (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => setForm({ ...form, notify_when: val })}
+                          className={"flex-1 px-2 py-1.5 text-xs " + (form.notify_when === val ? "bg-blue-600 text-white" : "bg-background hover:bg-muted")}
+                        >
+                          {lbl}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
+              {!isComposite && (<>
               {/* Metric — catalog-driven (choose, don't type) */}
               <div>
                 <label className="text-xs font-medium">Metric</label>
@@ -1020,6 +1158,68 @@ export default function AlertsPage() {
                   </div>
                 </div>
               )}
+              </>)}
+
+              {/* Composite clause editor — combine multiple metrics with AND/OR */}
+              {isComposite && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium">
+                      Metrics — fires when <b>{form.notify_when === "all" ? "ALL" : "ANY"}</b> match
+                    </label>
+                    <button type="button" onClick={addClause} className="text-xs px-2 py-1 rounded-md border hover:bg-muted">
+                      + Add metric
+                    </button>
+                  </div>
+                  {form.clauses.length < 2 && (
+                    <p className="text-[11px] text-muted-foreground">Add at least two metrics to combine with AND/OR.</p>
+                  )}
+                  {form.clauses.map((c, i) => {
+                    const cf = fieldsForSource(c.data_source);
+                    const sel = cf.find((f) => f.field_key === c.metric_field) || null;
+                    const aggs = sel?.valid_aggregations?.length ? sel.valid_aggregations : AGGREGATIONS;
+                    const conds = sel?.valid_conditions?.length ? sel.valid_conditions : CONDITIONS;
+                    return (
+                      <div key={i} className="rounded-lg border p-2 space-y-2 bg-muted/30">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-semibold text-muted-foreground">Metric {i + 1}</span>
+                          <button type="button" onClick={() => removeClause(i)} className="text-[11px] text-red-600 hover:underline">Remove</button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <select value={c.data_source} onChange={(e) => setClauseSource(i, e.target.value)} className="px-2 py-1 text-xs rounded-md border bg-background">
+                            {DATA_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                          </select>
+                          <select value={c.metric_field} onChange={(e) => setClauseMetric(i, e.target.value)} className="px-2 py-1 text-xs rounded-md border bg-background">
+                            {cf.length === 0 && <option value="">Loading…</option>}
+                            {cf.map((f) => <option key={f.field_key} value={f.field_key}>{f.display_name}{f.unit ? ` (${f.unit})` : ""}</option>)}
+                          </select>
+                        </div>
+                        {c.data_source === "interface_stats" && (
+                          <select value={c.target_key} onChange={(e) => patchClause(i, { target_key: e.target.value })} className="w-full px-2 py-1 text-xs rounded-md border bg-background">
+                            <option value="">Select interface…</option>
+                            {interfaces.map((it) => <option key={it.key} value={it.key}>{it.label} (ifIndex {it.key})</option>)}
+                          </select>
+                        )}
+                        {c.data_source === "device_uptime" && c.metric_field !== "collector_gap" && (
+                          <select value={c.target_key} onChange={(e) => patchClause(i, { target_key: e.target.value })} className="w-full px-2 py-1 text-xs rounded-md border bg-background">
+                            <option value="">Any device at the site</option>
+                            {devices.map((d) => <option key={d.key} value={d.key}>{d.label} ({d.key})</option>)}
+                          </select>
+                        )}
+                        <div className="grid grid-cols-3 gap-2">
+                          <select value={c.aggregation} onChange={(e) => patchClause(i, { aggregation: e.target.value })} className="px-2 py-1 text-xs rounded-md border bg-background">
+                            {aggs.map((a) => <option key={a} value={a}>{a}</option>)}
+                          </select>
+                          <select value={c.condition} onChange={(e) => patchClause(i, { condition: e.target.value })} className="px-2 py-1 text-xs rounded-md border bg-background">
+                            {conds.map((cc) => <option key={cc} value={cc}>{cc}</option>)}
+                          </select>
+                          <input type="number" value={c.threshold_value} onChange={(e) => patchClause(i, { threshold_value: Number(e.target.value) })} className="px-2 py-1 text-xs rounded-md border bg-background" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Window + Sustained */}
               <div className="grid grid-cols-2 gap-3">
@@ -1119,7 +1319,7 @@ export default function AlertsPage() {
                 </button>
                 <button
                   onClick={saveRule}
-                  disabled={saving || !form.name || ifaceWindowTooShort || deviceWindowTooShort || (isIface && !form.target_key)}
+                  disabled={saving || !form.name || ifaceWindowTooShort || deviceWindowTooShort || (isIface && !form.target_key) || compositeInvalid}
                   className="px-4 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : editingRule ? "Update" : "Create"}

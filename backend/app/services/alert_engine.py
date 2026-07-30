@@ -647,6 +647,8 @@ async def _evaluate_composite_rule(
         cond = clause.get("condition", ">")
         thresh = clause.get("threshold_value", 0.0)
         window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
+        target_key = clause.get("target_key")
+        aggregation = clause.get("aggregation", "avg")
 
         # §9.4: read from the cycle's pre-fetched cache when available
         cache_key = (ds, rule.site_name, window)
@@ -657,7 +659,7 @@ async def _evaluate_composite_rule(
         if group_result is None:
             break  # one clause failed → whole rule fails
 
-        val = _extract_per_rule_value_flat(ds, mf, group_result)
+        val = _extract_per_rule_value_flat(ds, mf, group_result, target_key, aggregation)
         if val is None:
             break
 
@@ -678,9 +680,13 @@ async def _evaluate_composite_rule(
 
 # ponytail: _extract_per_rule_value but takes flat data_source/metric_field instead of a rule object
 def _extract_per_rule_value_flat(
-    data_source: str, metric_field: str, group_result: float | list[Any] | dict[Any, Any] | None
+    data_source: str, metric_field: str, group_result: float | list[Any] | dict[Any, Any] | None,
+    target_key: str | None = None, aggregation: str = "avg",
 ) -> float | None:
-    """Same logic as _extract_per_rule_value but accepts flat params (P5 composite)."""
+    """Same logic as _extract_per_rule_value but accepts flat params (P5 composite).
+
+    target_key + aggregation are carried per-clause so interface_stats (needs an ifIndex)
+    and device_uptime (per-device) clauses resolve exactly like a single rule."""
     if group_result is None:
         return None
     try:
@@ -709,16 +715,16 @@ def _extract_per_rule_value_flat(
                 return float(vals or 0.0)
             return 0.0
         if data_source == "interface_stats":
-            # Composite clauses carry no target_key (which interface), so interface_stats
-            # can't be resolved here. Single rules only — return 0 so a stray clause can't
-            # false-fire. (Add a clause-level target_key if composite interface rules are
-            # ever needed.)
+            # Needs the clause's target_key (ifIndex); without one the interface can't be
+            # picked → 0 so a mis-authored clause can't false-fire.
+            if isinstance(group_result, dict):
+                return _extract_interface_stats(metric_field, target_key, aggregation, group_result)
             return 0.0
         if data_source == "device_uptime":
-            # No clause-level target_key → "any device at the site" reduction, which is
-            # resolvable without one (unlike interface_stats). collector_gap is site-level.
+            # target_key optional — blank = "any device at the site" reduction.
+            # collector_gap is site-level (target_key ignored).
             if isinstance(group_result, dict):
-                return _extract_device_uptime(metric_field, None, group_result)
+                return _extract_device_uptime(metric_field, target_key, group_result)
             return None
         return None
     except (TypeError, ValueError, IndexError):
