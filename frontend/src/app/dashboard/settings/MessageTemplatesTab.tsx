@@ -40,8 +40,11 @@ export function MessageTemplatesTab({ showToast }: { showToast: (t: { ok: boolea
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<{ subject: string; body: string; line: string } | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  // Editable sample context for the preview.
-  const [sample, setSample] = useState({ severity: "WARNING", metric_value: 95.5 });
+  // Editable sample context for the preview. `event` flips the fire/resolve branch
+  // ({% if event == 'resolved' %}) so both sides of a template can be previewed.
+  const [sample, setSample] = useState<{ severity: string; metric_value: number; event: "firing" | "resolved" }>(
+    { severity: "WARNING", metric_value: 95.5, event: "firing" }
+  );
 
   function selectTemplate(t: NotificationTemplate) {
     setSelectedId(t.id);
@@ -107,6 +110,7 @@ export function MessageTemplatesTab({ showToast }: { showToast: (t: { ok: boolea
             severity: sample.severity,
             metric_value: sample.metric_value,
             site_name: "Site_FGT-DC",
+            event: sample.event,
           }),
         }
       );
@@ -279,6 +283,26 @@ export function MessageTemplatesTab({ showToast }: { showToast: (t: { ok: boolea
                 onChange={(e) => setSample({ ...sample, metric_value: Number(e.target.value) })}
                 className="block w-24 px-2 py-1 text-xs rounded border bg-background mt-0.5"
               />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground">Event</label>
+              <div className="flex mt-0.5 rounded border overflow-hidden">
+                {(["firing", "resolved"] as const).map((ev) => (
+                  <button
+                    key={ev}
+                    type="button"
+                    onClick={() => setSample({ ...sample, event: ev })}
+                    className={
+                      "px-2.5 py-1 text-xs " +
+                      (sample.event === ev
+                        ? (ev === "resolved" ? "bg-emerald-600 text-white" : "bg-red-600 text-white")
+                        : "bg-background hover:bg-muted")
+                    }
+                  >
+                    {ev === "resolved" ? "✅ Resolved" : "🔥 Firing"}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="flex-1" />
             <button
