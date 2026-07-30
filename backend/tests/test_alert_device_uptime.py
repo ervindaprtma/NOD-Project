@@ -146,3 +146,25 @@ def test_seeded_notification_templates_render_for_both_events():
                 txt = t.get(field)
                 if txt:
                     _render_template(txt, ctx(event))  # raises → test fails
+
+
+def test_sdwan_link_status_parses_and_is_in_catalog():
+    """SD-WAN link Up/Down: metric_field status_linkN parses to base 'status' (which
+    sla_summary now returns), and the catalog exposes it so the UI can offer Down/Up."""
+    from app.services.alert_engine import _parse_sdwan_metric_field
+    from app.services.template_seeder import SEED_FIELD_CATALOG
+
+    assert _parse_sdwan_metric_field("status_link1") == ("status", 0)
+    assert _parse_sdwan_metric_field("status_link2") == ("status", 1)
+    cat = {(c["data_source"], c["field_key"]) for c in SEED_FIELD_CATALOG}
+    assert ("sdwan_sla", "status_link1") in cat
+    assert ("sdwan_sla", "status_link2") in cat
+
+
+def test_interface_throughput_mbps_metric_exists():
+    """The Mbps-based throughput metric backs both the absolute and %-of-link-max modes."""
+    from app.services.template_seeder import SEED_FIELD_CATALOG
+
+    row = next(c for c in SEED_FIELD_CATALOG
+               if c["data_source"] == "interface_stats" and c["field_key"] == "iface.throughput_mbps")
+    assert row["unit"] == "Mbps" and "max" in row["valid_aggregations"]

@@ -356,6 +356,7 @@ export interface AlertRule {
   data_source: string;
   metric_field: string;
   target_key?: string | null; // interface_stats ifIndex
+  link_max_mbps?: number | null; // interface throughput: % of link max mode
   aggregation: string;
   condition: string;
   threshold_value: number;

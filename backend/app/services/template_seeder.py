@@ -18,7 +18,8 @@ SEED_TEMPLATES: list[dict] = [
         "name": "SD-WAN SLA Breach",
         "category": "performance",
         "icon": "📶",
-        "description": "Alert when SD-WAN link SLA is breached (packet loss exceeds threshold).",
+        "description": "Alert when SD-WAN link SLA is breached (packet loss exceeds threshold). "
+                       "Switch the metric to 'Link Status' for a Down/Up alert on the link state.",
         "body_template": "SD-WAN SLA Breach: {{ name }}\nLink: {{ metric_field }}\nValue: {{ metric_value }}\nThreshold: {{ condition }} {{ threshold }}",
         "underlying_kind": "single",
         "locked_fields": {
@@ -129,24 +130,24 @@ SEED_TEMPLATES: list[dict] = [
         "name": "Interface Bandwidth Spike",
         "category": "capacity",
         "icon": "📊",
-        "description": "Alert on a bandwidth spike — the PEAK interface utilization in the window "
-                       "crosses the threshold. Uses the max aggregation (window peak, not average), so "
-                       "a brief burst trips it. Pick the interface after selecting this template.",
-        "body_template": "Interface Bandwidth Spike: {{ name }}\nPeak utilization: {{ metric_value }}%  "
-                         "(limit {{ condition }} {{ threshold }}%)\nSite: {{ site_name }}",
+        "description": "Alert on a bandwidth spike — PEAK throughput (busier direction, Mbps) in the "
+                       "window crosses the threshold. Set an absolute Mbps limit, or a % of a link max "
+                       "you enter (the UI computes Mbps = max × %). max aggregation = window peak, so a "
+                       "brief burst trips it. Pick the interface after selecting this template.",
+        "body_template": "Interface Bandwidth Spike: {{ name }}\nPeak throughput: {{ metric_value }} Mbps  "
+                         "(limit {{ condition }} {{ threshold }} Mbps)\nSite: {{ site_name }}",
         "underlying_kind": "single",
         # Spike logic = the interface_stats extractor's PEAK: aggregation "max" returns the
-        # window's highest per-interface utilization (see _extract_interface_stats), so a
-        # momentary burst fires even when the average stays low. Matches the
-        # interface_stats → iface.utilization_pct catalog row (valid_aggregations max,
-        # valid_conditions >, example 85). Window ≥2min (rate needs 2 buckets); short
-        # sustain so a spike alerts fast. The interface (target_key) is picked per-rule.
+        # window's highest throughput_mbps (busier direction, see _extract_interface_stats), so
+        # a momentary burst fires even when the average stays low. Matches the
+        # interface_stats → iface.throughput_mbps catalog row. Window ≥2min (rate needs 2
+        # buckets); short sustain so a spike alerts fast. Interface (target_key) picked per-rule.
         "locked_fields": {
             "data_source": "interface_stats",
-            "metric_field": "iface.utilization_pct",
+            "metric_field": "iface.throughput_mbps",
             "aggregation": "max",
             "condition": ">",
-            "threshold_value": 90.0,
+            "threshold_value": 800.0,
             "evaluation_window_minutes": 5,
             "sustained_for_minutes": 1,
             "severity": "WARNING",
@@ -185,22 +186,31 @@ async def seed_alert_templates() -> int:
         if retired:
             logger.info("Retired %d alert template(s): %s", retired, sorted(RETIRED_TEMPLATE_NAMES))
 
-        existing_names = set(
-            (await db.execute(select(AlertTemplate.name))).scalars().all()
-        )
+        existing = {
+            r.name: r for r in (await db.execute(select(AlertTemplate))).scalars().all()
+        }
+        # Upsert by name: these templates aren't user-editable (no CRUD endpoint), so it's
+        # safe to refresh existing rows in place — this propagates definition changes (e.g.
+        # a template's metric/threshold) to already-seeded DBs while keeping the row's id,
+        # so AlertRule.template_id links survive. New names are inserted.
+        updatable = ("category", "icon", "description", "subject_template", "body_template",
+                     "underlying_kind", "locked_fields", "exposed_fields", "is_default", "sort_order")
         count = 0
         for data in SEED_TEMPLATES:
-            if data["name"] in existing_names:
-                continue
-            db.add(AlertTemplate(**data))
-            # Flush per row — avoids SQLAlchemy 2.x "insertmanyvalues"
-            # sentinel mismatch (Python hex UUID vs. asyncpg-returned UUID).
-            await db.flush()
-            count += 1
+            row = existing.get(data["name"])
+            if row is None:
+                db.add(AlertTemplate(**data))
+                # Flush per row — avoids SQLAlchemy 2.x "insertmanyvalues" sentinel
+                # mismatch (Python hex UUID vs. asyncpg-returned UUID).
+                await db.flush()
+                count += 1
+            else:
+                for k in updatable:
+                    if k in data:
+                        setattr(row, k, data[k])
 
-        if count or retired:
-            await db.commit()
-            logger.info("Seeded %d new alert templates", count)
+        await db.commit()
+        logger.info("Seeded %d new alert templates (existing refreshed)", count)
         return count
 
 
@@ -418,6 +428,30 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_conditions": [">", ">=", "=="],
         "example_threshold": 100.0,
     },
+    # SD-WAN link state (0=Up, non-zero=Down). metric_field "status_linkN" → base "status".
+    # The UI offers a Down/Up selector that sets condition+threshold (Down: >= 1, Up: == 0).
+    {
+        "data_source": "sdwan_sla",
+        "field_key": "status_link1",
+        "display_name": "SD-WAN Link 1 Status",
+        "description": "Link 1 state: 0=Up, non-zero=Down. Alert when Down (>= 1) or Up (== 0).",
+        "unit": "state",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": ["==", ">=", "<"],
+        "example_threshold": 1,
+    },
+    {
+        "data_source": "sdwan_sla",
+        "field_key": "status_link2",
+        "display_name": "SD-WAN Link 2 Status",
+        "description": "Link 2 state: 0=Up, non-zero=Down. Alert when Down (>= 1) or Up (== 0).",
+        "unit": "state",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": ["==", ">=", "<"],
+        "example_threshold": 1,
+    },
     # vpn_ssl
     {
         "data_source": "vpn_ssl",
@@ -558,6 +592,18 @@ SEED_FIELD_CATALOG: list[dict] = [
     },
     {
         "data_source": "interface_stats",
+        "field_key": "iface.throughput_mbps",
+        "display_name": "Interface Throughput (busier direction)",
+        "description": "max(RX, TX) in Mbps. Alert on an absolute Mbps threshold, or on a % of a "
+                       "link max you set (the UI computes Mbps = max × %). Requires interface + ≥2min.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 800.0,
+    },
+    {
+        "data_source": "interface_stats",
         "field_key": "iface.oper_status",
         "display_name": "Interface Oper Status (1=up)",
         "description": "Operational status; use == 0 or < 1 to catch a down link.",
@@ -668,9 +714,10 @@ async def seed_field_catalog() -> int:
 
         # Already seeded: reconcile the data sources this codebase actively manages so
         # engine-honored fields reach existing DBs — appid_flow (per-path fix, old byte
-        # keys were never honored), ha_resource (Phase E mem/session depth), and
-        # interface_stats (new source). Delete+reinsert per source; others untouched.
-        managed = {"appid_flow", "ha_resource", "interface_stats", "device_uptime"}
+        # keys were never honored), ha_resource (Phase E mem/session depth),
+        # interface_stats (new source + throughput_mbps), and sdwan_sla (link status).
+        # Delete+reinsert per source; others untouched.
+        managed = {"appid_flow", "ha_resource", "interface_stats", "device_uptime", "sdwan_sla"}
         await db.execute(
             delete(AlertFieldCatalog).where(AlertFieldCatalog.data_source.in_(managed))
         )
