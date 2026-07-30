@@ -198,6 +198,9 @@ async def preview_notification_template(
             "data_source": "device_uptime",
             "aggregation": "min",
             "fired_at": body.fired_at or "01 Jan 2026 12:00:00 WIB",
+            # Reminders/resolves keep fired_at = original trigger; sent_at = this message's time.
+            "sent_at": (body.fired_at or "01 Jan 2026 12:00:00 WIB") if event == "firing"
+                       else "01 Jan 2026 12:20:00 WIB",
             "event": event,
             "event_label": "Resolved" if event == "resolved" else "Firing",
         }

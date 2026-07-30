@@ -472,7 +472,7 @@ async def _advance_state_machine(
     metric_value: float,
     condition_met: bool,
     db: AsyncSession,
-    notify_queue: list[tuple[AlertRule, float, str]] | None = None,
+    notify_queue: list[tuple[AlertRule, float, str, datetime]] | None = None,
 ) -> None:
     """Shared state machine for single and composite rules (P5).
 
@@ -532,7 +532,7 @@ async def _advance_state_machine(
                     # not the alerting, turning a 15-minute debounce on a 60s tick into
                     # ~15 messages before the rule had even fired.
                     if notify_queue is not None:
-                        notify_queue.append((rule, metric_value, "firing"))
+                        notify_queue.append((rule, metric_value, "firing", state.last_fired_at or now))
 
                     # SSE stays per-rule (real-time)
                     await sse_broadcast("alert",
@@ -553,7 +553,7 @@ async def _advance_state_machine(
 
                     # Enqueue re-notification (batch)
                     if notify_queue is not None:
-                        notify_queue.append((rule, metric_value, "firing"))
+                        notify_queue.append((rule, metric_value, "firing", state.last_fired_at or now))
 
                     await sse_broadcast("alert",
                         rule_id=rule.id,
@@ -575,7 +575,7 @@ async def _advance_state_machine(
             # was still debouncing and never notified, so a "recovered" message would
             # reference an alert the operator never received.
             if was_firing and notify_queue is not None:
-                notify_queue.append((rule, metric_value, "resolved"))
+                notify_queue.append((rule, metric_value, "resolved", state.last_fired_at or now))
 
             log_result = await db.execute(
                 select(AlertLog)
@@ -723,7 +723,7 @@ def _extract_per_rule_value_flat(
         return None
     except (TypeError, ValueError, IndexError):
         return None
-async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) -> None:
+async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, datetime]]) -> None:
     """Send batched notifications — one grouped message per channel (P7).
 
     Instead of one message per rule, aggregates all pending notifications
@@ -740,7 +740,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
 
     # Adapt the header/subject to content: an all-clear batch reads as a recovery; any
     # still-firing rule keeps the alert framing.
-    n_res = sum(1 for _, _, ev in notify_queue if ev == "resolved")
+    n_res = sum(1 for _, _, ev, _ in notify_queue if ev == "resolved")
     n_fire = len(notify_queue) - n_res
     title = "✅ NOD Recovery Summary" if n_res and not n_fire else "🛑 NOD Alert Summary"
 
@@ -749,7 +749,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
     sev_emoji = {"CRITICAL": "🔴", "WARNING": "⚠️", "INFO": "ℹ️"}
 
     # §9.5: pre-fetch all referenced templates in one query
-    template_ids = {r.template_id for r, _, _ in notify_queue if r.template_id}
+    template_ids = {r.template_id for r, _, _, _ in notify_queue if r.template_id}
     template_body: dict[str, str] = {}
     if template_ids:
         from app.db.models import AlertTemplate
@@ -770,7 +770,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
     # with none fall to the admin-chosen default. Only ACTIVE templates render; an
     # inactive/retired one is skipped and the rule falls through. Prefer line_template
     # (the batch line), fall back to body_template.
-    nt_ids = {r.notification_template_id for r, _, _ in notify_queue if r.notification_template_id}
+    nt_ids = {r.notification_template_id for r, _, _, _ in notify_queue if r.notification_template_id}
     nt_line: dict[str, str] = {}
     default_line: str | None = None
     try:
@@ -795,9 +795,14 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
     except Exception as e:
         logger.error("Failed to fetch notification templates: %s", e)
 
-    for rule, mv, event in notify_queue:
+    for rule, mv, event, fired_orig in notify_queue:
         sev = sev_emoji.get(rule.severity, "🔔")
         resolved = event == "resolved"
+        # Original first-trigger time (stable across 30-min reminders); sent_at is this
+        # message's time. A reminder keeps fired_at = the original fire, so the operator
+        # sees how long the still-unresolved issue has been firing.
+        fired_str = (fired_orig.astimezone(_WIB).strftime("%d %b %Y %H:%M:%S WIB")
+                     if fired_orig else now_str)
         # Resolution: assigned (active) template → active default → AlertTemplate body →
         # hardcoded. nt_line only holds active templates, so an inactive assignment falls
         # through to the default here.
@@ -834,7 +839,8 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
                 "metric_value": mv,
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
-                "fired_at": now_str,
+                "fired_at": fired_str,
+                "sent_at": now_str,
                 # Fire vs resolve — lets one template render both ({% if event == 'resolved' %}).
                 "event": event,
                 "event_label": "Resolved" if resolved else "Firing",
@@ -874,7 +880,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
         from app.db.models import NotificationConfig as NotifCfg
         from app.services.notifier_helper import send_alert
 
-        fired_channels = {ch for rule, _, _ in notify_queue for ch in rule.notify_channels}
+        fired_channels = {ch for rule, _, _, _ in notify_queue for ch in rule.notify_channels}
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(
@@ -930,7 +936,7 @@ async def _run_evaluation_cycle() -> None:
             composite_rules = [r for r in active_rules if r.kind == "composite"]
 
             # ── 1. Single rules (P1 batched) ──
-            notify_queue: list[tuple[AlertRule, float, str]] = []
+            notify_queue: list[tuple[AlertRule, float, str, datetime]] = []
             groups: dict[tuple, list[AlertRule]] = defaultdict(list)
             for rule in single_rules:
                 key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)

@@ -160,7 +160,8 @@ def test_seeded_notification_templates_render_for_both_events():
               "metric_field": "cpu.usage", "condition": ">", "threshold_value": 80.0}
         return {"rule": rc, **rc, "threshold": rc["threshold_value"], "metric_value": 95.5,
                 "data_source": "device_uptime", "aggregation": "min",
-                "fired_at": "01 Jan 2026 12:00:00 WIB", "event": event,
+                "fired_at": "01 Jan 2026 12:00:00 WIB",
+                "sent_at": "01 Jan 2026 12:20:00 WIB", "event": event,
                 "event_label": "Resolved" if event == "resolved" else "Firing"}
 
     for t in SEED_NOTIFICATION_TEMPLATES:
@@ -248,3 +249,21 @@ def test_ha_num_active_counts_reporting_members():
     # a dropped member shrinks the count below the threshold
     assert _extract_per_rule_value(rule, members[:1]) == 1.0
     assert _extract_per_rule_value(rule, []) == 0.0  # nothing reporting
+
+
+def test_reminder_preserves_original_fire_timestamp():
+    """A 30-min reminder (and the resolve) must keep the ORIGINAL trigger time: the engine
+    enqueues state.last_fired_at with each notification, and the Grafana templates show it as
+    'Firing since {{ fired_at }}' while 'sent_at' carries the current message time. Guards the
+    split so a reminder can't silently show its own send time as the fire time."""
+    import inspect
+    from app.services import alert_engine
+    from app.services.template_seeder import SEED_NOTIFICATION_TEMPLATES
+
+    src = inspect.getsource(alert_engine._advance_state_machine)
+    assert 'state.last_fired_at or now))' in src, "notifications must carry the original fire time"
+
+    graf = next(t for t in SEED_NOTIFICATION_TEMPLATES if t["name"] == "SD-WAN SLA Breach")
+    body = graf["body_template"]
+    assert "Firing since:" in body and "{{ fired_at }}" in body   # original preserved
+    assert "{{ sent_at }}" in body                                # current send time distinct
