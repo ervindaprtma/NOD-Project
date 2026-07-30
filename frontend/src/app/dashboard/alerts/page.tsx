@@ -93,8 +93,19 @@ const emptyForm: RuleForm = {
   sustained_for_minutes: 2,
   notify_channels: ["telegram"],
   notification_template_id: "",
-  site_name: "",
+  site_name: "Site_FGT-DC",
   enabled: true,
+};
+
+// Minimal shape of a rule template from GET /api/v1/alerts/templates. locked_fields
+// keys map 1:1 to RuleForm fields (single-rule templates); composite templates carry
+// `clauses` instead, so those keys are simply absent and the form keeps its defaults.
+type AlertTemplateLite = {
+  id: string;
+  name: string;
+  icon: string;
+  category: string;
+  locked_fields: Record<string, string | number | undefined>;
 };
 
 export default function AlertsPage() {
@@ -142,6 +153,14 @@ export default function AlertsPage() {
     swrFetcher
   );
   const messageTemplates = templatesData?.data || [];
+
+  // Rule-template gallery (v3 §3.12) — fetched from the backend seeder, not hardcoded,
+  // so new templates (e.g. Device Availability Uptime) appear without a frontend change.
+  const { data: ruleTemplatesData } = useSWR<{ data: AlertTemplateLite[] }>(
+    "/api/v1/alerts/templates",
+    swrFetcher
+  );
+  const ruleTemplates = ruleTemplatesData?.data || [];
   // Constrain agg/condition to the chosen field; fall back to full lists pre-load.
   const metricAggs = selectedField?.valid_aggregations?.length ? selectedField.valid_aggregations : AGGREGATIONS;
   const metricConds = selectedField?.valid_conditions?.length ? selectedField.valid_conditions : CONDITIONS;
@@ -489,25 +508,33 @@ export default function AlertsPage() {
           <span className="text-[10px] text-muted-foreground">Quick-start from pre-built templates</span>
         </div>
         <div className="flex flex-wrap gap-2">
-          {[
-            { icon: "📶", name: "SD-WAN SLA Breach", cat: "performance" },
-            { icon: "🔒", name: "VPN Tunnel Down", cat: "availability" },
-            { icon: "🚦", name: "WAN Congestion", cat: "performance" },
-            { icon: "📈", name: "Throughput Spike", cat: "capacity" },
-            { icon: "🔑", name: "SSL VPN Capacity", cat: "capacity" },
-            { icon: "🔗", name: "IPsec Tunnel Status", cat: "availability" },
-          ].map((t) => (
+          {ruleTemplates.map((t) => (
             <button
-              key={t.name}
+              key={t.id}
               onClick={() => {
                 if (!canManageAlerts) return;
+                const lf = t.locked_fields || {};
                 setEditingRule(null);
-                setForm({ ...emptyForm, name: `[Template] ${t.name}` });
+                // Pre-fill the form from the template's locked_fields so the rule opens
+                // with the correct data_source + metric + defaults already selected.
+                // Only keys present are applied (composite templates keep form defaults).
+                setForm({
+                  ...emptyForm,
+                  name: `[Template] ${t.name}`,
+                  ...(lf.data_source ? { data_source: String(lf.data_source) } : {}),
+                  ...(lf.metric_field ? { metric_field: String(lf.metric_field) } : {}),
+                  ...(lf.aggregation ? { aggregation: String(lf.aggregation) } : {}),
+                  ...(lf.condition ? { condition: String(lf.condition) } : {}),
+                  ...(lf.threshold_value != null ? { threshold_value: Number(lf.threshold_value) } : {}),
+                  ...(lf.evaluation_window_minutes != null ? { evaluation_window_minutes: Number(lf.evaluation_window_minutes) } : {}),
+                  ...(lf.sustained_for_minutes != null ? { sustained_for_minutes: Number(lf.sustained_for_minutes) } : {}),
+                  ...(lf.severity ? { severity: String(lf.severity) } : {}),
+                });
                 setShowModal(true);
               }}
               disabled={!canManageAlerts}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border bg-background hover:bg-muted transition-colors disabled:opacity-50"
-              title={t.cat}
+              title={t.category}
             >
               <span>{t.icon}</span>
               <span>{t.name}</span>
@@ -719,23 +746,16 @@ export default function AlertsPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium">Site Name</label>
-                  {isIface ? (
-                    <select
-                      value={SITES.includes(form.site_name) ? form.site_name : SITES[0]}
-                      onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: "" })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                    >
-                      {SITES.map((s) => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={form.site_name}
-                      onChange={(e) => setForm({ ...form, site_name: e.target.value })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1 font-mono"
-                      placeholder="DC, DRC, Office"
-                    />
-                  )}
+                  {/* Canonical sites only — free text silently fell back to DC in the engine
+                      (site_name or "Site_FGT-DC"). Reset target_key: the device/interface
+                      picker is keyed on the site. */}
+                  <select
+                    value={SITES.includes(form.site_name) ? form.site_name : SITES[0]}
+                    onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: "" })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  >
+                    {SITES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
                 </div>
               </div>
 

@@ -76,3 +76,50 @@ def test_wrap_risk():
 def test_no_devices_holds():
     assert _extract_device_uptime("not_reporting", None, _result([])) is None
     assert _extract_device_uptime("collector_gap", None, _result([])) == 0.0  # site: no gap
+
+
+def test_device_availability_template_matches_field_catalog():
+    """The 'Device Availability Uptime' template must select a data_source + metric
+    that the engine actually honors, with an aggregation/condition the catalog allows —
+    otherwise the template hands non-technical users a rule that can never fire.
+    Guards drift between SEED_TEMPLATES and SEED_FIELD_CATALOG."""
+    from app.services.template_seeder import SEED_FIELD_CATALOG, SEED_TEMPLATES
+
+    tmpl = next(t for t in SEED_TEMPLATES if t["name"] == "Device Availability Uptime")
+    lf = tmpl["locked_fields"]
+    row = next(
+        c for c in SEED_FIELD_CATALOG
+        if c["data_source"] == lf["data_source"] and c["field_key"] == lf["metric_field"]
+    )  # raises if the (data_source, metric) pair isn't a real catalog field
+    assert lf["data_source"] == "device_uptime" and lf["metric_field"] == "availability_pct"
+    assert lf["aggregation"] in row["valid_aggregations"]
+    assert lf["condition"] in row["valid_conditions"]
+
+
+def test_interface_spike_template_uses_peak_aggregation_and_matches_catalog():
+    """Interface Bandwidth Spike must use the PEAK (max) aggregation — that IS the spike
+    logic (_extract_interface_stats returns the window max) — and select a data_source +
+    metric the catalog honors with a valid condition."""
+    from app.services.template_seeder import SEED_FIELD_CATALOG, SEED_TEMPLATES
+
+    tmpl = next(t for t in SEED_TEMPLATES if t["name"] == "Interface Bandwidth Spike")
+    lf = tmpl["locked_fields"]
+    assert lf["data_source"] == "interface_stats"
+    assert lf["aggregation"] == "max", "spike detection = window peak, not average"
+    # catalog field_key carries the full "iface.<base>" form, same as metric_field
+    row = next(
+        c for c in SEED_FIELD_CATALOG
+        if c["data_source"] == lf["data_source"] and c["field_key"] == lf["metric_field"]
+    )
+    assert lf["aggregation"] in row["valid_aggregations"]
+    assert lf["condition"] in row["valid_conditions"]
+
+
+def test_retired_templates_are_gone_and_registered():
+    """VPN Tunnel Down / WAN Congestion are retired: absent from the seed list and listed
+    for deletion so already-seeded DBs drop them too."""
+    from app.services.template_seeder import RETIRED_TEMPLATE_NAMES, SEED_TEMPLATES
+
+    seed_names = {t["name"] for t in SEED_TEMPLATES}
+    assert {"VPN Tunnel Down", "WAN Congestion"} <= RETIRED_TEMPLATE_NAMES
+    assert not (RETIRED_TEMPLATE_NAMES & seed_names), "a retired template must not also be re-seeded"

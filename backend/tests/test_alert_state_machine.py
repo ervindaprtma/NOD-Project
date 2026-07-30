@@ -61,3 +61,30 @@ def test_pending_to_inactive_on_clear_before_sustained():
 def test_disabled_rule_is_not_evaluated():
     """Disabled rules must be skipped by evaluate_all_rules (line 456)."""
     pass
+
+
+# ── Fire + Resolve notification mechanism (both directions must notify) ──────────
+# Source-inspection guards (same style as test_report_queries.py): cheap, run without
+# a DB, and pin the exact regressions — a resolve that silently stops notifying, or a
+# batch message that can't tell firing from recovery.
+import inspect
+
+from app.services import alert_engine
+
+
+def test_resolve_enqueues_a_recovery_notification():
+    """FIRING→RESOLVED must enqueue a 'resolved' notification (not just SSE), and only
+    for a rule that actually fired — a PENDING→RESOLVED never alerted, so no all-clear."""
+    src = inspect.getsource(alert_engine._advance_state_machine)
+    assert 'notify_queue.append((rule, metric_value, "resolved"))' in src, \
+        "resolve path must send a recovery notification to the channels"
+    assert "was_firing" in src, "recovery must be gated on the rule having actually FIRED"
+
+
+def test_batch_notify_distinguishes_fire_from_resolve():
+    """The batch message must render firing vs recovery differently: `event` in the
+    template context, a RESOLVED hardcoded line, and an all-clear subject."""
+    src = inspect.getsource(alert_engine._flush_batch_notify)
+    assert '"event": event' in src, "templates need `event` to branch fire vs resolve"
+    assert "[RESOLVED]" in src, "recovery needs its own hardcoded line"
+    assert "Recovery Summary" in src, "an all-resolved batch should read as a recovery"
