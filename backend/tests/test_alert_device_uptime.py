@@ -123,3 +123,26 @@ def test_retired_templates_are_gone_and_registered():
     seed_names = {t["name"] for t in SEED_TEMPLATES}
     assert {"VPN Tunnel Down", "WAN Congestion"} <= RETIRED_TEMPLATE_NAMES
     assert not (RETIRED_TEMPLATE_NAMES & seed_names), "a retired template must not also be re-seeded"
+
+
+def test_seeded_notification_templates_render_for_both_events():
+    """Every seeded notification template must render for firing AND resolved with the
+    fire-time/preview context — else the preview 422s and the alert falls to fallback.
+    Regression guard: the HTML templates branch on `event`, so `event` must be in ctx."""
+    from app.services.alert_engine import _render_template
+    from app.services.template_seeder import SEED_NOTIFICATION_TEMPLATES
+
+    def ctx(event):
+        rc = {"name": "T", "severity": "WARNING", "site_name": "Site_FGT-DC",
+              "metric_field": "cpu.usage", "condition": ">", "threshold_value": 80.0}
+        return {"rule": rc, **rc, "threshold": rc["threshold_value"], "metric_value": 95.5,
+                "data_source": "device_uptime", "aggregation": "min",
+                "fired_at": "01 Jan 2026 12:00:00 WIB", "event": event,
+                "event_label": "Resolved" if event == "resolved" else "Firing"}
+
+    for t in SEED_NOTIFICATION_TEMPLATES:
+        for event in ("firing", "resolved"):
+            for field in ("subject_template", "body_template", "line_template"):
+                txt = t.get(field)
+                if txt:
+                    _render_template(txt, ctx(event))  # raises → test fails

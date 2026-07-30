@@ -51,3 +51,4 @@ class NotificationTemplatePreview(BaseModel):
     threshold_value: Optional[float] = 80.0
     metric_value: Optional[float] = 95.5
     fired_at: Optional[str] = None  # sample timestamp; the engine always passes fired_at
+    event: Optional[str] = "firing"  # "firing" | "resolved" — templates branch on it
