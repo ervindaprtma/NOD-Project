@@ -230,3 +230,21 @@ def test_ipsec_count_targets_live_telegraf_source():
     assert captured["index"] == "telegraf-index*"
     terms = [f for f in captured["body"]["query"]["bool"]["filter"] if "term" in f]
     assert {"term": {"measurement_name.keyword": "ipsec_user"}} in terms
+
+
+def test_ha_num_active_counts_reporting_members():
+    """ha_resource `num_active` = number of HA members currently reporting (len of the
+    device list current_device_status returns). It was unhandled by the extractor — only
+    ha_member.* was — so it read 0.0 forever and a '< 2 members' rule perma-fired. Both the
+    rule-object and flat (composite) extractors must count members, not return 0."""
+    from types import SimpleNamespace
+    from app.services.alert_engine import _extract_per_rule_value, _extract_per_rule_value_flat
+
+    members = [{"cpu_usage": 3.0}, {"cpu_usage": 5.0}]  # 2 reporting HA members
+    rule = SimpleNamespace(id=0, data_source="ha_resource", metric_field="num_active",
+                           site_name="Site_FGT-DC", target_key=None, aggregation="avg")
+    assert _extract_per_rule_value(rule, members) == 2.0
+    assert _extract_per_rule_value_flat("ha_resource", "num_active", members) == 2.0
+    # a dropped member shrinks the count below the threshold
+    assert _extract_per_rule_value(rule, members[:1]) == 1.0
+    assert _extract_per_rule_value(rule, []) == 0.0  # nothing reporting

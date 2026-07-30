@@ -322,9 +322,16 @@ def _extract_per_rule_value(
 
     try:
         if rule.data_source == "ha_resource":
-            if isinstance(group_result, list) and group_result and rule.metric_field.startswith("ha_member."):
-                field_name = rule.metric_field.split(".", 1)[1]
-                return float(group_result[0].get(field_name, 0) or 0)
+            if isinstance(group_result, list):
+                # num_active = how many HA members are currently reporting. current_device_status
+                # only returns members seen in the window, so len() is the live active count; a
+                # dropped member shrinks it below the "< 2" threshold. (Was unhandled → always 0.0,
+                # which perma-fired the rule.)
+                if rule.metric_field == "num_active":
+                    return float(len(group_result))
+                if group_result and rule.metric_field.startswith("ha_member."):
+                    field_name = rule.metric_field.split(".", 1)[1]
+                    return float(group_result[0].get(field_name, 0) or 0)
             return 0.0
 
         if rule.data_source == "appid_flow":
@@ -678,9 +685,12 @@ def _extract_per_rule_value_flat(
         return None
     try:
         if data_source == "ha_resource":
-            if isinstance(group_result, list) and group_result and metric_field.startswith("ha_member."):
-                field_name = metric_field.split(".", 1)[1]
-                return float(group_result[0].get(field_name, 0) or 0)
+            if isinstance(group_result, list):
+                if metric_field == "num_active":
+                    return float(len(group_result))
+                if group_result and metric_field.startswith("ha_member."):
+                    field_name = metric_field.split(".", 1)[1]
+                    return float(group_result[0].get(field_name, 0) or 0)
             return 0.0
         if data_source == "appid_flow":
             if isinstance(group_result, dict):
