@@ -246,8 +246,13 @@ async def interface_stats_summary(
             "aggs": {
                 "speed": {"max": {"field": "fgt_iface_stats.ifHighSpeed_Mbps"}},
                 "oper": {"max": {"field": "fgt_iface_stats.ifOperStatus"}},
+                # min_doc_count=0 is MANDATORY: derivative pipeline aggs (in_d/out_d)
+                # require it — min_doc_count=1 makes OpenSearch reject the query with
+                # 400 "parent histogram of derivative aggregation must have min_doc_count
+                # of 0", which safe_search swallows → empty result → every interface
+                # rule reads as 0.
                 "by_time": {
-                    "date_histogram": {"field": "@timestamp", "fixed_interval": bucket, "min_doc_count": 1},
+                    "date_histogram": {"field": "@timestamp", "fixed_interval": bucket, "min_doc_count": 0},
                     "aggs": {
                         "in_oct": {"max": {"field": "fgt_iface_stats.ifHCInOctets"}},
                         "out_oct": {"max": {"field": "fgt_iface_stats.ifHCOutOctets"}},

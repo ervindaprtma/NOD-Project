@@ -6,7 +6,7 @@ Q-03: _source includes only required fields.
 from __future__ import annotations
 
 from opensearchpy import AsyncOpenSearch
-from app.opensearch.client import get_ipsec_client
+from app.opensearch.client import get_dc_client, get_ipsec_client
 from app.opensearch.query import safe_search
 from app.opensearch.sslvpn import (
     _BUCKET_MS,
@@ -39,13 +39,20 @@ async def active_ipsec_users_count(
 ) -> int:
     """
     Q-05: cardinality aggregation on tag.username.keyword.
+
+    Live source is the `ipsec_user` measurement in telegraf-index* on the DC cluster.
+    The legacy dedicated `ipsec-*` index (DRC cluster) stopped receiving data — the
+    collector was moved into the unified telegraf index — so the old query read 0
+    users forever, which silently false-fired the "< 2 tunnels" CRITICAL alert.
     """
     if client is None:
-        client = get_ipsec_client()
+        client = get_dc_client()
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms)}},
+        "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms) + [
+            {"term": {"measurement_name.keyword": "ipsec_user"}},
+        ]}},
         "aggs": {
             "active_users": {
                 "cardinality": {"field": "tag.username.keyword"}
@@ -53,7 +60,7 @@ async def active_ipsec_users_count(
         },
     }
 
-    resp = await safe_search(client, "ipsec-*", body)
+    resp = await safe_search(client, "telegraf-index*", body)
     value = resp.get("aggregations", {}).get("active_users", {}).get("value", 0) or 0
     return int(value)
 

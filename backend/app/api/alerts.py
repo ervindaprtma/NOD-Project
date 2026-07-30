@@ -478,7 +478,7 @@ async def test_alert_rule(
             vals = summary.get(base_key, [0.0])
             metric_value = float(vals[link_idx] if link_idx < len(vals) else (vals[0] if isinstance(vals, list) else vals or 0.0))
         elif rule.data_source == "vpn_ssl":
-            site = rule.site_name or "Site_FGT-DC_SSLVPN"
+            site = sslvpn_qb.sslvpn_measurement_for_site(rule.site_name)
             count = await sslvpn_qb.active_sslvpn_users_count(
                 gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
             )

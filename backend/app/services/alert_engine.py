@@ -168,7 +168,8 @@ async def _run_group_query(
                 from app.opensearch import sslvpn as sslvpn_qb
 
                 result = await sslvpn_qb.active_sslvpn_users_count(
-                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC_SSLVPN"
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                    site_name=sslvpn_qb.sslvpn_measurement_for_site(site_name),
                 )
 
             elif data_source == "vpn_ipsec":

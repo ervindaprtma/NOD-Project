@@ -40,15 +40,19 @@ SEED_TEMPLATES: list[dict] = [
         "name": "Application Throughput Spike",
         "category": "capacity",
         "icon": "📈",
-        "description": "Alert when application throughput exceeds the configured threshold.",
-        "body_template": "Throughput Spike: {{ name }}\nValue: {{ metric_value }} bytes/s\nThreshold: > {{ threshold }}",
+        # Updated: now uses traffic.wan.total_mbps (per-path Mbps, see appid_flow_alert_summary
+        # + _extract_appid_flow). The legacy "app_total_bytes" returned 5-min cumulative bytes
+        # — empty/instant windows rendered as "0", which an operator can't tell from a real
+        # outage. Mbps is window-size-stable: 0 truly means no traffic in the window.
+        "description": "Alert when WAN-aggregate throughput exceeds the configured Mbps threshold.",
+        "body_template": "Throughput Spike: {{ name }}\nValue: {{ metric_value|round(2) }} Mbps\nThreshold: > {{ threshold }} Mbps",
         "underlying_kind": "single",
         "locked_fields": {
             "data_source": "appid_flow",
-            "metric_field": "app_total_bytes",
-            "aggregation": "sum",
+            "metric_field": "traffic.wan.total_mbps",
+            "aggregation": "avg",
             "condition": ">",
-            "threshold_value": 100000000.0,
+            "threshold_value": 1200.0,
             "evaluation_window_minutes": 5,
             "sustained_for_minutes": 3,
             "severity": "WARNING",
@@ -61,12 +65,15 @@ SEED_TEMPLATES: list[dict] = [
         "name": "SSL VPN Capacity",
         "category": "capacity",
         "icon": "🔑",
+        # Updated: metric_field now matches what sslvpn.active_sslvpn_users_count() returns
+        # (a single cardinality count, not the legacy "num_active_users" key — which is just
+        # a string and gets ignored by the engine, returning 0).
         "description": "Alert when SSL VPN active users approach the license limit.",
         "body_template": "SSL VPN Capacity: {{ name }}\nActive users: {{ metric_value }}",
         "underlying_kind": "single",
         "locked_fields": {
             "data_source": "vpn_ssl",
-            "metric_field": "num_active_users",
+            "metric_field": "active_sslvpn_users_count",
             "aggregation": "avg",
             "condition": ">",
             "threshold_value": 100.0,
@@ -82,12 +89,15 @@ SEED_TEMPLATES: list[dict] = [
         "name": "IPsec Tunnel Status",
         "category": "availability",
         "icon": "🔗",
+        # Updated: matches what ipsec.active_ipsec_users_count() returns. The legacy
+        # "num_active_tunnels" string was extracted via the v2 cardinal→int path that the
+        # new pipeline no longer recognizes → 0.
         "description": "Alert when fewer IPsec tunnels are active than expected.",
         "body_template": "IPsec Tunnel Status: {{ name }}\nActive tunnels: {{ metric_value }}",
         "underlying_kind": "single",
         "locked_fields": {
             "data_source": "vpn_ipsec",
-            "metric_field": "num_active_tunnels",
+            "metric_field": "active_ipsec_users_count",
             "aggregation": "avg",
             "condition": "<",
             "threshold_value": 2.0,
@@ -715,9 +725,11 @@ async def seed_field_catalog() -> int:
         # Already seeded: reconcile the data sources this codebase actively manages so
         # engine-honored fields reach existing DBs — appid_flow (per-path fix, old byte
         # keys were never honored), ha_resource (Phase E mem/session depth),
-        # interface_stats (new source + throughput_mbps), and sdwan_sla (link status).
-        # Delete+reinsert per source; others untouched.
-        managed = {"appid_flow", "ha_resource", "interface_stats", "device_uptime", "sdwan_sla"}
+        # interface_stats (new source + throughput_mbps), sdwan_sla (link status),
+        # vpn_ssl / vpn_ipsec (count metrics — keep them aligned with the templates that
+        # reference the keys, so a stale row from an older catalog can't diverge).
+        managed = {"appid_flow", "ha_resource", "interface_stats", "device_uptime", "sdwan_sla",
+                   "vpn_ssl", "vpn_ipsec"}
         await db.execute(
             delete(AlertFieldCatalog).where(AlertFieldCatalog.data_source.in_(managed))
         )

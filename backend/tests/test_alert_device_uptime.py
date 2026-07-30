@@ -115,6 +115,29 @@ def test_interface_spike_template_uses_peak_aggregation_and_matches_catalog():
     assert lf["condition"] in row["valid_conditions"]
 
 
+def test_application_throughput_template_uses_per_path_mbps_and_matches_catalog():
+    """Application Throughput Spike must point at a per-path Mbps metric the catalog + engine
+    actually honor. The legacy 'app_total_bytes' used to map to _wan.total_bytes (5-min cumulative
+    bytes), which rendered as '0' for sparse flows and looked like an outage — and which the
+    newer catalog no longer lists as a field, so a free-text legacy rule returned 0 from the
+    extractor for callers that did key-by-key catalog lookups. Guard keeps it on traffic.*_mbps."""
+    from app.services.template_seeder import SEED_FIELD_CATALOG, SEED_TEMPLATES
+
+    tmpl = next(t for t in SEED_TEMPLATES if t["name"] == "Application Throughput Spike")
+    lf = tmpl["locked_fields"]
+    assert lf["data_source"] == "appid_flow"
+    assert lf["metric_field"].startswith("traffic.") and lf["metric_field"].endswith("_mbps"), (
+        "Must be a per-path Mbps key so the extractor returns a real Mbps value to test/dry-run."
+    )
+    row = next(
+        c for c in SEED_FIELD_CATALOG
+        if c["data_source"] == lf["data_source"] and c["field_key"] == lf["metric_field"]
+    )  # raises if not in catalog
+    assert lf["condition"] in row["valid_conditions"]
+    # unit must be Mbps — a bytes-based template mis-thresholds by 1e6
+    assert row.get("unit") == "Mbps"
+
+
 def test_retired_templates_are_gone_and_registered():
     """VPN Tunnel Down / WAN Congestion are retired: absent from the seed list and listed
     for deletion so already-seeded DBs drop them too."""
@@ -168,3 +191,42 @@ def test_interface_throughput_mbps_metric_exists():
     row = next(c for c in SEED_FIELD_CATALOG
                if c["data_source"] == "interface_stats" and c["field_key"] == "iface.throughput_mbps")
     assert row["unit"] == "Mbps" and "max" in row["valid_aggregations"]
+
+
+def test_sslvpn_measurement_mapping():
+    """SSL VPN alerts: the operator picks a plain site (Site_FGT-DC), but the data lives
+    under the per-site *_SSLVPN measurement. The mapping must add the suffix (idempotently)
+    or the cardinality filters on a non-SSLVPN measurement and reads 0 users forever."""
+    from app.opensearch.sslvpn import sslvpn_measurement_for_site
+
+    assert sslvpn_measurement_for_site("Site_FGT-DC") == "Site_FGT-DC_SSLVPN"
+    assert sslvpn_measurement_for_site("Site_FGT-DRC") == "Site_FGT-DRC_SSLVPN"
+    assert sslvpn_measurement_for_site("Site_FGT-DC_SSLVPN") == "Site_FGT-DC_SSLVPN"  # idempotent
+    assert sslvpn_measurement_for_site(None) == "Site_FGT-DC_SSLVPN"
+
+
+def test_ipsec_count_targets_live_telegraf_source():
+    """IPsec active-user count must read the live `ipsec_user` measurement in telegraf-index*,
+    not the retired dedicated `ipsec-*` index (which went stale and made the '< 2 tunnels'
+    CRITICAL rule false-fire on a fabricated 0). Captures the actual index + query it issues."""
+    import asyncio
+    from app.opensearch import ipsec as ip
+
+    captured = {}
+
+    async def fake_search(client, index, body):
+        captured["index"] = index
+        captured["body"] = body
+        return {"aggregations": {"active_users": {"value": 3}}}
+
+    orig = ip.safe_search
+    ip.safe_search = fake_search
+    try:
+        n = asyncio.run(ip.active_ipsec_users_count(gte_ms=1, lte_ms=2))
+    finally:
+        ip.safe_search = orig
+
+    assert n == 3
+    assert captured["index"] == "telegraf-index*"
+    terms = [f for f in captured["body"]["query"]["bool"]["filter"] if "term" in f]
+    assert {"term": {"measurement_name.keyword": "ipsec_user"}} in terms
