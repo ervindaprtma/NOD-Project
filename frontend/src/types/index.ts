@@ -6,6 +6,7 @@
 
 export interface ResponseMeta {
   total?: number;
+  total_sessions?: number;  // distinct sessions (correlation_id) over the filtered set
   page?: number;
   page_size?: number;
   query_took_ms?: number;

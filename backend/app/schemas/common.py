@@ -18,6 +18,7 @@ class ErrorDetail(BaseModel):
 
 class Meta(BaseModel):
     total: Optional[int] = None
+    total_sessions: Optional[int] = None  # distinct sessions (correlation_id) over the filtered set
     page: Optional[int] = None
     page_size: Optional[int] = None
     query_took_ms: Optional[int] = None

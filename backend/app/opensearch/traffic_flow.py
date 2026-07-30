@@ -150,8 +150,10 @@ async def flow_summary(
                 "terms": {"field": "flow.in.netif.name", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
-            # Unique session count for the timeframe (cardinality of connection_id)
-            "session_count": {"cardinality": {"field": "flow.connection_id"}},
+            # Unique session count for the timeframe: cardinality of correlation_id (one
+            # logical client-port↔server-port connection; connection_id is a coarse
+            # conversation key that collapses ~180x too many sessions into one).
+            "session_count": {"cardinality": {"field": "flow.correlation_id"}},
         },
     }
 
@@ -481,7 +483,7 @@ async def flow_table(
                         }
                     },
                     "total_packets": {"sum": {"field": "flow.packets"}},
-                    "session_count": {"cardinality": {"field": "flow.connection_id"}},
+                    "session_count": {"cardinality": {"field": "flow.correlation_id"}},
                 },
             }
         },
@@ -767,6 +769,14 @@ async def raw_flows(
         "query": {"bool": {"filter": must_filters}},
         "sort": sort_clause,
         "_source": {"includes": source_fields},
+        # Accurate total, not the default 10k cap — otherwise "records" (capped) would
+        # read as smaller than the uncapped session count below, which looks broken.
+        "track_total_hits": True,
+        # Distinct sessions across the WHOLE filtered set (not just this page): one
+        # correlation_id = one client-port↔server-port connection. Safe on scroll —
+        # correlation_id is a keyword, so cardinality uses doc_values, not fielddata.
+        # ponytail: recomputed per page; gate on `search_after is None` if it ever bites.
+        "aggs": {"session_count": {"cardinality": {"field": "flow.correlation_id"}}},
     }
 
     if search_after:
@@ -775,7 +785,7 @@ async def raw_flows(
     try:
         resp = await client.search(index=FLOW_INDEX, body=body, request_timeout=30)
     except Exception as e:
-        return {"records": [], "search_after": None, "total_hits": 0, "error": str(e)}
+        return {"records": [], "search_after": None, "total_hits": 0, "total_sessions": 0, "error": str(e)}
 
     hits = resp["hits"]["hits"]
     records = []
@@ -810,4 +820,5 @@ async def raw_flows(
         "total_hits": resp["hits"]["total"]["value"]
         if isinstance(resp["hits"]["total"], dict)
         else resp["hits"]["total"],
+        "total_sessions": int(resp.get("aggregations", {}).get("session_count", {}).get("value", 0)),
     }

@@ -105,7 +105,7 @@ async def flow_summary(
         "aggs": {
             "grand_total_upload": {"sum": {"field": "flow.client.bytes", "missing": 0}},
             "grand_total_download": {"sum": {"field": "flow.server.bytes", "missing": 0}},
-            "session_count": {"cardinality": {"field": "flow.connection_id"}},
+            "session_count": {"cardinality": {"field": "flow.correlation_id"}},
             "top_services": service_terms_agg(),
             "top_clients": {
                 "terms": {"field": "flow.client.ip.addr", "size": 20, "order": BYTES_DESC},
@@ -432,7 +432,7 @@ async def flow_table(
                         }
                     },
                     "total_packets": {"sum": {"field": "flow.packets"}},
-                    "session_count": {"cardinality": {"field": "flow.connection_id"}},
+                    "session_count": {"cardinality": {"field": "flow.correlation_id"}},
                 },
             }
         },

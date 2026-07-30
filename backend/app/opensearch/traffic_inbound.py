@@ -99,7 +99,7 @@ async def flow_summary(
         "aggs": {
             "grand_total_upload": {"sum": {"field": "flow.client.bytes", "missing": 0}},
             "grand_total_download": {"sum": {"field": "flow.server.bytes", "missing": 0}},
-            "session_count": {"cardinality": {"field": "flow.connection_id"}},
+            "session_count": {"cardinality": {"field": "flow.correlation_id"}},
             "top_services": service_terms_agg(),
             # On the `inbound-vip` path the EXTERNAL requester is the client on BOTH
             # legs. server.as.org here resolves to our own published VIP's upstream
@@ -454,7 +454,7 @@ async def flow_table(
                         }
                     },
                     "total_packets": {"sum": {"field": "flow.packets"}},
-                    "session_count": {"cardinality": {"field": "flow.connection_id"}},
+                    "session_count": {"cardinality": {"field": "flow.correlation_id"}},
                 },
             }
         },

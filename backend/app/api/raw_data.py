@@ -139,6 +139,7 @@ async def get_raw_flows(
             degraded,
             result.get("error"),
             total=result["total_hits"],
+            total_sessions=result.get("total_sessions"),
             page_size=page_size,
             search_after=result.get("search_after"),  # cursor for next page
         ),
