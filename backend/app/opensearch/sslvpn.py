@@ -176,6 +176,19 @@ async def fetch_session_buckets(
     return times, byb, durs
 
 
+def sslvpn_measurement_for_site(site_name: str | None) -> str:
+    """Map an operator site (Site_FGT-DC) to its SSL VPN measurement (Site_FGT-DC_SSLVPN).
+
+    The alert Site dropdown offers plain site names; SSL VPN samples live under a
+    per-site `*_SSLVPN` measurement. A rule that picks 'Site_FGT-DC' must query
+    'Site_FGT-DC_SSLVPN' or the cardinality filters on a non-SSLVPN measurement and
+    reads 0 users forever. Idempotent — an already-suffixed name is returned as-is.
+    """
+    if not site_name:
+        return "Site_FGT-DC_SSLVPN"
+    return site_name if site_name.endswith("_SSLVPN") else f"{site_name}_SSLVPN"
+
+
 def _sslvpn_filters(gte_ms: int, lte_ms: int, site_name: str) -> list[dict]:
     """Q-01 + Q-06."""
     return [

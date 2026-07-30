@@ -76,7 +76,7 @@ def test_resolve_enqueues_a_recovery_notification():
     """FIRING→RESOLVED must enqueue a 'resolved' notification (not just SSE), and only
     for a rule that actually fired — a PENDING→RESOLVED never alerted, so no all-clear."""
     src = inspect.getsource(alert_engine._advance_state_machine)
-    assert 'notify_queue.append((rule, metric_value, "resolved"))' in src, \
+    assert 'notify_queue.append((rule, metric_value, "resolved"' in src, \
         "resolve path must send a recovery notification to the channels"
     assert "was_firing" in src, "recovery must be gated on the rule having actually FIRED"
 

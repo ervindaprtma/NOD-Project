@@ -8,6 +8,21 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+_DATA_SOURCE_RE = r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec|interface_stats|device_uptime)$"
+
+
+class AlertClause(BaseModel):
+    """One clause of a composite rule. Evaluated independently, then combined by
+    notify_when (all=AND / any=OR). target_key = interface ifIndex / device IP where the
+    source needs one; evaluation_window_minutes defaults to the rule's window when omitted."""
+    data_source: str = Field(..., pattern=_DATA_SOURCE_RE)
+    metric_field: str = Field(..., min_length=1, max_length=255)
+    aggregation: str = Field(default="avg", pattern=r"^(avg|max|min|sum|count)$")
+    condition: str = Field(..., pattern=r"^(>|<|>=|<=|==)$")
+    threshold_value: float
+    target_key: Optional[str] = Field(default=None, max_length=64)
+    evaluation_window_minutes: Optional[int] = Field(default=None, ge=1)
+
 
 class AlertRuleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
@@ -25,6 +40,9 @@ class AlertRuleCreate(BaseModel):
     site_name: Optional[str] = Field(default=None, max_length=128)
     target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
+    kind: str = Field(default="single", pattern=r"^(single|composite)$")
+    notify_when: str = Field(default="any", pattern=r"^(any|all)$")  # composite: OR / AND
+    clauses: list[AlertClause] = Field(default_factory=list)
     enabled: bool = True
 
 
@@ -44,6 +62,9 @@ class AlertRuleUpdate(BaseModel):
     site_name: Optional[str] = Field(default=None, max_length=128)
     target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
+    kind: Optional[str] = Field(default=None, pattern=r"^(single|composite)$")
+    notify_when: Optional[str] = Field(default=None, pattern=r"^(any|all)$")
+    clauses: Optional[list[AlertClause]] = None
     enabled: Optional[bool] = None
 
 
@@ -55,6 +76,9 @@ class AlertRuleRead(BaseModel):
     metric_field: str
     target_key: Optional[str] = None
     link_max_mbps: Optional[float] = None
+    kind: str = "single"
+    notify_when: str = "any"
+    clauses: list[dict] = Field(default_factory=list)
     aggregation: str
     condition: str
     threshold_value: float

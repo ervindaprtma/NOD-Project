@@ -168,7 +168,8 @@ async def _run_group_query(
                 from app.opensearch import sslvpn as sslvpn_qb
 
                 result = await sslvpn_qb.active_sslvpn_users_count(
-                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC_SSLVPN"
+                    gte_ms=gte_ms, lte_ms=lte_ms,
+                    site_name=sslvpn_qb.sslvpn_measurement_for_site(site_name),
                 )
 
             elif data_source == "vpn_ipsec":
@@ -321,9 +322,16 @@ def _extract_per_rule_value(
 
     try:
         if rule.data_source == "ha_resource":
-            if isinstance(group_result, list) and group_result and rule.metric_field.startswith("ha_member."):
-                field_name = rule.metric_field.split(".", 1)[1]
-                return float(group_result[0].get(field_name, 0) or 0)
+            if isinstance(group_result, list):
+                # num_active = how many HA members are currently reporting. current_device_status
+                # only returns members seen in the window, so len() is the live active count; a
+                # dropped member shrinks it below the "< 2" threshold. (Was unhandled → always 0.0,
+                # which perma-fired the rule.)
+                if rule.metric_field == "num_active":
+                    return float(len(group_result))
+                if group_result and rule.metric_field.startswith("ha_member."):
+                    field_name = rule.metric_field.split(".", 1)[1]
+                    return float(group_result[0].get(field_name, 0) or 0)
             return 0.0
 
         if rule.data_source == "appid_flow":
@@ -464,7 +472,7 @@ async def _advance_state_machine(
     metric_value: float,
     condition_met: bool,
     db: AsyncSession,
-    notify_queue: list[tuple[AlertRule, float, str]] | None = None,
+    notify_queue: list[tuple[AlertRule, float, str, datetime]] | None = None,
 ) -> None:
     """Shared state machine for single and composite rules (P5).
 
@@ -524,7 +532,7 @@ async def _advance_state_machine(
                     # not the alerting, turning a 15-minute debounce on a 60s tick into
                     # ~15 messages before the rule had even fired.
                     if notify_queue is not None:
-                        notify_queue.append((rule, metric_value, "firing"))
+                        notify_queue.append((rule, metric_value, "firing", state.last_fired_at or now))
 
                     # SSE stays per-rule (real-time)
                     await sse_broadcast("alert",
@@ -545,7 +553,7 @@ async def _advance_state_machine(
 
                     # Enqueue re-notification (batch)
                     if notify_queue is not None:
-                        notify_queue.append((rule, metric_value, "firing"))
+                        notify_queue.append((rule, metric_value, "firing", state.last_fired_at or now))
 
                     await sse_broadcast("alert",
                         rule_id=rule.id,
@@ -567,7 +575,7 @@ async def _advance_state_machine(
             # was still debouncing and never notified, so a "recovered" message would
             # reference an alert the operator never received.
             if was_firing and notify_queue is not None:
-                notify_queue.append((rule, metric_value, "resolved"))
+                notify_queue.append((rule, metric_value, "resolved", state.last_fired_at or now))
 
             log_result = await db.execute(
                 select(AlertLog)
@@ -639,6 +647,8 @@ async def _evaluate_composite_rule(
         cond = clause.get("condition", ">")
         thresh = clause.get("threshold_value", 0.0)
         window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
+        target_key = clause.get("target_key")
+        aggregation = clause.get("aggregation", "avg")
 
         # §9.4: read from the cycle's pre-fetched cache when available
         cache_key = (ds, rule.site_name, window)
@@ -649,7 +659,7 @@ async def _evaluate_composite_rule(
         if group_result is None:
             break  # one clause failed → whole rule fails
 
-        val = _extract_per_rule_value_flat(ds, mf, group_result)
+        val = _extract_per_rule_value_flat(ds, mf, group_result, target_key, aggregation)
         if val is None:
             break
 
@@ -670,16 +680,23 @@ async def _evaluate_composite_rule(
 
 # ponytail: _extract_per_rule_value but takes flat data_source/metric_field instead of a rule object
 def _extract_per_rule_value_flat(
-    data_source: str, metric_field: str, group_result: float | list[Any] | dict[Any, Any] | None
+    data_source: str, metric_field: str, group_result: float | list[Any] | dict[Any, Any] | None,
+    target_key: str | None = None, aggregation: str = "avg",
 ) -> float | None:
-    """Same logic as _extract_per_rule_value but accepts flat params (P5 composite)."""
+    """Same logic as _extract_per_rule_value but accepts flat params (P5 composite).
+
+    target_key + aggregation are carried per-clause so interface_stats (needs an ifIndex)
+    and device_uptime (per-device) clauses resolve exactly like a single rule."""
     if group_result is None:
         return None
     try:
         if data_source == "ha_resource":
-            if isinstance(group_result, list) and group_result and metric_field.startswith("ha_member."):
-                field_name = metric_field.split(".", 1)[1]
-                return float(group_result[0].get(field_name, 0) or 0)
+            if isinstance(group_result, list):
+                if metric_field == "num_active":
+                    return float(len(group_result))
+                if group_result and metric_field.startswith("ha_member."):
+                    field_name = metric_field.split(".", 1)[1]
+                    return float(group_result[0].get(field_name, 0) or 0)
             return 0.0
         if data_source == "appid_flow":
             if isinstance(group_result, dict):
@@ -698,21 +715,21 @@ def _extract_per_rule_value_flat(
                 return float(vals or 0.0)
             return 0.0
         if data_source == "interface_stats":
-            # Composite clauses carry no target_key (which interface), so interface_stats
-            # can't be resolved here. Single rules only — return 0 so a stray clause can't
-            # false-fire. (Add a clause-level target_key if composite interface rules are
-            # ever needed.)
+            # Needs the clause's target_key (ifIndex); without one the interface can't be
+            # picked → 0 so a mis-authored clause can't false-fire.
+            if isinstance(group_result, dict):
+                return _extract_interface_stats(metric_field, target_key, aggregation, group_result)
             return 0.0
         if data_source == "device_uptime":
-            # No clause-level target_key → "any device at the site" reduction, which is
-            # resolvable without one (unlike interface_stats). collector_gap is site-level.
+            # target_key optional — blank = "any device at the site" reduction.
+            # collector_gap is site-level (target_key ignored).
             if isinstance(group_result, dict):
-                return _extract_device_uptime(metric_field, None, group_result)
+                return _extract_device_uptime(metric_field, target_key, group_result)
             return None
         return None
     except (TypeError, ValueError, IndexError):
         return None
-async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) -> None:
+async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, datetime]]) -> None:
     """Send batched notifications — one grouped message per channel (P7).
 
     Instead of one message per rule, aggregates all pending notifications
@@ -729,7 +746,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
 
     # Adapt the header/subject to content: an all-clear batch reads as a recovery; any
     # still-firing rule keeps the alert framing.
-    n_res = sum(1 for _, _, ev in notify_queue if ev == "resolved")
+    n_res = sum(1 for _, _, ev, _ in notify_queue if ev == "resolved")
     n_fire = len(notify_queue) - n_res
     title = "✅ NOD Recovery Summary" if n_res and not n_fire else "🛑 NOD Alert Summary"
 
@@ -738,7 +755,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
     sev_emoji = {"CRITICAL": "🔴", "WARNING": "⚠️", "INFO": "ℹ️"}
 
     # §9.5: pre-fetch all referenced templates in one query
-    template_ids = {r.template_id for r, _, _ in notify_queue if r.template_id}
+    template_ids = {r.template_id for r, _, _, _ in notify_queue if r.template_id}
     template_body: dict[str, str] = {}
     if template_ids:
         from app.db.models import AlertTemplate
@@ -759,7 +776,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
     # with none fall to the admin-chosen default. Only ACTIVE templates render; an
     # inactive/retired one is skipped and the rule falls through. Prefer line_template
     # (the batch line), fall back to body_template.
-    nt_ids = {r.notification_template_id for r, _, _ in notify_queue if r.notification_template_id}
+    nt_ids = {r.notification_template_id for r, _, _, _ in notify_queue if r.notification_template_id}
     nt_line: dict[str, str] = {}
     default_line: str | None = None
     try:
@@ -784,9 +801,14 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
     except Exception as e:
         logger.error("Failed to fetch notification templates: %s", e)
 
-    for rule, mv, event in notify_queue:
+    for rule, mv, event, fired_orig in notify_queue:
         sev = sev_emoji.get(rule.severity, "🔔")
         resolved = event == "resolved"
+        # Original first-trigger time (stable across 30-min reminders); sent_at is this
+        # message's time. A reminder keeps fired_at = the original fire, so the operator
+        # sees how long the still-unresolved issue has been firing.
+        fired_str = (fired_orig.astimezone(_WIB).strftime("%d %b %Y %H:%M:%S WIB")
+                     if fired_orig else now_str)
         # Resolution: assigned (active) template → active default → AlertTemplate body →
         # hardcoded. nt_line only holds active templates, so an inactive assignment falls
         # through to the default here.
@@ -823,7 +845,8 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
                 "metric_value": mv,
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
-                "fired_at": now_str,
+                "fired_at": fired_str,
+                "sent_at": now_str,
                 # Fire vs resolve — lets one template render both ({% if event == 'resolved' %}).
                 "event": event,
                 "event_label": "Resolved" if resolved else "Firing",
@@ -863,7 +886,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str]]) 
         from app.db.models import NotificationConfig as NotifCfg
         from app.services.notifier_helper import send_alert
 
-        fired_channels = {ch for rule, _, _ in notify_queue for ch in rule.notify_channels}
+        fired_channels = {ch for rule, _, _, _ in notify_queue for ch in rule.notify_channels}
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(
@@ -919,7 +942,7 @@ async def _run_evaluation_cycle() -> None:
             composite_rules = [r for r in active_rules if r.kind == "composite"]
 
             # ── 1. Single rules (P1 batched) ──
-            notify_queue: list[tuple[AlertRule, float, str]] = []
+            notify_queue: list[tuple[AlertRule, float, str, datetime]] = []
             groups: dict[tuple, list[AlertRule]] = defaultdict(list)
             for rule in single_rules:
                 key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)
