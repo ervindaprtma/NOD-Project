@@ -47,3 +47,16 @@ def test_batch_template_render_failure_falls_back():
     """§9.5: if a rule's body_template fails to render, fall back to the
     hardcoded line — never lose the alert to a template typo."""
     pass
+
+
+def test_batch_notify_decrypts_channel_config():
+    """Regression: the batch dispatch must send the DECRYPTED channel config. It used to
+    query NotificationConfig and pass row.config straight through — the bot token is Fernet-
+    encrypted at rest, so Telegram got a garbage token and silently rejected every alert
+    (fired but never delivered). It must route through load_channel_configs (which decrypts)."""
+    import inspect
+    from app.services import alert_engine
+
+    src = inspect.getsource(alert_engine._flush_batch_notify)
+    assert "load_channel_configs" in src, "batch send must use the decrypting loader"
+    assert "ch.config" not in src, "must NOT pass the raw (encrypted) NotificationConfig.config"

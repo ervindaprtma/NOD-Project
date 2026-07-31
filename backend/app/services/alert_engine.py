@@ -923,28 +923,25 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         parse_mode = None
 
     # Load channels and send — only the ones the firing rules actually want
-    # (§9.3: was sending to every enabled channel; now respects rule.notify_channels)
+    # (§9.3: was sending to every enabled channel; now respects rule.notify_channels).
     try:
-        from app.db.session import AsyncSessionLocal
-        from app.db.models import NotificationConfig as NotifCfg
-        from app.services.notifier_helper import send_alert
+        from app.services.notifier_helper import send_alert, load_channel_configs
 
         fired_channels = {ch for rule, _, _, _ in notify_queue for ch in rule.notify_channels}
 
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(NotifCfg).where(
-                    (NotifCfg.enabled == True)  # noqa: E712
-                    & (NotifCfg.channel.in_(fired_channels))
-                )
-            )
-            channels = result.scalars().all()
-            for ch in channels:
-                try:
-                    await send_alert(ch.channel, ch.config, subject=title, body=body,
-                                     parse_mode=parse_mode)
-                except Exception as e:
-                    logger.error("Batch notify failed for %s: %s", ch.channel, e)
+        # load_channel_configs DECRYPTS the secrets (bot token etc.) and returns only enabled
+        # channels. The batch path used to pass the raw NotificationConfig.config straight from
+        # the DB — still ENCRYPTED — so Telegram received a garbage token, rejected every send,
+        # and the error was swallowed: alerts fired but no message ever arrived.
+        db_configs = await load_channel_configs()
+        for channel in fired_channels:
+            cfg = db_configs.get(channel)
+            if not cfg:
+                continue  # channel not enabled/configured in Settings → nothing to send to
+            try:
+                await send_alert(channel, cfg, subject=title, body=body, parse_mode=parse_mode)
+            except Exception as e:
+                logger.error("Batch notify failed for %s: %s", channel, e)
     except Exception as e:
         logger.error("Batch notify flush error: %s", e)
 
