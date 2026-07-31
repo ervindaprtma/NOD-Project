@@ -175,6 +175,24 @@ export default function AlertsPage() {
     current_metric_value: number;
     threshold_breached: boolean;
     query_took_ms: number;
+    would_notify?: boolean;
+    action_note?: string;
+    kind?: string;
+    notify_when?: string | null;
+    clause_results?: {
+      data_source: string;
+      metric_field: string;
+      aggregation: string;
+      target_key?: string | null;
+      condition: string;
+      threshold_value: number;
+      value?: number | null;
+      breached: boolean;
+    }[];
+    engine_state?: string | null;
+    engine_last_value?: number | null;
+    engine_last_evaluated_at?: string | null;
+    engine_read_degraded?: boolean;
   } | null>(null);
   const canManageAlerts = hasMinRole("admin");
   const [testing, setTesting] = useState(false);
@@ -582,7 +600,7 @@ export default function AlertsPage() {
   async function testRule(rule: AlertRule) {
     setTesting(true);
     try {
-      const resp = await apiFetch<{ data: { current_metric_value: number; threshold_breached: boolean; query_took_ms: number } }>(
+      const resp = await apiFetch<{ data: NonNullable<typeof testResult> }>(
         `/api/v1/alerts/rules/${rule.id}/test`,
         { method: "POST" }
       );
@@ -915,8 +933,76 @@ export default function AlertsPage() {
               </p>
             </div>
           </div>
+          {/* Composite: per-clause breakdown — every metric, combined by AND/OR */}
+          {testResult.kind === "composite" && (testResult.clause_results?.length ?? 0) > 0 && (
+            <div className="mt-3">
+              <p className="text-xs text-muted-foreground mb-1">
+                All clauses (combined with{" "}
+                <span className="font-semibold">{testResult.notify_when === "all" ? "AND — all must breach" : "OR — any breaches"}</span>):
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-muted-foreground border-b">
+                      <th className="text-left py-1 pr-2">Metric</th>
+                      <th className="text-right px-2">Value</th>
+                      <th className="text-left px-2">Limit</th>
+                      <th className="text-center pl-2">Breached</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {testResult.clause_results!.map((c, i) => (
+                      <tr key={i} className="border-b last:border-0">
+                        <td className="py-1 pr-2">
+                          {c.metric_field}{c.target_key ? ` [${c.target_key}]` : ""}
+                          <span className="text-muted-foreground"> ({c.aggregation})</span>
+                        </td>
+                        <td className="text-right px-2 font-mono">
+                          {c.value === null || c.value === undefined
+                            ? <span className="text-amber-600">no data</span>
+                            : c.value.toFixed(2)}
+                        </td>
+                        <td className="px-2 text-muted-foreground">{c.condition} {c.threshold_value}</td>
+                        <td className="text-center pl-2">
+                          {c.value === null || c.value === undefined
+                            ? "—"
+                            : c.breached
+                              ? <span className="text-destructive font-semibold">YES</span>
+                              : <span className="text-emerald-600">no</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {testResult.action_note && (
+            <p className={cn(
+              "text-xs mt-2 rounded px-2 py-1",
+              testResult.would_notify === false
+                ? "bg-destructive/10 text-destructive"
+                : "bg-muted text-muted-foreground"
+            )}>
+              {testResult.would_notify === false ? "⚠ Won't notify: " : "ℹ "}
+              {testResult.action_note}
+            </p>
+          )}
+          {/* Engine's actual last read — reconciles "Test breached but engine OK" */}
+          {testResult.engine_state && (
+            <p className="text-[11px] mt-2 text-muted-foreground">
+              Engine now: <span className="font-semibold">{testResult.engine_state}</span>
+              {testResult.engine_last_value !== null && testResult.engine_last_value !== undefined
+                ? ` · last read ${testResult.engine_last_value.toFixed(2)}` : ""}
+              {testResult.engine_last_evaluated_at
+                ? ` · ${timeAgo(testResult.engine_last_evaluated_at)}` : " · not yet evaluated"}
+              {testResult.engine_read_degraded
+                ? " · ⚠ last read was degraded (held, not evaluated)" : ""}
+            </p>
+          )}
           <p className="text-[10px] text-muted-foreground mt-2">
-            Query took {testResult.query_took_ms}ms — No alert was fired
+            Query took {testResult.query_took_ms}ms — Test is a dry-run; it never fires. The engine
+            actions this rule on its 60s poll if the breach is sustained.
           </p>
         </div>
       )}

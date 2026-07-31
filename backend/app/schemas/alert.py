@@ -104,11 +104,37 @@ class AlertRuleRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AlertTestClauseResult(BaseModel):
+    """Per-clause row for a composite Test — every clause is evaluated, not just the first."""
+    data_source: str
+    metric_field: str
+    aggregation: str
+    target_key: Optional[str] = None
+    condition: str
+    threshold_value: float
+    value: Optional[float] = None   # None = no data / held (degraded read)
+    breached: bool = False
+
+
 class AlertTestResult(BaseModel):
     rule_id: str
     current_metric_value: float
     threshold_breached: bool
     query_took_ms: int
+    # Test is a dry-run and never fires. These explain whether a *sustained* breach
+    # would actually reach a channel, and if not, why — the three gates Test skips.
+    would_notify: bool = True
+    action_note: str = ""
+    # Composite: every clause evaluated (all metrics), combined with AND/OR.
+    kind: str = "single"
+    notify_when: Optional[str] = None
+    clause_results: list[AlertTestClauseResult] = Field(default_factory=list)
+    # The engine's actual last read — resolves "Test says breached but engine says OK":
+    # they are two different reads (Test skips degradation handling, the engine holds on it).
+    engine_state: Optional[str] = None
+    engine_last_value: Optional[float] = None
+    engine_last_evaluated_at: Optional[datetime] = None
+    engine_read_degraded: bool = False
 
 
 class AlertLogRead(BaseModel):

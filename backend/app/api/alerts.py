@@ -19,6 +19,7 @@ from app.schemas.alert import (
     AlertRuleCreate,
     AlertRuleRead,
     AlertRuleUpdate,
+    AlertTestClauseResult,
     AlertTestResult,
 )
 from app.schemas.common import APIResponse, Meta
@@ -439,7 +440,112 @@ async def test_alert_rule(
     if not rule:
         raise HTTPException(status_code=404, detail="Alert rule not found.")
 
+    # The engine's last actual read — surfaced so "Test says breached, engine says OK"
+    # stops being a contradiction (they are two different reads; the engine holds on a
+    # degraded read that Test evaluates anyway).
+    st_row = (await db.execute(
+        select(AlertState).where(AlertState.rule_id == rule_id)
+    )).scalar_one_or_none()
+
+    from app.services.notifier_helper import load_channel_configs
+    channel_cfgs = await load_channel_configs()
+
+    def _finish(metric_value, breached, clause_results=None):
+        elapsed = int((_time.monotonic() - t0) * 1000)
+        would_notify = True
+        notes: list[str] = []
+        if not rule.enabled:
+            would_notify = False
+            notes.append("rule is DISABLED — the engine skips it entirely (enable it to alert)")
+        if not rule.notify_channels:
+            would_notify = False
+            notes.append("no notification channel selected on this rule")
+        else:
+            missing = [c for c in rule.notify_channels if c not in channel_cfgs]
+            if missing:
+                would_notify = False
+                notes.append(
+                    f"channel(s) {', '.join(missing)} not enabled/configured in Settings → Notifications"
+                )
+        if would_notify and breached:
+            notes.append(
+                f"would fire after the breach holds for {rule.sustained_for_minutes} min "
+                f"(Test is instant; the engine debounces)"
+            )
+        return APIResponse.ok(data=AlertTestResult(
+            rule_id=rule_id,
+            current_metric_value=metric_value,
+            threshold_breached=breached,
+            query_took_ms=elapsed,
+            would_notify=would_notify,
+            action_note="; ".join(notes),
+            kind=rule.kind or "single",
+            notify_when=rule.notify_when,
+            clause_results=clause_results or [],
+            engine_state=(st_row.state if st_row else None),
+            engine_last_value=(st_row.last_value if st_row else None),
+            engine_last_evaluated_at=(st_row.last_evaluated_at if st_row else None),
+            engine_read_degraded=bool(st_row.last_read_degraded) if st_row else False,
+        ))
+
     t0 = _time.monotonic()
+
+    # ── Composite: evaluate EVERY clause with the exact engine functions, then combine
+    # with AND/OR. Reuses _run_group_query (so degradation handling matches the engine)
+    # + _extract_per_rule_value_flat + _check_condition — if this says breached, the
+    # engine will too. A clause that can't read shows value=None (held), which is why
+    # the whole rule "never evaluates" (any held clause → the engine holds the rule).
+    if (rule.kind or "single") == "composite":
+        from app.services.alert_engine import (
+            _run_group_query, _extract_per_rule_value_flat, _check_condition,
+        )
+        try:
+            clause_results = []
+            breaches = []
+            values = []
+            for clause in (rule.clauses or []):
+                ds = clause.get("data_source")
+                mf = clause.get("metric_field")
+                if not isinstance(ds, str) or not isinstance(mf, str):
+                    continue
+                cond = clause.get("condition", ">")
+                thresh = float(clause.get("threshold_value", 0.0) or 0.0)
+                window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
+                tkey = clause.get("target_key")
+                agg = clause.get("aggregation", "avg")
+                gr = await _run_group_query(ds, rule.site_name, window)
+                val = _extract_per_rule_value_flat(ds, mf, gr, tkey, agg) if gr is not None else None
+                breached_c = bool(val is not None and _check_condition(val, cond, thresh))
+                if val is not None:
+                    values.append(val)
+                breaches.append(breached_c)
+                clause_results.append(AlertTestClauseResult(
+                    data_source=ds, metric_field=mf, aggregation=agg, target_key=tkey,
+                    condition=cond, threshold_value=thresh, value=val, breached=breached_c,
+                ))
+            # A clause that couldn't read (value None) means the engine HOLDS the whole rule.
+            any_held = any(c.value is None for c in clause_results)
+            notify_when = rule.notify_when or "any"
+            if any_held:
+                combined = False  # engine holds → never fires until every clause reads
+            elif notify_when == "all":
+                combined = bool(clause_results) and all(breaches)
+            else:
+                combined = any(breaches)
+            reported = max(values) if values else 0.0
+            resp = _finish(reported, combined, clause_results)
+            if any_held:
+                held = [c.metric_field for c in clause_results if c.value is None]
+                extra = (f"HELD — clause(s) {', '.join(held)} returned no data this read; "
+                         f"the engine holds the whole rule (status stays OK) until every clause reads.")
+                resp.data.action_note = (resp.data.action_note + "; " + extra).lstrip("; ")
+                resp.data.would_notify = False
+            return resp
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to evaluate composite rule: {str(e)}",
+            )
 
     # Execute the rule's query against OpenSearch
     metric_value = 0.0
@@ -521,8 +627,6 @@ async def test_alert_rule(
             detail=f"Failed to evaluate rule: {str(e)}",
         )
 
-    elapsed = int((_time.monotonic() - t0) * 1000)
-
     # Check threshold
     breached = False
     op = rule.condition
@@ -538,14 +642,7 @@ async def test_alert_rule(
     elif op == "==":
         breached = abs(metric_value - th) < 0.001
 
-    return APIResponse.ok(
-        data=AlertTestResult(
-            rule_id=rule_id,
-            current_metric_value=metric_value,
-            threshold_breached=breached,
-            query_took_ms=elapsed,
-        )
-    )
+    return _finish(metric_value, breached)
 
 
 # ── Alert Logs ──────────────────────────────────────────────────
