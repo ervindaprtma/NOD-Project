@@ -116,6 +116,25 @@ def _render_template(text: str, ctx: dict) -> str:
 # per-cycle dict and extracted per-rule below.
 
 
+def _degradation_forces_hold(degraded: list[str], result: Any) -> bool:
+    """Decide whether a degraded OpenSearch read is too untrustworthy for the engine to
+    evaluate (→ hold state), vs. usable enough to proceed.
+
+    HOLD only on a HARD failure — timeout / circuit breaker returns an empty skeleton, so
+    the number would be fabricated — or when the read produced no usable data at all.
+
+    PROCEED on a partial-shard failure that still returned data: on a multi-index pattern
+    (telegraf-index* / fortigate-appid-flow-*) that almost always means an OLD/cold-index
+    shard failed while the RECENT index the alert actually needs succeeded. Holding on that
+    made alerts NEVER fire on any cluster carrying one perpetually-failing cold shard — the
+    pages tolerate it and show the value, so the engine must too, or it silently goes deaf.
+    """
+    if not degraded:
+        return False
+    hard = any(("timeout" in d) or ("circuit_breaker" in d) for d in degraded)
+    return hard or not result
+
+
 async def _run_group_query(
     data_source: str,
     site_name: str | None,
@@ -206,12 +225,16 @@ async def _run_group_query(
             return None
 
         if degraded:
+            if _degradation_forces_hold(degraded, result):
+                logger.warning(
+                    "Holding rule group %s (site=%s, window=%dmin): unusable read — %s",
+                    data_source, site_name, window_minutes, degraded[:2],
+                )
+                return None
             logger.warning(
-                "Skipping rule group %s (site=%s, window=%dmin): data degraded, "
-                "holding state instead of evaluating — %s",
-                data_source, site_name, window_minutes, degraded[:2],
+                "Rule group %s (site=%s): proceeding despite partial data (recent index OK) — %s",
+                data_source, site_name, degraded[:2],
             )
-            return None
 
     return result
 
@@ -862,10 +885,12 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         # batch turns out HTML (from another rule's template). Plain mode is unaffected.
         nm = html.escape(rule.name)
         st = html.escape(rule.site_name or "—")
+        # Include the current value AND the configured threshold so even the template-less
+        # fallback answers "what value hit, and what was the limit".
         if resolved:
-            lines.append(f"✅ [RESOLVED] {nm} @ {st}: recovered (now {mv})")
+            lines.append(f"✅ [RESOLVED] {nm} @ {st}: recovered (now {mv}, limit {rule.condition} {rule.threshold_value})")
         else:
-            lines.append(f"{sev} [{rule.severity}] {nm} @ {st}: {mv}")
+            lines.append(f"{sev} [{rule.severity}] {nm} @ {st}: {mv} (limit {rule.condition} {rule.threshold_value})")
 
     # If any rule rendered an HTML template, send the rich blocks as one HTML message
     # (grouped, matching the Grafana style) and drop the plain summary header. Otherwise

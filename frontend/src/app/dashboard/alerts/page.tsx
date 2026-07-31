@@ -56,6 +56,10 @@ const IFACE_MIN_WINDOW = 2;
 // device_uptime: ≥5 min so a dropped 30s poll or two can't trip a false "down" (§11.2).
 const DEVICE_MIN_WINDOW = 5;
 
+// Strip a leading zero so a controlled number input doesn't stick as "05": when the
+// default is 0 and the user types "5", the field would show "05" until re-render.
+const numInput = (v: string): number => (v === "" ? 0 : Number(v.replace(/^0+(?=\d)/, "")));
+
 const AGGREGATIONS = ["avg", "max", "min", "sum", "count"];
 const CONDITIONS = [">", "<", ">=", "<=", "=="];
 const SEVERITIES = ["INFO", "WARNING", "CRITICAL"];
@@ -1097,7 +1101,7 @@ export default function AlertsPage() {
                       <input
                         type="number"
                         value={form.threshold_value}
-                        onChange={(e) => setForm({ ...form, threshold_value: Number(e.target.value) })}
+                        onChange={(e) => setForm({ ...form, threshold_value: numInput(e.target.value) })}
                         className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                       />
                     </div>
@@ -1108,7 +1112,7 @@ export default function AlertsPage() {
                         <input
                           type="number"
                           value={form.link_max_mbps ?? 0}
-                          onChange={(e) => { const max = Number(e.target.value); setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * thrPct / 100) }); }}
+                          onChange={(e) => { const max = numInput(e.target.value); setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * thrPct / 100) }); }}
                           className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                         />
                       </div>
@@ -1117,7 +1121,7 @@ export default function AlertsPage() {
                         <input
                           type="number"
                           value={thrPct}
-                          onChange={(e) => { const pct = Number(e.target.value); const max = form.link_max_mbps || 1000; setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * pct / 100) }); }}
+                          onChange={(e) => { const pct = numInput(e.target.value); const max = form.link_max_mbps || 1000; setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * pct / 100) }); }}
                           className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                         />
                         <p className="text-[10px] text-muted-foreground mt-1">= {form.threshold_value} Mbps peak</p>
@@ -1152,7 +1156,7 @@ export default function AlertsPage() {
                     <input
                       type="number"
                       value={form.threshold_value}
-                      onChange={(e) => setForm({ ...form, threshold_value: Number(e.target.value) })}
+                      onChange={(e) => setForm({ ...form, threshold_value: numInput(e.target.value) })}
                       className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                     />
                   </div>
@@ -1213,7 +1217,7 @@ export default function AlertsPage() {
                           <select value={c.condition} onChange={(e) => patchClause(i, { condition: e.target.value })} className="px-2 py-1 text-xs rounded-md border bg-background">
                             {conds.map((cc) => <option key={cc} value={cc}>{cc}</option>)}
                           </select>
-                          <input type="number" value={c.threshold_value} onChange={(e) => patchClause(i, { threshold_value: Number(e.target.value) })} className="px-2 py-1 text-xs rounded-md border bg-background" />
+                          <input type="number" value={c.threshold_value} onChange={(e) => patchClause(i, { threshold_value: numInput(e.target.value) })} className="px-2 py-1 text-xs rounded-md border bg-background" />
                         </div>
                       </div>
                     );
@@ -1229,7 +1233,7 @@ export default function AlertsPage() {
                     type="number"
                     min={isIface ? IFACE_MIN_WINDOW : isDevice ? DEVICE_MIN_WINDOW : 1}
                     value={form.evaluation_window_minutes}
-                    onChange={(e) => setForm({ ...form, evaluation_window_minutes: Number(e.target.value) })}
+                    onChange={(e) => setForm({ ...form, evaluation_window_minutes: numInput(e.target.value) })}
                     className={cn(
                       "w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1",
                       (ifaceWindowTooShort || deviceWindowTooShort) && "border-red-400"
@@ -1251,7 +1255,7 @@ export default function AlertsPage() {
                   <input
                     type="number"
                     value={form.sustained_for_minutes}
-                    onChange={(e) => setForm({ ...form, sustained_for_minutes: Number(e.target.value) })}
+                    onChange={(e) => setForm({ ...form, sustained_for_minutes: numInput(e.target.value) })}
                     className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                   />
                 </div>
