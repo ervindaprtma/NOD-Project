@@ -160,6 +160,32 @@ export default function ResourcesPage() {
   const availDevices: DeviceAvailabilityItem[] = availability?.devices ?? [];
   const availSummary = availability?.summary;
 
+  // Flatten per-device reboot events + site collector gaps into one time-sorted history so
+  // the operator can see WHAT happened WHEN — not just a count. `note` on a reboot means the
+  // 32-bit uptime counter wrapped (~497d), which is NOT an outage.
+  const eventHistory: { time: number; device: string; vendor: string; kind: "Reboot" | "Counter wrap" | "Collector gap"; detail: string }[] = [
+    ...availDevices.flatMap((d) =>
+      (d.reboots ?? []).map((r) => ({
+        time: r.at_ms,
+        device: d.hostname || d.device_key,
+        vendor: d.vendor,
+        kind: (r.note ? "Counter wrap" : "Reboot") as "Reboot" | "Counter wrap",
+        detail: r.note
+          ? r.note
+          : r.downtime_seconds > 0
+            ? `${formatDuration(r.downtime_seconds)} unreachable`
+            : "uptime counter reset",
+      }))
+    ),
+    ...(availSummary?.collector_gaps ?? []).map((g) => ({
+      time: g.end_ms,
+      device: "— site-wide —",
+      vendor: "",
+      kind: "Collector gap" as const,
+      detail: `${formatDuration(g.duration_seconds)} no data reached the collector`,
+    })),
+  ].sort((a, b) => b.time - a.time);
+
   const deviceIDs = [...new Set([
     ...(resources?.timeline?.cpu || []).map((d) => d.device),
     ...(resources?.timeline?.memory || []).map((d) => d.device),
@@ -945,6 +971,53 @@ export default function ResourcesPage() {
                       </table>
                     </div>
                   )}
+
+                  {/* Reboot & event history — what happened, when (newest first) */}
+                  <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 overflow-x-auto">
+                    <div className="px-4 py-2.5 border-b border-border/60 dark:border-border/40 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold">Reboot &amp; Event History</h3>
+                      <span className="text-xs text-muted-foreground">{eventHistory.length} event{eventHistory.length === 1 ? "" : "s"} in this window</span>
+                    </div>
+                    {eventHistory.length === 0 ? (
+                      <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                        No reboots or collector gaps recorded in this window — every device stayed up.
+                      </p>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-border/60 dark:border-border/40 text-xs text-muted-foreground">
+                            <th className="text-left font-medium px-4 py-2.5">When (WIB)</th>
+                            <th className="text-left font-medium px-4 py-2.5">Device</th>
+                            <th className="text-left font-medium px-4 py-2.5">Vendor</th>
+                            <th className="text-left font-medium px-4 py-2.5">Event</th>
+                            <th className="text-left font-medium px-4 py-2.5">Detail</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {eventHistory.map((e, i) => {
+                            const kindCls =
+                              e.kind === "Reboot" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                : e.kind === "Collector gap" ? "bg-muted text-muted-foreground"
+                                  : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
+                            const kindIcon = e.kind === "Reboot" ? "⟳" : e.kind === "Collector gap" ? "▨" : "↻";
+                            return (
+                              <tr key={`${e.time}-${e.device}-${i}`} className="border-b border-border/40 dark:border-border/20 last:border-0 hover:bg-muted/30">
+                                <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">{formatWIB(e.time)}</td>
+                                <td className="px-4 py-2.5 font-medium">{e.device}</td>
+                                <td className="px-4 py-2.5 text-muted-foreground">{e.vendor || "—"}</td>
+                                <td className="px-4 py-2.5">
+                                  <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium", kindCls)}>
+                                    <span aria-hidden="true">{kindIcon}</span>{e.kind}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-2.5 text-muted-foreground">{e.detail}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
 
                   {/* Per-device history — small multiples, one card each */}
                   {availDevices.length > 0 && (

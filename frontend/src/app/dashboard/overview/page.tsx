@@ -121,9 +121,13 @@ export default function OverviewPage() {
   const availKeys = SITES.map(s =>
     token ? `/api/v1/device-uptime?site_name=${s}&window=${availWindow}` : null
   );
-  const { data: avail0 } = useSWR<AvailEnv>(availKeys[0], swrFetcherLong, { refreshInterval: 0 });
-  const { data: avail1 } = useSWR<AvailEnv>(availKeys[1], swrFetcherLong, { refreshInterval: 0 });
-  const { data: avail2 } = useSWR<AvailEnv>(availKeys[2], swrFetcherLong, { refreshInterval: 0 });
+  // These keys use a fixed SLA window (not the page range), so the tick that re-keys every
+  // other panel doesn't re-fetch them — poll on the page's refresh interval instead (SWR
+  // revalidates in place, no flicker), or hold when auto-refresh is off.
+  const availRefresh = refreshInterval > 0 ? refreshInterval : 0;
+  const { data: avail0 } = useSWR<AvailEnv>(availKeys[0], swrFetcherLong, { refreshInterval: availRefresh });
+  const { data: avail1 } = useSWR<AvailEnv>(availKeys[1], swrFetcherLong, { refreshInterval: availRefresh });
+  const { data: avail2 } = useSWR<AvailEnv>(availKeys[2], swrFetcherLong, { refreshInterval: availRefresh });
   const availDatas = [avail0, avail1, avail2];
 
   function selectPreset(preset: typeof TIME_PRESETS[0]) {
