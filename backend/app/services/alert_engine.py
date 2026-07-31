@@ -528,7 +528,11 @@ async def _advance_state_machine(
     state.last_read_degraded = False
 
     if condition_met:
-        if state.state == "INACTIVE":
+        if state.state in ("INACTIVE", "RESOLVED"):
+            # Re-arm on a fresh breach. RESOLVED must restart the sustain timer just like
+            # INACTIVE — otherwise it was terminal: a rule that fired, resolved, then breached
+            # AGAIN never re-fired (RESOLVED matched neither branch), so recurring problems
+            # only ever alerted once.
             state.state = "PENDING"
             state.pending_since = now
             await db.flush()

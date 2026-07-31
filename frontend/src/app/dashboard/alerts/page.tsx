@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import useSWR, { mutate } from "swr";
 import { swrFetcher, apiFetch, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -56,9 +56,46 @@ const IFACE_MIN_WINDOW = 2;
 // device_uptime: ≥5 min so a dropped 30s poll or two can't trip a false "down" (§11.2).
 const DEVICE_MIN_WINDOW = 5;
 
-// Strip a leading zero so a controlled number input doesn't stick as "05": when the
-// default is 0 and the user types "5", the field would show "05" until re-render.
-const numInput = (v: string): number => (v === "" ? 0 : Number(v.replace(/^0+(?=\d)/, "")));
+// Controlled numeric input that keeps its own string state so it can be cleared/edited
+// freely (empty, mid-typing, leading zeros) instead of a plain `value={number}` that snaps
+// back to a forced 0 and can't be emptied. Emits the parsed number; empty → 0. Adopts an
+// external value change (template apply, %-of-max compute, edit) via a last-emitted ref so
+// it doesn't fight the user while typing.
+function NumberField({
+  value, onValueChange, className, min,
+}: {
+  value: number;
+  onValueChange: (n: number) => void;
+  className?: string;
+  min?: number;
+}) {
+  const [raw, setRaw] = useState<string>(String(value));
+  const lastEmitted = useRef<number>(value);
+  useEffect(() => {
+    if (value !== lastEmitted.current) {
+      setRaw(String(value));
+      lastEmitted.current = value;
+    }
+  }, [value]);
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      min={min}
+      value={raw}
+      onChange={(e) => {
+        const v = e.target.value;
+        setRaw(v);
+        const n = v === "" ? 0 : Number(v);
+        if (!Number.isNaN(n)) {
+          lastEmitted.current = n;
+          onValueChange(n);
+        }
+      }}
+      className={className}
+    />
+  );
+}
 
 const AGGREGATIONS = ["avg", "max", "min", "sum", "count"];
 const CONDITIONS = [">", "<", ">=", "<=", "=="];
@@ -301,6 +338,8 @@ export default function AlertsPage() {
   }, [isIface, interfaces, form.site_name, form.target_key, showModal]);
 
   const ifaceWindowTooShort = isIface && form.evaluation_window_minutes < IFACE_MIN_WINDOW;
+  // The backend requires eval window ≥ 1 (a cleared/0 field would 422 on save).
+  const windowInvalid = !(form.evaluation_window_minutes >= 1);
 
   // Track AL: device_uptime needs a canonical site (device picker keys off it). Unlike
   // interfaces the device is OPTIONAL — blank = "any device at the site", and collector_gap
@@ -1141,10 +1180,9 @@ export default function AlertsPage() {
                   {!thrIsPct ? (
                     <div>
                       <label className="text-xs font-medium">Threshold (Mbps)</label>
-                      <input
-                        type="number"
+                      <NumberField
                         value={form.threshold_value}
-                        onChange={(e) => setForm({ ...form, threshold_value: numInput(e.target.value) })}
+                        onValueChange={(n) => setForm({ ...form, threshold_value: n })}
                         className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                       />
                     </div>
@@ -1152,19 +1190,17 @@ export default function AlertsPage() {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="text-xs font-medium">Link Max (Mbps)</label>
-                        <input
-                          type="number"
+                        <NumberField
                           value={form.link_max_mbps ?? 0}
-                          onChange={(e) => { const max = numInput(e.target.value); setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * thrPct / 100) }); }}
+                          onValueChange={(max) => setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * thrPct / 100) })}
                           className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                         />
                       </div>
                       <div>
                         <label className="text-xs font-medium">Alert above (%)</label>
-                        <input
-                          type="number"
+                        <NumberField
                           value={thrPct}
-                          onChange={(e) => { const pct = numInput(e.target.value); const max = form.link_max_mbps || 1000; setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * pct / 100) }); }}
+                          onValueChange={(pct) => { const max = form.link_max_mbps || 1000; setForm({ ...form, link_max_mbps: max, threshold_value: Math.round(max * pct / 100) }); }}
                           className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                         />
                         <p className="text-[10px] text-muted-foreground mt-1">= {form.threshold_value} Mbps peak</p>
@@ -1196,10 +1232,9 @@ export default function AlertsPage() {
                   </div>
                   <div>
                     <label className="text-xs font-medium">Threshold{selectedField?.unit ? ` (${selectedField.unit})` : ""}</label>
-                    <input
-                      type="number"
+                    <NumberField
                       value={form.threshold_value}
-                      onChange={(e) => setForm({ ...form, threshold_value: numInput(e.target.value) })}
+                      onValueChange={(n) => setForm({ ...form, threshold_value: n })}
                       className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                     />
                   </div>
@@ -1266,7 +1301,7 @@ export default function AlertsPage() {
                           <select value={c.condition} onChange={(e) => patchClause(i, { condition: e.target.value })} className="px-2 py-1 text-xs rounded-md border bg-background">
                             {conds.map((cc) => <option key={cc} value={cc}>{cc}</option>)}
                           </select>
-                          <input type="number" value={c.threshold_value} onChange={(e) => patchClause(i, { threshold_value: numInput(e.target.value) })} className="px-2 py-1 text-xs rounded-md border bg-background" />
+                          <NumberField value={c.threshold_value} onValueChange={(n) => patchClause(i, { threshold_value: n })} className="px-2 py-1 text-xs rounded-md border bg-background" />
                         </div>
                       </div>
                     );
@@ -1278,16 +1313,20 @@ export default function AlertsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium">Eval Window (min)</label>
-                  <input
-                    type="number"
+                  <NumberField
                     min={isIface ? IFACE_MIN_WINDOW : isDevice ? DEVICE_MIN_WINDOW : 1}
                     value={form.evaluation_window_minutes}
-                    onChange={(e) => setForm({ ...form, evaluation_window_minutes: numInput(e.target.value) })}
+                    onValueChange={(n) => setForm({ ...form, evaluation_window_minutes: n })}
                     className={cn(
                       "w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1",
-                      (ifaceWindowTooShort || deviceWindowTooShort) && "border-red-400"
+                      (windowInvalid || ifaceWindowTooShort || deviceWindowTooShort) && "border-red-400"
                     )}
                   />
+                  {windowInvalid && !ifaceWindowTooShort && !deviceWindowTooShort && (
+                    <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
+                      Eval window must be at least 1 minute.
+                    </p>
+                  )}
                   {ifaceWindowTooShort && (
                     <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
                       Interface bandwidth needs ≥ {IFACE_MIN_WINDOW} min (rate derivative).
@@ -1301,10 +1340,10 @@ export default function AlertsPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium">Sustained For (min)</label>
-                  <input
-                    type="number"
+                  <NumberField
+                    min={0}
                     value={form.sustained_for_minutes}
-                    onChange={(e) => setForm({ ...form, sustained_for_minutes: numInput(e.target.value) })}
+                    onValueChange={(n) => setForm({ ...form, sustained_for_minutes: n })}
                     className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                   />
                 </div>
@@ -1372,7 +1411,7 @@ export default function AlertsPage() {
                 </button>
                 <button
                   onClick={saveRule}
-                  disabled={saving || !form.name || ifaceWindowTooShort || deviceWindowTooShort || (isIface && !form.target_key) || compositeInvalid}
+                  disabled={saving || !form.name || windowInvalid || ifaceWindowTooShort || deviceWindowTooShort || (isIface && !form.target_key) || compositeInvalid}
                   className="px-4 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : editingRule ? "Update" : "Create"}

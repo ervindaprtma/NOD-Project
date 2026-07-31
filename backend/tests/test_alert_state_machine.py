@@ -108,3 +108,14 @@ def test_degradation_hold_only_on_hard_failure():
     assert _degradation_forces_hold(["partial_results"], None) is True
     # not degraded → never hold
     assert _degradation_forces_hold([], {}) is False
+
+
+def test_resolved_rearms_on_new_breach():
+    """RESOLVED must re-arm to PENDING on a fresh breach (not be terminal). Otherwise a
+    rule that fired → resolved → breached again would never fire a second time."""
+    import inspect
+    from app.services import alert_engine
+
+    src = inspect.getsource(alert_engine._advance_state_machine)
+    assert 'state.state in ("INACTIVE", "RESOLVED")' in src, \
+        "a fresh breach from RESOLVED must restart the sustain timer, like INACTIVE"
