@@ -162,7 +162,9 @@ export default function ResourcesPage() {
 
   // Flatten per-device reboot events + site collector gaps into one time-sorted history so
   // the operator can see WHAT happened WHEN — not just a count. `note` on a reboot means the
-  // 32-bit uptime counter wrapped (~497d), which is NOT an outage.
+  // 32-bit uptime counter wrapped (~497d), which is NOT an outage. Detail is a fixed
+  // description of the condition — we don't show a "how long unreachable" duration because the
+  // poll-gap estimate around a reset isn't a reliable measure of real downtime.
   const eventHistory: { time: number; device: string; vendor: string; kind: "Reboot" | "Counter wrap" | "Collector gap"; detail: string }[] = [
     ...availDevices.flatMap((d) =>
       (d.reboots ?? []).map((r) => ({
@@ -171,10 +173,8 @@ export default function ResourcesPage() {
         vendor: d.vendor,
         kind: (r.note ? "Counter wrap" : "Reboot") as "Reboot" | "Counter wrap",
         detail: r.note
-          ? r.note
-          : r.downtime_seconds > 0
-            ? `${formatDuration(r.downtime_seconds)} unreachable`
-            : "uptime counter reset",
+          ? "Uptime counter wrapped — not an outage."
+          : "Device reboot and collectors cannot read the data from devices.",
       }))
     ),
     ...(availSummary?.collector_gaps ?? []).map((g) => ({
@@ -182,7 +182,7 @@ export default function ResourcesPage() {
       device: "— site-wide —",
       vendor: "",
       kind: "Collector gap" as const,
-      detail: `${formatDuration(g.duration_seconds)} no data reached the collector`,
+      detail: "Collectors timeout and data not collected.",
     })),
   ].sort((a, b) => b.time - a.time);
 
