@@ -32,37 +32,42 @@ def _ipsec_filters(gte_ms: int, lte_ms: int) -> list[dict]:
     ]
 
 
+async def _ipsec_usernames(client: AsyncOpenSearch, gte_ms: int, lte_ms: int) -> set[str]:
+    """Distinct IPsec usernames active in the window on one cluster's ipsec-* index."""
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms)}},
+        "aggs": {"users": {"terms": {"field": "tag.username.keyword", "size": 1000}}},
+    }
+    resp = await safe_search(client, "ipsec-*", body)
+    return {b["key"] for b in resp.get("aggregations", {}).get("users", {}).get("buckets", [])}
+
+
 async def active_ipsec_users_count(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,
     lte_ms: int = 0,
 ) -> int:
+    """Count distinct active IPsec users — same idea as SSL VPN: a username seen in the
+    window = a currently-active user.
+
+    Source is the `ipsec-*` index (ipsec_normalized), the SAME session data the VPN
+    Sessions page reads and tags usernames from. It's session-based (a user emits docs
+    while connected), so an empty recent window genuinely means nobody is connected — NOT
+    a broken read. Unions usernames across BOTH clusters (DC + DRC) so a tunnel terminating
+    on either endpoint is counted once. (An earlier version wrongly read telegraf-index*'s
+    `ipsec_user` polling measurement, which over-counts.)
     """
-    Q-05: cardinality aggregation on tag.username.keyword.
+    if client is not None:
+        return len(await _ipsec_usernames(client, gte_ms, lte_ms))
 
-    Live source is the `ipsec_user` measurement in telegraf-index* on the DC cluster.
-    The legacy dedicated `ipsec-*` index (DRC cluster) stopped receiving data — the
-    collector was moved into the unified telegraf index — so the old query read 0
-    users forever, which silently false-fired the "< 2 tunnels" CRITICAL alert.
-    """
-    if client is None:
-        client = get_dc_client()
-
-    body = {
-        "size": 0,
-        "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms) + [
-            {"term": {"measurement_name.keyword": "ipsec_user"}},
-        ]}},
-        "aggs": {
-            "active_users": {
-                "cardinality": {"field": "tag.username.keyword"}
-            }
-        },
-    }
-
-    resp = await safe_search(client, "telegraf-index*", body)
-    value = resp.get("aggregations", {}).get("active_users", {}).get("value", 0) or 0
-    return int(value)
+    names: set[str] = set()
+    for get_client in (get_ipsec_client, get_dc_client):
+        try:
+            names |= await _ipsec_usernames(get_client(), gte_ms, lte_ms)
+        except Exception:  # a cluster without an ipsec-* index just contributes nothing
+            pass
+    return len(names)
 
 
 async def active_ipsec_users_count_timeline(

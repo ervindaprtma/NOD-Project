@@ -88,3 +88,34 @@ def test_batch_notify_distinguishes_fire_from_resolve():
     assert '"event": event' in src, "templates need `event` to branch fire vs resolve"
     assert "[RESOLVED]" in src, "recovery needs its own hardcoded line"
     assert "Recovery Summary" in src, "an all-resolved batch should read as a recovery"
+
+
+def test_degradation_hold_only_on_hard_failure():
+    """The engine must HOLD on timeout/circuit-breaker (fabricated 0) but PROCEED on a
+    partial-shard failure that still returned data — otherwise a cluster with one
+    perpetually-failing cold-index shard makes alerts never fire (regression that made the
+    engine 'unable to see data the pages show')."""
+    from app.services.alert_engine import _degradation_forces_hold
+
+    data = {"3": {"throughput_mbps": {"max": 37.7}}}
+    # partial shard but real data → proceed
+    assert _degradation_forces_hold(["partial_results: 1/12 shards failed"], data) is False
+    # hard failures → hold
+    assert _degradation_forces_hold(["timeout after 5s"], data) is True
+    assert _degradation_forces_hold(["circuit_breaker: cluster out of memory"], data) is True
+    # degraded AND no usable data → hold
+    assert _degradation_forces_hold(["partial_results: 12/12 shards failed"], {}) is True
+    assert _degradation_forces_hold(["partial_results"], None) is True
+    # not degraded → never hold
+    assert _degradation_forces_hold([], {}) is False
+
+
+def test_resolved_rearms_on_new_breach():
+    """RESOLVED must re-arm to PENDING on a fresh breach (not be terminal). Otherwise a
+    rule that fired → resolved → breached again would never fire a second time."""
+    import inspect
+    from app.services import alert_engine
+
+    src = inspect.getsource(alert_engine._advance_state_machine)
+    assert 'state.state in ("INACTIVE", "RESOLVED")' in src, \
+        "a fresh breach from RESOLVED must restart the sustain timer, like INACTIVE"

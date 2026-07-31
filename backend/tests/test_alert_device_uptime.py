@@ -172,17 +172,31 @@ def test_seeded_notification_templates_render_for_both_events():
                     _render_template(txt, ctx(event))  # raises → test fails
 
 
-def test_sdwan_link_status_parses_and_is_in_catalog():
-    """SD-WAN link Up/Down: metric_field status_linkN parses to base 'status' (which
-    sla_summary now returns), and the catalog exposes it so the UI can offer Down/Up."""
-    from app.services.alert_engine import _parse_sdwan_metric_field
+def test_sdwan_catalog_is_base_metrics_and_target_key_picks_link():
+    """SD-WAN metrics are now BASE fields (the link is chosen via target_key). The catalog
+    lists status/loss/latency/jitter (not per-link), and the extractor uses target_key as the
+    1-based link index — with legacy '<base>_linkN' still honored and out-of-range → 0."""
+    from types import SimpleNamespace
+    from app.services.alert_engine import _extract_per_rule_value, _parse_sdwan_metric_field
     from app.services.template_seeder import SEED_FIELD_CATALOG
 
-    assert _parse_sdwan_metric_field("status_link1") == ("status", 0)
-    assert _parse_sdwan_metric_field("status_link2") == ("status", 1)
     cat = {(c["data_source"], c["field_key"]) for c in SEED_FIELD_CATALOG}
-    assert ("sdwan_sla", "status_link1") in cat
-    assert ("sdwan_sla", "status_link2") in cat
+    for base in ("status", "avg_packet_loss", "avg_latency", "avg_jitter"):
+        assert ("sdwan_sla", base) in cat
+    # per-link legacy keys are gone from the catalog
+    assert ("sdwan_sla", "status_link1") not in cat
+
+    gr = {"status": [0.0, 0.0, 0.0, 1.0], "avg_packet_loss": [0.0, 0.0, 0.2, 13.0]}
+    def rule(mf, tk):
+        return SimpleNamespace(id=0, data_source="sdwan_sla", metric_field=mf, target_key=tk, aggregation="max")
+    # base + target_key picks the link (1-based): link4 status = 1.0 (Down)
+    assert _extract_per_rule_value(rule("status", "4"), gr) == 1.0
+    assert _extract_per_rule_value(rule("avg_packet_loss", "4"), gr) == 13.0
+    # legacy embedded-link field still works
+    assert _extract_per_rule_value(rule("status_link4", None), gr) == 1.0
+    assert _parse_sdwan_metric_field("status_link4") == ("status", 3)
+    # out-of-range link → 0.0, not a silent wrong-link fallback
+    assert _extract_per_rule_value(rule("status", "9"), gr) == 0.0
 
 
 def test_interface_throughput_mbps_metric_exists():
@@ -206,19 +220,22 @@ def test_sslvpn_measurement_mapping():
     assert sslvpn_measurement_for_site(None) == "Site_FGT-DC_SSLVPN"
 
 
-def test_ipsec_count_targets_live_telegraf_source():
-    """IPsec active-user count must read the live `ipsec_user` measurement in telegraf-index*,
-    not the retired dedicated `ipsec-*` index (which went stale and made the '< 2 tunnels'
-    CRITICAL rule false-fire on a fabricated 0). Captures the actual index + query it issues."""
+def test_ipsec_count_reads_ipsec_index_and_unions_endpoints():
+    """IPsec active-user count = distinct usernames from the ipsec-* index (ipsec_normalized) —
+    the same session source the VPN Sessions page reads — unioned across BOTH clusters so a
+    user is counted once. (Must NOT read telegraf-index*'s ipsec_user polling measurement,
+    which over-counts.) Captures the index + verifies the cross-cluster username union."""
     import asyncio
     from app.opensearch import ipsec as ip
 
-    captured = {}
+    indices: list[str] = []
+    # simulate two clusters: DRC has {harara, budi}, DC has {budi} → union = 2 distinct
+    per_call = iter([["harara", "budi"], ["budi"]])
 
     async def fake_search(client, index, body):
-        captured["index"] = index
-        captured["body"] = body
-        return {"aggregations": {"active_users": {"value": 3}}}
+        indices.append(index)
+        users = next(per_call, [])
+        return {"aggregations": {"users": {"buckets": [{"key": u} for u in users]}}}
 
     orig = ip.safe_search
     ip.safe_search = fake_search
@@ -227,10 +244,9 @@ def test_ipsec_count_targets_live_telegraf_source():
     finally:
         ip.safe_search = orig
 
-    assert n == 3
-    assert captured["index"] == "telegraf-index*"
-    terms = [f for f in captured["body"]["query"]["bool"]["filter"] if "term" in f]
-    assert {"term": {"measurement_name.keyword": "ipsec_user"}} in terms
+    assert n == 2, "distinct usernames unioned across both endpoints (budi not double-counted)"
+    assert indices and all(ix == "ipsec-*" for ix in indices), "must read ipsec-*, not telegraf"
+    assert len(indices) == 2, "queries both clusters (DC + DRC)"
 
 
 def test_ha_num_active_counts_reporting_members():

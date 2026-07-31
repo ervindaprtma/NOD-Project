@@ -116,6 +116,25 @@ def _render_template(text: str, ctx: dict) -> str:
 # per-cycle dict and extracted per-rule below.
 
 
+def _degradation_forces_hold(degraded: list[str], result: Any) -> bool:
+    """Decide whether a degraded OpenSearch read is too untrustworthy for the engine to
+    evaluate (→ hold state), vs. usable enough to proceed.
+
+    HOLD only on a HARD failure — timeout / circuit breaker returns an empty skeleton, so
+    the number would be fabricated — or when the read produced no usable data at all.
+
+    PROCEED on a partial-shard failure that still returned data: on a multi-index pattern
+    (telegraf-index* / fortigate-appid-flow-*) that almost always means an OLD/cold-index
+    shard failed while the RECENT index the alert actually needs succeeded. Holding on that
+    made alerts NEVER fire on any cluster carrying one perpetually-failing cold shard — the
+    pages tolerate it and show the value, so the engine must too, or it silently goes deaf.
+    """
+    if not degraded:
+        return False
+    hard = any(("timeout" in d) or ("circuit_breaker" in d) for d in degraded)
+    return hard or not result
+
+
 async def _run_group_query(
     data_source: str,
     site_name: str | None,
@@ -206,12 +225,16 @@ async def _run_group_query(
             return None
 
         if degraded:
+            if _degradation_forces_hold(degraded, result):
+                logger.warning(
+                    "Holding rule group %s (site=%s, window=%dmin): unusable read — %s",
+                    data_source, site_name, window_minutes, degraded[:2],
+                )
+                return None
             logger.warning(
-                "Skipping rule group %s (site=%s, window=%dmin): data degraded, "
-                "holding state instead of evaluating — %s",
-                data_source, site_name, window_minutes, degraded[:2],
+                "Rule group %s (site=%s): proceeding despite partial data (recent index OK) — %s",
+                data_source, site_name, degraded[:2],
             )
-            return None
 
     return result
 
@@ -342,9 +365,18 @@ def _extract_per_rule_value(
         if rule.data_source == "sdwan_sla":
             if isinstance(group_result, dict):
                 base_key, link_idx = _parse_sdwan_metric_field(rule.metric_field)
+                # New model: bare base metric (status / avg_latency / avg_packet_loss /
+                # avg_jitter) + target_key = link number (1-based, from the link picker).
+                # Legacy rules embed the link in metric_field ("status_link3") — still honored.
+                if "_link" not in rule.metric_field and rule.target_key:
+                    try:
+                        link_idx = int(rule.target_key) - 1
+                    except (TypeError, ValueError):
+                        link_idx = 0
                 vals = group_result.get(base_key, [0.0])
                 if isinstance(vals, list):
-                    return float(vals[link_idx] if link_idx < len(vals) else vals[0])
+                    # Out-of-range link → 0.0, NOT vals[0] (which silently evaluated the wrong link).
+                    return float(vals[link_idx] if 0 <= link_idx < len(vals) else 0.0)
                 return float(vals or 0.0)
             return 0.0
 
@@ -496,7 +528,11 @@ async def _advance_state_machine(
     state.last_read_degraded = False
 
     if condition_met:
-        if state.state == "INACTIVE":
+        if state.state in ("INACTIVE", "RESOLVED"):
+            # Re-arm on a fresh breach. RESOLVED must restart the sustain timer just like
+            # INACTIVE — otherwise it was terminal: a rule that fired, resolved, then breached
+            # AGAIN never re-fired (RESOLVED matched neither branch), so recurring problems
+            # only ever alerted once.
             state.state = "PENDING"
             state.pending_since = now
             await db.flush()
@@ -709,9 +745,14 @@ def _extract_per_rule_value_flat(
         if data_source == "sdwan_sla":
             if isinstance(group_result, dict):
                 base_key, link_idx = _parse_sdwan_metric_field(metric_field)
+                if "_link" not in metric_field and target_key:
+                    try:
+                        link_idx = int(target_key) - 1
+                    except (TypeError, ValueError):
+                        link_idx = 0
                 vals = group_result.get(base_key, [0.0])
                 if isinstance(vals, list):
-                    return float(vals[link_idx] if link_idx < len(vals) else vals[0])
+                    return float(vals[link_idx] if 0 <= link_idx < len(vals) else 0.0)
                 return float(vals or 0.0)
             return 0.0
         if data_source == "interface_stats":
@@ -862,10 +903,12 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         # batch turns out HTML (from another rule's template). Plain mode is unaffected.
         nm = html.escape(rule.name)
         st = html.escape(rule.site_name or "—")
+        # Include the current value AND the configured threshold so even the template-less
+        # fallback answers "what value hit, and what was the limit".
         if resolved:
-            lines.append(f"✅ [RESOLVED] {nm} @ {st}: recovered (now {mv})")
+            lines.append(f"✅ [RESOLVED] {nm} @ {st}: recovered (now {mv}, limit {rule.condition} {rule.threshold_value})")
         else:
-            lines.append(f"{sev} [{rule.severity}] {nm} @ {st}: {mv}")
+            lines.append(f"{sev} [{rule.severity}] {nm} @ {st}: {mv} (limit {rule.condition} {rule.threshold_value})")
 
     # If any rule rendered an HTML template, send the rich blocks as one HTML message
     # (grouped, matching the Grafana style) and drop the plain summary header. Otherwise
@@ -880,28 +923,25 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         parse_mode = None
 
     # Load channels and send — only the ones the firing rules actually want
-    # (§9.3: was sending to every enabled channel; now respects rule.notify_channels)
+    # (§9.3: was sending to every enabled channel; now respects rule.notify_channels).
     try:
-        from app.db.session import AsyncSessionLocal
-        from app.db.models import NotificationConfig as NotifCfg
-        from app.services.notifier_helper import send_alert
+        from app.services.notifier_helper import send_alert, load_channel_configs
 
         fired_channels = {ch for rule, _, _, _ in notify_queue for ch in rule.notify_channels}
 
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(NotifCfg).where(
-                    (NotifCfg.enabled == True)  # noqa: E712
-                    & (NotifCfg.channel.in_(fired_channels))
-                )
-            )
-            channels = result.scalars().all()
-            for ch in channels:
-                try:
-                    await send_alert(ch.channel, ch.config, subject=title, body=body,
-                                     parse_mode=parse_mode)
-                except Exception as e:
-                    logger.error("Batch notify failed for %s: %s", ch.channel, e)
+        # load_channel_configs DECRYPTS the secrets (bot token etc.) and returns only enabled
+        # channels. The batch path used to pass the raw NotificationConfig.config straight from
+        # the DB — still ENCRYPTED — so Telegram received a garbage token, rejected every send,
+        # and the error was swallowed: alerts fired but no message ever arrived.
+        db_configs = await load_channel_configs()
+        for channel in fired_channels:
+            cfg = db_configs.get(channel)
+            if not cfg:
+                continue  # channel not enabled/configured in Settings → nothing to send to
+            try:
+                await send_alert(channel, cfg, subject=title, body=body, parse_mode=parse_mode)
+            except Exception as e:
+                logger.error("Batch notify failed for %s: %s", channel, e)
     except Exception as e:
         logger.error("Batch notify flush error: %s", e)
 

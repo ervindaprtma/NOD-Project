@@ -150,7 +150,18 @@ def build_query(site_tag: str, gte_ms: int, lte_ms: int, interval: str) -> dict:
                             # chart and collector-gap detection. Force the full range.
                             "extended_bounds": {"min": gte_ms, "max": lte_ms},
                         },
-                        "aggs": {"max_uptime": {"max": {"field": "device_uptime.sys_uptime"}}},
+                        "aggs": {
+                            "max_uptime": {"max": {"field": "device_uptime.sys_uptime"}},
+                            # Temporal LAST uptime in the bucket (end-of-bucket state), used for
+                            # reboot detection: max-per-bucket hides a reboot in the FINAL bucket
+                            # (its max is the pre-reboot high, and there's no next bucket to show
+                            # the drop), so a recent reboot vanished from coarse 7d/30d views.
+                            "last_uptime": {"top_hits": {
+                                "size": 1,
+                                "sort": [{"@timestamp": {"order": "desc"}}],
+                                "_source": ["device_uptime.sys_uptime"],
+                            }},
+                        },
                     },
                 },
             }
@@ -218,9 +229,23 @@ def format_uptime_short(seconds: float) -> str:
     return f"{minutes}m"
 
 
+def _top_metric(agg: Optional[dict]) -> Optional[float]:
+    """Pull the end-of-bucket sys_uptime out of a top_hits agg result; None if the bucket
+    is empty. (top_metrics isn't available on this OpenSearch version, so we use top_hits.)"""
+    hits = ((agg or {}).get("hits") or {}).get("hits") or []
+    if not hits:
+        return None
+    return (hits[0].get("_source", {}).get("device_uptime") or {}).get("sys_uptime")
+
+
 def scan_reboots(points: list[dict]) -> tuple[list[dict], int]:
     """
     A reboot is a DECREASE in the uptime counter (§2c).
+
+    Uses each bucket's TEMPORAL-LAST uptime (`last_ticks`, end-of-bucket state) rather than
+    its max: a reboot then shows as last_K < last_{K-1} in the bucket where it happened —
+    including the final bucket — so a recent reboot is no longer hidden by coarse (7d/30d)
+    bucketing. Falls back to `ticks` (max) when last_ticks is absent (unit tests).
 
     Downtime is the polling gap around the reset — conservative, per the
     reference doc: a reboot faster than one scrape still registers as ~1
@@ -239,7 +264,9 @@ def scan_reboots(points: list[dict]) -> tuple[list[dict], int]:
     prev_ticks: Optional[float] = None
 
     for point in points:
-        ticks = point.get("ticks")
+        ticks = point.get("last_ticks")
+        if ticks is None:
+            ticks = point.get("ticks")
         if ticks is None:
             continue
         if prev_ticks is not None and ticks < prev_ticks:
@@ -438,7 +465,9 @@ def shape_result(
         series = [
             {"ts_ms": int(point["key"]),
              "polls": int(point.get("doc_count", 0)),
-             "ticks": point.get("max_uptime", {}).get("value")}
+             "ticks": point.get("max_uptime", {}).get("value"),
+             # end-of-bucket uptime (for reboot detection); None on an empty bucket
+             "last_ticks": _top_metric(point.get("last_uptime"))}
             for point in bucket.get("series", {}).get("buckets", [])
         ]
         polls_by_device[key] = {point["ts_ms"]: point["polls"] for point in series}

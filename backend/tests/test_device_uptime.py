@@ -430,3 +430,23 @@ def test_short_silence_under_the_threshold_is_not_a_false_issue():
     assert d["status"] == "up"                              # not "not_reporting"
     assert d["availability_pct"] == 100.0                   # a dropped poll is not downtime
     assert d["total_downtime_seconds"] == 0
+
+
+def test_reboot_in_final_bucket_uses_last_ticks_not_max():
+    """Regression: a reboot in the FINAL bucket was hidden by max-per-bucket (the bucket's
+    max is the pre-reboot high and there's no next bucket to show the drop), so a recent
+    reboot vanished from coarse 7d/30d views. scan_reboots must use `last_ticks` (end-of-
+    bucket value): the reboot then shows as last dropping in its own bucket."""
+    # bucket 0/1: healthy & rising; bucket 2 (final): rebooted mid-bucket → max still the
+    # pre-reboot high, but last_ticks is the post-reboot low.
+    points = [
+        {"ts_ms": 0,          "ticks": _ticks(10_000), "last_ticks": _ticks(10_000)},
+        {"ts_ms": 6 * MINUTE, "ticks": _ticks(10_360), "last_ticks": _ticks(10_360)},
+        {"ts_ms": 12 * MINUTE, "ticks": _ticks(10_500), "last_ticks": _ticks(120)},  # max hides it
+    ]
+    events, _ = scan_reboots(points)
+    assert len(events) == 1 and events[0]["note"] is None, "final-bucket reboot must be caught"
+
+    # And the old max-only signal would have missed it (max is monotonic 10000→10360→10500).
+    max_only = [{"ts_ms": p["ts_ms"], "ticks": p["ticks"]} for p in points]
+    assert len(scan_reboots(max_only)[0]) == 0

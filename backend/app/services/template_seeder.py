@@ -18,13 +18,15 @@ SEED_TEMPLATES: list[dict] = [
         "name": "SD-WAN SLA Breach",
         "category": "performance",
         "icon": "📶",
-        "description": "Alert when SD-WAN link SLA is breached (packet loss exceeds threshold). "
-                       "Switch the metric to 'Link Status' for a Down/Up alert on the link state.",
-        "body_template": "SD-WAN SLA Breach: {{ name }}\nLink: {{ metric_field }}\nValue: {{ metric_value }}\nThreshold: {{ condition }} {{ threshold }}",
+        "description": "Alert when an SD-WAN link SLA is breached. Pick the link (WAN uplink or "
+                       "IPsec/ADVPN tunnel) and the metric — packet loss, latency, jitter, or Link "
+                       "Status for a Down/Up alert.",
+        "body_template": "SD-WAN SLA Breach: {{ name }}\nMetric: {{ metric_field }}\nValue: {{ metric_value }}\nThreshold: {{ condition }} {{ threshold }}",
         "underlying_kind": "single",
         "locked_fields": {
             "data_source": "sdwan_sla",
-            "metric_field": "avg_packet_loss_link1",
+            "metric_field": "avg_packet_loss",
+            "target_key": "1",
             "aggregation": "avg",
             "condition": ">",
             "threshold_value": 1.0,
@@ -395,58 +397,17 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_conditions": [">", ">="],
         "example_threshold": 500000,
     },
-    # sdwan_sla
+    # sdwan_sla — BASE metrics (the link is chosen separately via the SD-WAN link picker →
+    # target_key = link number). One entry per metric instead of per-link, so it covers every
+    # link a site has (DC/DRC: 4, Office: 6) incl. the IPsec / ADVPN tunnels. The engine reads
+    # metric_field + target_key (see _extract_per_rule_value sdwan_sla; legacy "<base>_linkN"
+    # rules still work).
     {
         "data_source": "sdwan_sla",
-        "field_key": "avg_packet_loss_link1",
-        "display_name": "SD-WAN Link 1 Packet Loss",
-        "description": "Average packet loss on SD-WAN link 1",
-        "unit": "%",
-        "category": "state",
-        "valid_aggregations": ["avg", "max"],
-        "valid_conditions": [">", ">=", "=="],
-        "example_threshold": 1.0,
-    },
-    {
-        "data_source": "sdwan_sla",
-        "field_key": "avg_packet_loss_link2",
-        "display_name": "SD-WAN Link 2 Packet Loss",
-        "description": "Average packet loss on SD-WAN link 2",
-        "unit": "%",
-        "category": "state",
-        "valid_aggregations": ["avg", "max"],
-        "valid_conditions": [">", ">=", "=="],
-        "example_threshold": 1.0,
-    },
-    {
-        "data_source": "sdwan_sla",
-        "field_key": "avg_latency_link1",
-        "display_name": "SD-WAN Link 1 Latency",
-        "description": "Average latency on SD-WAN link 1",
-        "unit": "ms",
-        "category": "state",
-        "valid_aggregations": ["avg", "max"],
-        "valid_conditions": [">", ">=", "=="],
-        "example_threshold": 100.0,
-    },
-    {
-        "data_source": "sdwan_sla",
-        "field_key": "avg_latency_link2",
-        "display_name": "SD-WAN Link 2 Latency",
-        "description": "Average latency on SD-WAN link 2",
-        "unit": "ms",
-        "category": "state",
-        "valid_aggregations": ["avg", "max"],
-        "valid_conditions": [">", ">=", "=="],
-        "example_threshold": 100.0,
-    },
-    # SD-WAN link state (0=Up, non-zero=Down). metric_field "status_linkN" → base "status".
-    # The UI offers a Down/Up selector that sets condition+threshold (Down: >= 1, Up: == 0).
-    {
-        "data_source": "sdwan_sla",
-        "field_key": "status_link1",
-        "display_name": "SD-WAN Link 1 Status",
-        "description": "Link 1 state: 0=Up, non-zero=Down. Alert when Down (>= 1) or Up (== 0).",
+        "field_key": "status",
+        "display_name": "SD-WAN Link Status (Up/Down)",
+        "description": "Link state on the selected link: 0=Up, non-zero=Down. Pick the link, then "
+                       "the Down/Up selector sets the condition (Down: >= 1, Up: == 0).",
         "unit": "state",
         "category": "state",
         "valid_aggregations": ["max"],
@@ -455,14 +416,36 @@ SEED_FIELD_CATALOG: list[dict] = [
     },
     {
         "data_source": "sdwan_sla",
-        "field_key": "status_link2",
-        "display_name": "SD-WAN Link 2 Status",
-        "description": "Link 2 state: 0=Up, non-zero=Down. Alert when Down (>= 1) or Up (== 0).",
-        "unit": "state",
+        "field_key": "avg_packet_loss",
+        "display_name": "SD-WAN Packet Loss",
+        "description": "Average packet loss on the selected SD-WAN link.",
+        "unit": "%",
         "category": "state",
-        "valid_aggregations": ["max"],
-        "valid_conditions": ["==", ">=", "<"],
-        "example_threshold": 1,
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 1.0,
+    },
+    {
+        "data_source": "sdwan_sla",
+        "field_key": "avg_latency",
+        "display_name": "SD-WAN Latency",
+        "description": "Average latency on the selected SD-WAN link.",
+        "unit": "ms",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 100.0,
+    },
+    {
+        "data_source": "sdwan_sla",
+        "field_key": "avg_jitter",
+        "display_name": "SD-WAN Jitter",
+        "description": "Average jitter on the selected SD-WAN link.",
+        "unit": "ms",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">=", "=="],
+        "example_threshold": 5.0,
     },
     # vpn_ssl
     {
