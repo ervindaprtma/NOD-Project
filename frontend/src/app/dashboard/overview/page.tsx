@@ -118,17 +118,18 @@ export default function OverviewPage() {
   // ── Per-site Availability (own SLA window, not the page range) ──
   const [availWindow, setAvailWindow] = useState<(typeof AVAIL_WINDOWS)[number]>("24h");
   type AvailEnv = { data: DeviceAvailabilityData; meta?: { degraded?: boolean } };
-  // Follow the SAME refresh mechanism as every other panel: put the tick's currentLteMs in
-  // the key so it re-fetches on every tick (which the setInterval fires even when the refresh
-  // dropdown is "off"). `_ts` is a cache-buster the endpoint ignores — the SLA window stays
-  // `window=24h` (using gte_ms/lte_ms would wrongly override the window). keepPreviousData
-  // holds the old cards on screen while the heavier query revalidates, so no skeleton flash.
+  // Availability keeps its own SLA window (24h/7d/30d), so its key doesn't carry the page
+  // range — instead it auto-refreshes on the SAME cadence as the toggle via SWR's own
+  // refreshInterval: 15s/30s/60s, and 60s when the toggle is "Off" (matching the page tick's
+  // 60s fallback that keeps every other row refreshing). SWR revalidates the key in place, so
+  // the cards update without a skeleton flash, and it works on custom ranges too.
+  const availRefresh = refreshInterval > 0 ? refreshInterval : DEFAULT_REFRESH_MS;
   const availKeys = SITES.map(s =>
-    token ? `/api/v1/device-uptime?site_name=${s}&window=${availWindow}&_ts=${currentLteMs}` : null
+    token ? `/api/v1/device-uptime?site_name=${s}&window=${availWindow}` : null
   );
-  const { data: avail0 } = useSWR<AvailEnv>(availKeys[0], swrFetcherLong, { keepPreviousData: true });
-  const { data: avail1 } = useSWR<AvailEnv>(availKeys[1], swrFetcherLong, { keepPreviousData: true });
-  const { data: avail2 } = useSWR<AvailEnv>(availKeys[2], swrFetcherLong, { keepPreviousData: true });
+  const { data: avail0 } = useSWR<AvailEnv>(availKeys[0], swrFetcherLong, { refreshInterval: availRefresh, keepPreviousData: true });
+  const { data: avail1 } = useSWR<AvailEnv>(availKeys[1], swrFetcherLong, { refreshInterval: availRefresh, keepPreviousData: true });
+  const { data: avail2 } = useSWR<AvailEnv>(availKeys[2], swrFetcherLong, { refreshInterval: availRefresh, keepPreviousData: true });
   const availDatas = [avail0, avail1, avail2];
 
   function selectPreset(preset: typeof TIME_PRESETS[0]) {
