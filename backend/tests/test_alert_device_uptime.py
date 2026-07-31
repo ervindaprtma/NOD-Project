@@ -206,19 +206,22 @@ def test_sslvpn_measurement_mapping():
     assert sslvpn_measurement_for_site(None) == "Site_FGT-DC_SSLVPN"
 
 
-def test_ipsec_count_targets_live_telegraf_source():
-    """IPsec active-user count must read the live `ipsec_user` measurement in telegraf-index*,
-    not the retired dedicated `ipsec-*` index (which went stale and made the '< 2 tunnels'
-    CRITICAL rule false-fire on a fabricated 0). Captures the actual index + query it issues."""
+def test_ipsec_count_reads_ipsec_index_and_unions_endpoints():
+    """IPsec active-user count = distinct usernames from the ipsec-* index (ipsec_normalized) —
+    the same session source the VPN Sessions page reads — unioned across BOTH clusters so a
+    user is counted once. (Must NOT read telegraf-index*'s ipsec_user polling measurement,
+    which over-counts.) Captures the index + verifies the cross-cluster username union."""
     import asyncio
     from app.opensearch import ipsec as ip
 
-    captured = {}
+    indices: list[str] = []
+    # simulate two clusters: DRC has {harara, budi}, DC has {budi} → union = 2 distinct
+    per_call = iter([["harara", "budi"], ["budi"]])
 
     async def fake_search(client, index, body):
-        captured["index"] = index
-        captured["body"] = body
-        return {"aggregations": {"active_users": {"value": 3}}}
+        indices.append(index)
+        users = next(per_call, [])
+        return {"aggregations": {"users": {"buckets": [{"key": u} for u in users]}}}
 
     orig = ip.safe_search
     ip.safe_search = fake_search
@@ -227,10 +230,9 @@ def test_ipsec_count_targets_live_telegraf_source():
     finally:
         ip.safe_search = orig
 
-    assert n == 3
-    assert captured["index"] == "telegraf-index*"
-    terms = [f for f in captured["body"]["query"]["bool"]["filter"] if "term" in f]
-    assert {"term": {"measurement_name.keyword": "ipsec_user"}} in terms
+    assert n == 2, "distinct usernames unioned across both endpoints (budi not double-counted)"
+    assert indices and all(ix == "ipsec-*" for ix in indices), "must read ipsec-*, not telegraf"
+    assert len(indices) == 2, "queries both clusters (DC + DRC)"
 
 
 def test_ha_num_active_counts_reporting_members():
