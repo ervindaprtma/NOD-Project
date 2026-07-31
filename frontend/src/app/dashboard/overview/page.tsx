@@ -118,16 +118,17 @@ export default function OverviewPage() {
   // ── Per-site Availability (own SLA window, not the page range) ──
   const [availWindow, setAvailWindow] = useState<(typeof AVAIL_WINDOWS)[number]>("24h");
   type AvailEnv = { data: DeviceAvailabilityData; meta?: { degraded?: boolean } };
+  // Follow the SAME refresh mechanism as every other panel: put the tick's currentLteMs in
+  // the key so it re-fetches on every tick (which the setInterval fires even when the refresh
+  // dropdown is "off"). `_ts` is a cache-buster the endpoint ignores — the SLA window stays
+  // `window=24h` (using gte_ms/lte_ms would wrongly override the window). keepPreviousData
+  // holds the old cards on screen while the heavier query revalidates, so no skeleton flash.
   const availKeys = SITES.map(s =>
-    token ? `/api/v1/device-uptime?site_name=${s}&window=${availWindow}` : null
+    token ? `/api/v1/device-uptime?site_name=${s}&window=${availWindow}&_ts=${currentLteMs}` : null
   );
-  // These keys use a fixed SLA window (not the page range), so the tick that re-keys every
-  // other panel doesn't re-fetch them — poll on the page's refresh interval instead (SWR
-  // revalidates in place, no flicker), or hold when auto-refresh is off.
-  const availRefresh = refreshInterval > 0 ? refreshInterval : 0;
-  const { data: avail0 } = useSWR<AvailEnv>(availKeys[0], swrFetcherLong, { refreshInterval: availRefresh });
-  const { data: avail1 } = useSWR<AvailEnv>(availKeys[1], swrFetcherLong, { refreshInterval: availRefresh });
-  const { data: avail2 } = useSWR<AvailEnv>(availKeys[2], swrFetcherLong, { refreshInterval: availRefresh });
+  const { data: avail0 } = useSWR<AvailEnv>(availKeys[0], swrFetcherLong, { keepPreviousData: true });
+  const { data: avail1 } = useSWR<AvailEnv>(availKeys[1], swrFetcherLong, { keepPreviousData: true });
+  const { data: avail2 } = useSWR<AvailEnv>(availKeys[2], swrFetcherLong, { keepPreviousData: true });
   const availDatas = [avail0, avail1, avail2];
 
   function selectPreset(preset: typeof TIME_PRESETS[0]) {
