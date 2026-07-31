@@ -630,3 +630,26 @@ async def get_site_devices(
         {"key": d["device_key"], "label": d.get("hostname") or d["device_key"]}
         for d in devices
     ])
+
+
+@router.get("/sdwan-links")
+async def get_site_sdwan_links(
+    site_name: str,
+    current_user: User = Depends(require_role("viewer")),
+) -> APIResponse[list[dict]]:
+    """Per-site SD-WAN link list for the alert link picker (→ target_key = link number).
+
+    Every link the site has (DC/DRC: 4, Office: 6) with its real name (WAN uplink or
+    IPsec/ADVPN tunnel). key is the 1-based link number the engine indexes on.
+    """
+    from app.schemas.sdwan_resource_vpn import SITE_LINK_COUNT, SITE_LINK_LABELS, SITE_LINK_TYPES
+
+    n = SITE_LINK_COUNT.get(site_name)
+    if not n:
+        raise HTTPException(status_code=404, detail=f"No SD-WAN links mapped for site: {site_name}")
+    labels = SITE_LINK_LABELS.get(site_name, {})
+    types = SITE_LINK_TYPES.get(site_name, {})
+    return APIResponse.ok(data=[
+        {"key": str(i), "label": labels.get(f"link{i}", f"link{i}"), "type": types.get(f"link{i}", "")}
+        for i in range(1, n + 1)
+    ])

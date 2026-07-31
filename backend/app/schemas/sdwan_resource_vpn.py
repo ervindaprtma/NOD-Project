@@ -10,33 +10,39 @@ from pydantic import BaseModel
 
 # ── SD-WAN SLA (FR-03) ─────────────────────────────────────────
 
-# Per-site link label mapping: {site_name: {linkN: display_label}}
+# Per-site link label mapping: {site_name: {linkN: display_label}}.
+# Names/order match the FortiGate SD-WAN health-check config exactly (verified live from
+# telegraf ifname_link{N}): link1/2 are the physical WAN uplinks; link3+ are the IPsec /
+# ADVPN overlay tunnels. (These were previously mislabeled "MPLS …".)
 SITE_LINK_LABELS: dict[str, dict[str, str]] = {
     "Site_FGT-DC": {
         "link1": "WAN LinkNet",
         "link2": "WAN iForte",
-        "link3": "MPLS LinkNet",
-        "link4": "MPLS iForte",
+        "link3": "IPSec_ISP1_DC",
+        "link4": "IPSec_ISP2_DC",
     },
     "Site_FGT-DRC": {
         "link1": "WAN LinkNet",
         "link2": "WAN iForte",
-        "link3": "MPLS iForte",
-        "link4": "MPLS LinkNet",
+        "link3": "IPSec_ISP2_DRC",
+        "link4": "IPSec_ISP1_DRC",
     },
     "Site_FGT_Office": {
         "link1": "WAN LDP",
         "link2": "WAN iForte",
-        "link3": "MPLS iForte",
-        "link4": "MPLS LinkNet",
+        "link3": "advpn_if → DC",
+        "link4": "advpn_ln → DC",
+        "link5": "advpn_if → DRC",
+        "link6": "advpn_ln → DRC",
     },
 }
 
-# How many links each site has for monitoring (default 4)
+# How many links each site has for monitoring. Office runs 6 SD-WAN members (2 WAN + 4 ADVPN
+# tunnels: if/ln to DC and to DRC); DC/DRC run 4 (2 WAN + 2 IPsec).
 SITE_LINK_COUNT: dict[str, int] = {
     "Site_FGT-DC": 4,
     "Site_FGT-DRC": 4,
-    "Site_FGT_Office": 4,
+    "Site_FGT_Office": 6,
 }
 
 # Which OpenSearch endpoint each site's SD-WAN data lives on.
@@ -47,10 +53,13 @@ SITE_OS_ENDPOINT: dict[str, str] = {
     "Site_FGT-DRC": "drc",
     "Site_FGT_Office": "dc",
 }
+# Dashboard grouping key (WAN vs overlay). Kept as WAN/MPLS so the existing SD-WAN page
+# tabs/colors keep working — link3+ (IPsec/ADVPN tunnels) group under the "MPLS" tab.
 SITE_LINK_TYPES: dict[str, dict[str, str]] = {
     "Site_FGT-DC": {"link1": "WAN", "link2": "WAN", "link3": "MPLS", "link4": "MPLS"},
     "Site_FGT-DRC": {"link1": "WAN", "link2": "WAN", "link3": "MPLS", "link4": "MPLS"},
-    "Site_FGT_Office": {"link1": "WAN", "link2": "WAN", "link3": "MPLS", "link4": "MPLS"},
+    "Site_FGT_Office": {"link1": "WAN", "link2": "WAN", "link3": "MPLS", "link4": "MPLS",
+                        "link5": "MPLS", "link6": "MPLS"},
 }
 
 class LinkMetricPoint(BaseModel):

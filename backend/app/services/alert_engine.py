@@ -365,9 +365,18 @@ def _extract_per_rule_value(
         if rule.data_source == "sdwan_sla":
             if isinstance(group_result, dict):
                 base_key, link_idx = _parse_sdwan_metric_field(rule.metric_field)
+                # New model: bare base metric (status / avg_latency / avg_packet_loss /
+                # avg_jitter) + target_key = link number (1-based, from the link picker).
+                # Legacy rules embed the link in metric_field ("status_link3") — still honored.
+                if "_link" not in rule.metric_field and rule.target_key:
+                    try:
+                        link_idx = int(rule.target_key) - 1
+                    except (TypeError, ValueError):
+                        link_idx = 0
                 vals = group_result.get(base_key, [0.0])
                 if isinstance(vals, list):
-                    return float(vals[link_idx] if link_idx < len(vals) else vals[0])
+                    # Out-of-range link → 0.0, NOT vals[0] (which silently evaluated the wrong link).
+                    return float(vals[link_idx] if 0 <= link_idx < len(vals) else 0.0)
                 return float(vals or 0.0)
             return 0.0
 
@@ -732,9 +741,14 @@ def _extract_per_rule_value_flat(
         if data_source == "sdwan_sla":
             if isinstance(group_result, dict):
                 base_key, link_idx = _parse_sdwan_metric_field(metric_field)
+                if "_link" not in metric_field and target_key:
+                    try:
+                        link_idx = int(target_key) - 1
+                    except (TypeError, ValueError):
+                        link_idx = 0
                 vals = group_result.get(base_key, [0.0])
                 if isinstance(vals, list):
-                    return float(vals[link_idx] if link_idx < len(vals) else vals[0])
+                    return float(vals[link_idx] if 0 <= link_idx < len(vals) else 0.0)
                 return float(vals or 0.0)
             return 0.0
         if data_source == "interface_stats":

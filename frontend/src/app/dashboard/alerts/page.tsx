@@ -329,18 +329,38 @@ export default function AlertsPage() {
 
   const deviceWindowTooShort = isDevice && form.evaluation_window_minutes < DEVICE_MIN_WINDOW;
 
+  // SD-WAN: pick the link (→ target_key = 1-based link number), site-aware named list
+  // (WAN uplink or IPsec/ADVPN tunnel). Composite clauses may target links too.
+  const isSdwan = form.data_source === "sdwan_sla";
+  const { data: sdwanLinksData } = useSWR<{ data: { key: string; label: string; type: string }[] }>(
+    showModal && (isSdwan || isComposite) && SITES.includes(form.site_name)
+      ? `/api/v1/alerts/sdwan-links?site_name=${form.site_name}`
+      : null,
+    swrFetcher
+  );
+  const sdwanLinks = sdwanLinksData?.data || [];
+
+  useEffect(() => {
+    if (!showModal || !isSdwan) return;
+    if (sdwanLinks.length && !sdwanLinks.some((l) => l.key === form.target_key)) {
+      setForm((prev) => ({ ...prev, target_key: sdwanLinks[0].key }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSdwan, sdwanLinks, form.target_key, showModal]);
+
   // Composite is valid only with ≥2 fully-specified clauses; an interface clause needs its
   // ifIndex or the engine can't resolve which interface (→ reads 0).
   const compositeInvalid =
     isComposite &&
     (form.clauses.length < 2 ||
       form.clauses.some(
-        (c) => !c.metric_field || (c.data_source === "interface_stats" && !c.target_key)
+        (c) => !c.metric_field ||
+          ((c.data_source === "interface_stats" || c.data_source === "sdwan_sla") && !c.target_key)
       ));
 
   // SD-WAN link Up/Down: metric status_linkN, 0=Up / >=1=Down. A Down/Up toggle drives
   // condition+threshold instead of raw numeric inputs.
-  const isSdwanStatus = form.data_source === "sdwan_sla" && form.metric_field.startsWith("status_link");
+  const isSdwanStatus = isSdwan && form.metric_field === "status";
   const sdwanWantsUp = form.condition === "==" && form.threshold_value === 0;
   // Interface throughput: absolute Mbps, or % of an operator-entered link max (link_max_mbps
   // set → % mode; threshold_value stays Mbps = max × %).
@@ -450,7 +470,7 @@ export default function AlertsPage() {
     setSaving(true);
     // target_key applies to interface_stats (required) and device_uptime (optional; blank =
     // any device / site-level). Cleared for every other source. Empty string → null.
-    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime";
+    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla";
     // link_max_mbps only rides along with interface throughput's %-of-max mode.
     const keepsLinkMax = form.data_source === "interface_stats" && form.metric_field === "iface.throughput_mbps";
 
@@ -460,7 +480,7 @@ export default function AlertsPage() {
     // target_key (only interface/device carry one).
     const cleanClauses = form.clauses.map((c) => ({
       ...c,
-      target_key: (c.data_source === "interface_stats" || c.data_source === "device_uptime")
+      target_key: (c.data_source === "interface_stats" || c.data_source === "device_uptime" || c.data_source === "sdwan_sla")
         ? (c.target_key || null) : null,
     }));
     const c0 = form.clauses[0];
@@ -664,6 +684,7 @@ export default function AlertsPage() {
                   ...(lf.metric_field ? { metric_field: String(lf.metric_field) } : {}),
                   ...(lf.aggregation ? { aggregation: String(lf.aggregation) } : {}),
                   ...(lf.condition ? { condition: String(lf.condition) } : {}),
+                  ...(lf.target_key != null ? { target_key: String(lf.target_key) } : {}),
                   ...(lf.threshold_value != null ? { threshold_value: Number(lf.threshold_value) } : {}),
                   ...(lf.evaluation_window_minutes != null ? { evaluation_window_minutes: Number(lf.evaluation_window_minutes) } : {}),
                   ...(lf.sustained_for_minutes != null ? { sustained_for_minutes: Number(lf.sustained_for_minutes) } : {}),
@@ -990,6 +1011,28 @@ export default function AlertsPage() {
                 )}
               </div>
 
+              {/* SD-WAN link picker (sdwan_sla only) → target_key = link number */}
+              {isSdwan && (
+                <div>
+                  <label className="text-xs font-medium">Link</label>
+                  {sdwanLinks.length === 0 ? (
+                    <div className="w-full px-3 py-1.5 text-sm rounded-md border bg-muted/50 mt-1 text-muted-foreground">
+                      Loading links…
+                    </div>
+                  ) : (
+                    <select
+                      value={form.target_key}
+                      onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    >
+                      {sdwanLinks.map((l) => (
+                        <option key={l.key} value={l.key}>{l.label}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
+
               {/* Interface picker (interface_stats only) → target_key */}
               {isIface && (
                 <div>
@@ -1202,6 +1245,12 @@ export default function AlertsPage() {
                           <select value={c.target_key} onChange={(e) => patchClause(i, { target_key: e.target.value })} className="w-full px-2 py-1 text-xs rounded-md border bg-background">
                             <option value="">Select interface…</option>
                             {interfaces.map((it) => <option key={it.key} value={it.key}>{it.label} (ifIndex {it.key})</option>)}
+                          </select>
+                        )}
+                        {c.data_source === "sdwan_sla" && (
+                          <select value={c.target_key} onChange={(e) => patchClause(i, { target_key: e.target.value })} className="w-full px-2 py-1 text-xs rounded-md border bg-background">
+                            <option value="">Select link…</option>
+                            {sdwanLinks.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
                           </select>
                         )}
                         {c.data_source === "device_uptime" && c.metric_field !== "collector_gap" && (
