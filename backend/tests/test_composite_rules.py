@@ -43,12 +43,15 @@ def test_composite_and_or_combination():
         ("interface_stats", "Site_FGT-DC", 15): {"39": {"throughput_mbps": {"avg": 30.0, "max": 37.7}}},
         ("sdwan_sla", "Site_FGT-DC", 15): {"avg_latency": [13.5], "status": [0.0]},
     }
-    mv_all, fire_all = asyncio.run(_evaluate_composite_rule(_rule("all"), cache))
-    mv_any, fire_any = asyncio.run(_evaluate_composite_rule(_rule("any"), cache))
+    mv_all, fire_all, drv_all = asyncio.run(_evaluate_composite_rule(_rule("all"), cache))
+    mv_any, fire_any, drv_any = asyncio.run(_evaluate_composite_rule(_rule("any"), cache))
     assert fire_all is False, "AND must not fire when only one clause breaches"
     assert fire_any is True, "OR must fire when any clause breaches"
-    # reported metric value = max across clauses (throughput dominates here)
+    # reported metric value = the driving (breaching, max) clause — throughput here
     assert mv_all == 37.7 and mv_any == 37.7
+    # driver carries the FIRING clause's own threshold, not the top-level mirror — this is
+    # what the notification renders as "limit", so it must be the throughput clause's 30.
+    assert drv_any["threshold_value"] == 30.0 and drv_any["metric_field"] == "iface.throughput_mbps"
 
 
 def test_composite_holds_when_a_clause_cannot_read():
@@ -58,8 +61,8 @@ def test_composite_holds_when_a_clause_cannot_read():
         ("interface_stats", "Site_FGT-DC", 15): {"39": {"throughput_mbps": {"avg": 30.0, "max": 37.7}}},
         ("sdwan_sla", "Site_FGT-DC", 15): None,  # degraded
     }
-    mv, fire = asyncio.run(_evaluate_composite_rule(_rule("any"), cache))
-    assert mv is None and fire is False
+    mv, fire, drv = asyncio.run(_evaluate_composite_rule(_rule("any"), cache))
+    assert mv is None and fire is False and drv is None
 
 
 def test_schema_accepts_composite_rule():
