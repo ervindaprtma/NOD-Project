@@ -427,6 +427,34 @@ def _check_condition(value: float, op: str, threshold: float) -> bool:
     return False
 
 
+def _resolve_target_name(
+    data_source: str, site_name: str | None, target_key: str | None,
+    group_result: Any = None,
+) -> str | None:
+    """Friendly name for a rule's target so notifications read "WAN LDP" not "16".
+
+    interface_stats → interface label, sdwan_sla → SD-WAN link name (both static maps);
+    device_uptime → the hostname, taken from the device_availability result the engine
+    already fetched to evaluate the rule (no extra query), falling back to the IP.
+    Returns None when there's nothing to name (blank target, or an unmapped key).
+    """
+    if not target_key:
+        return None
+    if data_source == "interface_stats":
+        from app.opensearch.interface_stats import SITE_IFINDEX_MAP
+        return SITE_IFINDEX_MAP.get(site_name or "", {}).get(str(target_key))
+    if data_source == "sdwan_sla":
+        from app.schemas.sdwan_resource_vpn import SITE_LINK_LABELS
+        return SITE_LINK_LABELS.get(site_name or "", {}).get(f"link{target_key}")
+    if data_source == "device_uptime":
+        if isinstance(group_result, dict):
+            for d in group_result.get("devices", []) or []:
+                if d.get("device_key") == target_key:
+                    return d.get("hostname") or str(target_key)
+        return str(target_key)  # fall back to the IP
+    return None
+
+
 async def _notify(rule: AlertRule, metric_value: float):
     """Dispatch notifications via configured channels (v3 §3.13).
 
@@ -710,6 +738,8 @@ async def _evaluate_composite_rule(
             "metric_field": mf,
             "condition": cond,
             "threshold_value": thresh,
+            "data_source": ds,
+            "target_key": target_key,
         })
 
     if len(clauses_detail) != len(rule.clauses):
@@ -874,6 +904,9 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         link_max = getattr(rule, "link_max_mbps", None) or None
         utilization_pct = round(mv / link_max * 100, 1) if link_max else None
         threshold_pct = round(eff_threshold / link_max * 100, 1) if link_max else None
+        # Friendly target name (interface / SD-WAN link / device) resolved at eval time.
+        target_name = getattr(rule, "_target_name", None)
+        eff_target_key = drv.get("target_key") if drv else rule.target_key
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
         # message's time. A reminder keeps fired_at = the original fire, so the operator
         # sees how long the still-unresolved issue has been firing.
@@ -917,6 +950,9 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "link_max_mbps": link_max,
                 "utilization_pct": utilization_pct,
                 "threshold_pct": threshold_pct,
+                # Friendly target: interface name / SD-WAN link name / device hostname.
+                "target_name": target_name,
+                "target_key": eff_target_key,
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
                 "fired_at": fired_str,
@@ -1047,6 +1083,11 @@ async def _run_evaluation_cycle() -> None:
                     condition_met = _check_condition(
                         metric_value, rule.condition, rule.threshold_value
                     )
+                    # Transient: friendly target name for the notification (reuses group_result
+                    # for the device hostname — no extra query).
+                    rule._target_name = _resolve_target_name(
+                        rule.data_source, rule.site_name, rule.target_key, group_result
+                    )
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:
                     logger.error("Error evaluating rule %s (%s): %s", rule.id, rule.name, e)
@@ -1062,6 +1103,10 @@ async def _run_evaluation_cycle() -> None:
                     # Transient (not persisted): tells the notifier which clause fired so the
                     # message renders that clause's threshold, not the top-level clause[0] mirror.
                     rule._fired_clause = driver
+                    # Name the driver clause's target (static maps → no query; device falls back to IP).
+                    rule._target_name = _resolve_target_name(
+                        driver.get("data_source"), rule.site_name, driver.get("target_key")
+                    )
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:
                     logger.error("Error evaluating composite rule %s (%s): %s", rule.id, rule.name, e)

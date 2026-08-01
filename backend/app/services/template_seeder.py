@@ -237,12 +237,16 @@ def _grafana_body(icon: str, title: str, service: str, metric_fire: str,
     |e so `<`/`>` operators can't break HTML parsing; timestamps come from {{ fired_at }}
     (rendered in WIB by the engine). metric_fire/metric_res are the per-type value lines.
     """
+    # Per-service noun for the target line (interface / SD-WAN link / device); the line is
+    # hidden when the rule has no target (SSL VPN, IPsec count, throughput) via target_name.
+    tlabel = {"SD-WAN": "Link", "Interface Stats": "Interface", "Device Uptime": "Device"}.get(service, "Target")
+    tline = "{% if target_name is defined and target_name %}🎯 <b>" + tlabel + ":</b> {{ target_name|e }}\n{% endif %}"
     return (
         "{% if event == 'resolved' %}✅ <b>" + title + " RECOVERED</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "🏢 <b>Site:</b> {{ rule.site_name|e }}\n"
         "🛠️ <b>Service:</b> " + service + "\n"
-        "📌 <b>Alert:</b> {{ rule.name|e }}\n"
+        "📌 <b>Alert:</b> {{ rule.name|e }}\n" + tline +
         "📅 <b>Resolved:</b> {{ sent_at }}\n"
         "⏱️ <b>Was firing since:</b> {{ fired_at }}\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -252,7 +256,7 @@ def _grafana_body(icon: str, title: str, service: str, metric_fire: str,
         "━━━━━━━━━━━━━━━━━━\n"
         "🏢 <b>Site:</b> {{ rule.site_name|e }}\n"
         "🛠️ <b>Service:</b> " + service + "\n"
-        "📌 <b>Alert:</b> {{ rule.name|e }}\n"
+        "📌 <b>Alert:</b> {{ rule.name|e }}\n" + tline +
         "⚠️ <b>Severity:</b> {{ rule.severity|e }}\n"
         "📅 <b>Firing since:</b> {{ fired_at }}\n"
         "🔔 <b>Notified:</b> {{ sent_at }}\n"
