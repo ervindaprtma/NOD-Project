@@ -144,6 +144,8 @@ def sample_render_ctx(
         "vpn_type": "SSL VPN", "vpn_user": "nizamuddin.dzaky",
         "remote_ip": "203.0.113.5", "active_ip": "10.212.134.8", "device": "FG_DC_GTN-01",
         "started_at": fired_at, "ended_at": "—", "duration": "—",
+        "bytes_in": 524_000_000, "bytes_out": 88_000_000,
+        "bytes_in_h": "524.0 MB", "bytes_out_h": "88.0 MB", "bytes_total_h": "612.0 MB",
     }
 
 
@@ -1146,12 +1148,16 @@ async def _fetch_active_vpn_sessions(rule: AlertRule) -> dict[str, dict] | None:
             site = q.sslvpn_measurement_for_site(rule.site_name)
             for u in await q.active_sslvpn_users(gte_ms=gte_ms, lte_ms=now_ms, site_name=site):
                 out[u["username"]] = {"remote_ip": u.get("remote_ip", ""),
-                                      "active_ip": u.get("vpn_ip", ""), "device": u.get("device", "")}
+                                      "active_ip": u.get("vpn_ip", ""), "device": u.get("device", ""),
+                                      "bytes_in": int(u.get("bytes_in") or 0),
+                                      "bytes_out": int(u.get("bytes_out") or 0)}
         elif rule.data_source == "vpn_ipsec":
             from app.opensearch import ipsec as q
             for u in await q.active_ipsec_users_detail(gte_ms=gte_ms, lte_ms=now_ms):
                 out[u["username"]] = {"remote_ip": u.get("remote_gw_ip", ""),
-                                      "active_ip": u.get("assigned_ip", ""), "device": u.get("device", "")}
+                                      "active_ip": u.get("assigned_ip", ""), "device": u.get("device", ""),
+                                      "bytes_in": int(u.get("bytes_in") or 0),
+                                      "bytes_out": int(u.get("bytes_out") or 0)}
         else:
             return None
     except Exception as e:
@@ -1170,6 +1176,16 @@ def _fmt_wib(ms: int | None) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=_WIB).strftime("%d %b %Y %H:%M:%S WIB")
 
 
+def _fmt_bytes(n: int | float | None) -> str:
+    """Human bytes, decimal units (1 KB = 1000 B) to match the Mbps/MB convention elsewhere."""
+    b = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if b < 1000 or unit == "TB":
+            return f"{int(b)} {unit}" if unit == "B" else f"{b:.1f} {unit}"
+        b /= 1000
+    return f"{b:.1f} TB"
+
+
 def _fmt_duration(start_ms: int | None, end_ms: int | None) -> str:
     if not start_ms or not end_ms or end_ms < start_ms:
         return "—"
@@ -1183,6 +1199,8 @@ async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict
     vpn_type = "SSL VPN" if rule.data_source == "vpn_ssl" else "IPsec VPN"
     connected = event == "connected"
     started_ms, ended_ms = info.get("started_at"), info.get("ended_at")
+    # Cumulative bytes the user consumed over the session (last-known counter at disconnect).
+    b_in, b_out = int(info.get("bytes_in") or 0), int(info.get("bytes_out") or 0)
     ctx = {
         "rule": {"name": rule.name, "severity": rule.severity, "site_name": rule.site_name},
         "name": rule.name, "severity": rule.severity, "site_name": rule.site_name,
@@ -1192,6 +1210,9 @@ async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict
         "started_at": _fmt_wib(started_ms),
         "ended_at": _fmt_wib(ended_ms) if ended_ms else "—",
         "duration": _fmt_duration(started_ms, ended_ms) if not connected else "—",
+        "bytes_in": b_in, "bytes_out": b_out,
+        "bytes_in_h": _fmt_bytes(b_in), "bytes_out_h": _fmt_bytes(b_out),
+        "bytes_total_h": _fmt_bytes(b_in + b_out),
         "event": event, "event_label": "Connected" if connected else "Disconnected",
         "sent_at": datetime.now(_WIB).strftime("%d %b %Y %H:%M:%S WIB"),
     }
@@ -1226,7 +1247,8 @@ async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict
         icon = "🟢" if connected else "🔴"
         u_e, r_e, a_e = html.escape(user), html.escape(ctx["remote_ip"]), html.escape(ctx["active_ip"])
         tail = (f"\n🕐 <b>Started:</b> {ctx['started_at']}" if connected
-                else f"\n🕐 <b>Session:</b> {ctx['started_at']} → {ctx['ended_at']} ({ctx['duration']})")
+                else f"\n🕐 <b>Session:</b> {ctx['started_at']} → {ctx['ended_at']} ({ctx['duration']})"
+                     f"\n📊 <b>Data:</b> ↓ {ctx['bytes_in_h']} · ↑ {ctx['bytes_out_h']} (total {ctx['bytes_total_h']})")
         body = (f"{icon} <b>{vpn_type} {ctx['event_label']}</b>\n"
                 f"👤 <b>User:</b> {u_e} @ {html.escape(rule.site_name or '—')}\n"
                 f"🌐 <b>Remote IP:</b> {r_e} · <b>Active IP:</b> {a_e}{tail}")

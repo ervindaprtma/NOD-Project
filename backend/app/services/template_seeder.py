@@ -361,6 +361,7 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
             "🏢 <b>Site:</b> {{ site_name|e }}\n"
             "🌐 <b>Remote IP:</b> {{ remote_ip|e }} · <b>Active IP:</b> {{ active_ip|e }}\n"
             "🕐 <b>Session:</b> {{ started_at }} → {{ ended_at }} ({{ duration }})\n"
+            "📊 <b>Data used:</b> ↓ {{ bytes_in_h }} · ↑ {{ bytes_out_h }} (total {{ bytes_total_h }})\n"
             "━━━━━━━━━━━━━━━━━━{% else %}🟢 <b>{{ vpn_type }} CONNECTED</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
             "👤 <b>User:</b> {{ vpn_user|e }}\n"

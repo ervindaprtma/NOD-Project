@@ -16,12 +16,15 @@ def test_connect_and_disconnect_detected():
 
 
 def test_disconnect_carries_original_start_and_ended_now():
-    prev = {"alice": {**_s("1.1.1.1", "10.0.0.1"), "started_at": 1000}}
+    prev = {"alice": {**_s("1.1.1.1", "10.0.0.1"), "started_at": 1000,
+                      "bytes_in": 524_000_000, "bytes_out": 88_000_000}}
     events, new_state = _diff_sessions(prev, current={}, now_ms=9000)
     assert len(events) == 1
     ev, user, info = events[0]
     assert ev == "disconnected" and user == "alice"
     assert info["started_at"] == 1000 and info["ended_at"] == 9000  # true session span
+    # the session's consumed volume rides along on disconnect (last-known counters)
+    assert info["bytes_in"] == 524_000_000 and info["bytes_out"] == 88_000_000
     assert new_state == {}
 
 

@@ -17,6 +17,7 @@ DOCUMENTED_VARS = [
     "vpn_active_users", "vpn_total_mb", "vpn_top_user_mb", "metric_mb", "threshold_mb",
     # VPN session-monitor event vars
     "vpn_type", "vpn_user", "remote_ip", "active_ip", "device", "started_at", "ended_at", "duration",
+    "bytes_in", "bytes_out", "bytes_in_h", "bytes_out_h", "bytes_total_h",
 ]
 
 
