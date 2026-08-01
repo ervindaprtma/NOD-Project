@@ -316,6 +316,9 @@ class AlertState(Base):
     last_read_degraded: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false"), default=False
     )  # last read was held (OpenSearch degraded) — "data delayed" badge
+    # kind="session" rules only: the previous poll's active VPN sessions, so the next poll can
+    # diff for connect/disconnect. {username: {remote_ip, active_ip, started_at, device}}.
+    session_state: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),

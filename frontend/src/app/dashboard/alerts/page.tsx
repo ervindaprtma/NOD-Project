@@ -116,7 +116,7 @@ interface ClauseForm {
 interface RuleForm {
   name: string;
   severity: string;
-  kind: "single" | "composite";
+  kind: "single" | "composite" | "session";
   notify_when: "any" | "all";   // composite: Any=OR, All=AND
   clauses: ClauseForm[];
   data_source: string;
@@ -233,6 +233,8 @@ export default function AlertsPage() {
   const selectedField = fields.find((f) => f.field_key === form.metric_field) || null;
 
   const isComposite = form.kind === "composite";
+  // VPN Session Monitor — event on connect/disconnect, not a threshold. Only SSL/IPsec.
+  const isSession = form.kind === "session";
   // Full catalog (all sources) for the composite clause editor — one call, filtered client-side.
   const { data: allFieldsData } = useSWR<{ data: AlertFieldCatalog[] }>(
     showModal && isComposite ? "/api/v1/alerts/fields" : null,
@@ -549,7 +551,8 @@ export default function AlertsPage() {
     setSaving(true);
     // target_key applies to interface_stats (required) and device_uptime (optional; blank =
     // any device / site-level). Cleared for every other source. Empty string → null.
-    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla";
+    // session rules carry the username glob in target_key.
+    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla" || isSession;
     // link_max_mbps only rides along with interface throughput's %-of-max mode.
     const keepsLinkMax = form.data_source === "interface_stats" && form.metric_field === "iface.throughput_mbps";
 
@@ -578,6 +581,11 @@ export default function AlertsPage() {
       appid_filter = Object.keys(af).length ? af : null;
     }
 
+    // Session monitors have no metric/threshold — fill the NOT-NULL columns with placeholders.
+    const sessionFields = isSession
+      ? { metric_field: "session", aggregation: "max", condition: "==", threshold_value: 0, link_max_mbps: null }
+      : {};
+
     const payload = {
       ...form,
       target_key: keepsTargetKey ? (form.target_key || null) : null,
@@ -586,6 +594,7 @@ export default function AlertsPage() {
       notification_template_id: form.notification_template_id || null,
       clauses: form.kind === "composite" ? cleanClauses : [],
       ...composite,
+      ...sessionFields,
     };
     try {
       if (editingRule) {
@@ -1093,22 +1102,29 @@ export default function AlertsPage() {
                   <label className="text-xs font-medium">Kind</label>
                   <select
                     value={form.kind}
-                    onChange={(e) => setForm({ ...form, kind: e.target.value as "single" | "composite" })}
+                    onChange={(e) => {
+                      const kind = e.target.value as "single" | "composite" | "session";
+                      // Session monitors only apply to SSL/IPsec — snap the source when switching in.
+                      const vpn = form.data_source === "vpn_ssl" || form.data_source === "vpn_ipsec";
+                      setForm({ ...form, kind, data_source: kind === "session" && !vpn ? "vpn_ssl" : form.data_source });
+                    }}
                     className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                   >
                     <option value="single">Single</option>
                     <option value="composite">Composite</option>
+                    <option value="session">VPN Session Monitor</option>
                   </select>
                 </div>
                 {!isComposite ? (
                   <div>
-                    <label className="text-xs font-medium">Data Source</label>
+                    <label className="text-xs font-medium">{isSession ? "VPN Type" : "Data Source"}</label>
                     <select
                       value={form.data_source}
                       onChange={(e) => setForm({ ...form, data_source: e.target.value })}
                       className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                     >
-                      {DATA_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                      {(isSession ? DATA_SOURCES.filter((s) => s.value === "vpn_ssl" || s.value === "vpn_ipsec") : DATA_SOURCES)
+                        .map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                     </select>
                   </div>
                 ) : (
@@ -1130,7 +1146,39 @@ export default function AlertsPage() {
                 )}
               </div>
 
-              {!isComposite && (<>
+              {/* VPN Session Monitor — no threshold; alerts on connect/disconnect */}
+              {isSession && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium">Watch users (optional)</label>
+                    <input
+                      value={form.target_key}
+                      onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                      placeholder="blank = all users · e.g. admin*  or  nizamuddin.dzaky"
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Glob match on username (<code>*</code> wildcard). Fires one message per <b>connect</b> and
+                      per <b>disconnect</b>, with user, remote IP, active IP, and session start/end.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">Presence window (min)</label>
+                    <NumberField
+                      value={form.evaluation_window_minutes}
+                      onValueChange={(n) => setForm({ ...form, evaluation_window_minutes: n })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      min={1}
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      A user seen within this window counts as connected (default 5 = the session gap).
+                      Disconnect is detected ~this long after their last activity.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!isComposite && !isSession && (<>
               {/* Metric — catalog-driven (choose, don't type) */}
               <div>
                 <label className="text-xs font-medium">Metric</label>

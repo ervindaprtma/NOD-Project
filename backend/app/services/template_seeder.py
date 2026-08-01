@@ -346,6 +346,33 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "<b>Peak Throughput:</b> {{ metric_value|round(1) }} Mbps (limit " + _L + " Mbps)"
         "{% if utilization_pct is defined and utilization_pct %} — {{ utilization_pct }}% of {{ link_max_mbps }} Mbps{% endif %}",
         "⚠️ Check link capacity / top talkers", "🎉 Throughput back to normal."),
+    # VPN Session Monitor (kind="session"): one message per connect/disconnect event, branching
+    # on `event` (connected/disconnected). Uses the per-event vars (vpn_user, remote_ip, …).
+    {
+        "name": "VPN Session Monitor",
+        "description": "Per-session connect/disconnect events for a VPN Session Monitor rule "
+                       "(username, remote IP, active IP, start/end timestamps).",
+        "subject_template": "{% if event == 'disconnected' %}🔴 VPN Disconnected: {{ vpn_user }}"
+                            "{% else %}🟢 VPN Connected: {{ vpn_user }}{% endif %}",
+        "body_template": (
+            "{% if event == 'disconnected' %}🔴 <b>{{ vpn_type }} DISCONNECTED</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "👤 <b>User:</b> {{ vpn_user|e }}\n"
+            "🏢 <b>Site:</b> {{ site_name|e }}\n"
+            "🌐 <b>Remote IP:</b> {{ remote_ip|e }} · <b>Active IP:</b> {{ active_ip|e }}\n"
+            "🕐 <b>Session:</b> {{ started_at }} → {{ ended_at }} ({{ duration }})\n"
+            "━━━━━━━━━━━━━━━━━━{% else %}🟢 <b>{{ vpn_type }} CONNECTED</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "👤 <b>User:</b> {{ vpn_user|e }}\n"
+            "🏢 <b>Site:</b> {{ site_name|e }}\n"
+            "🌐 <b>Remote IP:</b> {{ remote_ip|e }} · <b>Active IP:</b> {{ active_ip|e }}\n"
+            "🕐 <b>Started:</b> {{ started_at }}\n"
+            "━━━━━━━━━━━━━━━━━━{% endif %}"
+        ),
+        "line_template": None,
+        "is_default": False,
+        "is_user_created": False,
+    },
 ]
 
 

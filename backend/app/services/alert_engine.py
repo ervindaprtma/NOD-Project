@@ -140,6 +140,10 @@ def sample_render_ctx(
         "vpn_active_users": 7, "vpn_total_mb": 5500.0, "vpn_top_user_mb": 2100.0,
         "metric_mb": round(metric_value / 1_000_000, 1) if is_vol else None,
         "threshold_mb": round(threshold_value / 1_000_000, 1) if is_vol else None,
+        # VPN session-monitor events (kind="session"): the per-event fields.
+        "vpn_type": "SSL VPN", "vpn_user": "nizamuddin.dzaky",
+        "remote_ip": "203.0.113.5", "active_ip": "10.212.134.8", "device": "FG_DC_GTN-01",
+        "started_at": fired_at, "ended_at": "—", "duration": "—",
     }
 
 
@@ -1121,6 +1125,190 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         logger.error("Batch notify flush error: %s", e)
 
 
+# ── VPN Session Monitor (kind="session") ────────────────────────
+# Event-on-state-change, not threshold: each poll snapshots the currently-active VPN
+# sessions and diffs against the previous snapshot to emit connect/disconnect alerts.
+# Reuses the VPN Sessions page's active queries so what alerts == what the page shows.
+
+async def _fetch_active_vpn_sessions(rule: AlertRule) -> dict[str, dict] | None:
+    """Currently-active VPN sessions for a session rule, as {username: {remote_ip, active_ip,
+    device}}. Presence window = the rule's evaluation window (default 5min = the session gap):
+    a user seen within it is "connected". target_key is an optional username glob (e.g.
+    "admin*"); blank = all users. Returns None on a read failure so the caller HOLDS instead
+    of treating a failed query as "everyone disconnected"."""
+    now_ms = int(_time.time() * 1000)
+    window = max(rule.evaluation_window_minutes or 5, 1)
+    gte_ms = now_ms - window * 60 * 1000
+    out: dict[str, dict] = {}
+    try:
+        if rule.data_source == "vpn_ssl":
+            from app.opensearch import sslvpn as q
+            site = q.sslvpn_measurement_for_site(rule.site_name)
+            for u in await q.active_sslvpn_users(gte_ms=gte_ms, lte_ms=now_ms, site_name=site):
+                out[u["username"]] = {"remote_ip": u.get("remote_ip", ""),
+                                      "active_ip": u.get("vpn_ip", ""), "device": u.get("device", "")}
+        elif rule.data_source == "vpn_ipsec":
+            from app.opensearch import ipsec as q
+            for u in await q.active_ipsec_users_detail(gte_ms=gte_ms, lte_ms=now_ms):
+                out[u["username"]] = {"remote_ip": u.get("remote_gw_ip", ""),
+                                      "active_ip": u.get("assigned_ip", ""), "device": u.get("device", "")}
+        else:
+            return None
+    except Exception as e:
+        logger.error("Session fetch failed for rule %s (%s): %s", rule.id, rule.name, e)
+        return None
+    glob = (rule.target_key or "").strip().lower()
+    if glob:
+        import fnmatch
+        out = {u: v for u, v in out.items() if fnmatch.fnmatch(u.lower(), glob)}
+    return out
+
+
+def _fmt_wib(ms: int | None) -> str:
+    if not ms:
+        return "—"
+    return datetime.fromtimestamp(ms / 1000, tz=_WIB).strftime("%d %b %Y %H:%M:%S WIB")
+
+
+def _fmt_duration(start_ms: int | None, end_ms: int | None) -> str:
+    if not start_ms or not end_ms or end_ms < start_ms:
+        return "—"
+    secs = int((end_ms - start_ms) / 1000)
+    h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
+    return (f"{h}h {m}m" if h else f"{m}m {s}s" if m else f"{s}s")
+
+
+async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict) -> None:
+    """Render + send ONE message for a single connect/disconnect event."""
+    vpn_type = "SSL VPN" if rule.data_source == "vpn_ssl" else "IPsec VPN"
+    connected = event == "connected"
+    started_ms, ended_ms = info.get("started_at"), info.get("ended_at")
+    ctx = {
+        "rule": {"name": rule.name, "severity": rule.severity, "site_name": rule.site_name},
+        "name": rule.name, "severity": rule.severity, "site_name": rule.site_name,
+        "vpn_type": vpn_type, "vpn_user": user,
+        "remote_ip": info.get("remote_ip") or "—", "active_ip": info.get("active_ip") or "—",
+        "device": info.get("device") or "—",
+        "started_at": _fmt_wib(started_ms),
+        "ended_at": _fmt_wib(ended_ms) if ended_ms else "—",
+        "duration": _fmt_duration(started_ms, ended_ms) if not connected else "—",
+        "event": event, "event_label": "Connected" if connected else "Disconnected",
+        "sent_at": datetime.now(_WIB).strftime("%d %b %Y %H:%M:%S WIB"),
+    }
+    # Template: assigned (active) → seeded "VPN Session Monitor" → hardcoded line.
+    tmpl_text: str | None = None
+    try:
+        async with AsyncSessionLocal() as tdb:
+            if rule.notification_template_id:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.id == rule.notification_template_id)
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+            if not tmpl_text:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.name == "VPN Session Monitor")
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+    except Exception as e:
+        logger.error("Session template fetch failed: %s", e)
+
+    body: str | None = None
+    if tmpl_text:
+        try:
+            body = _render_template(tmpl_text, ctx)
+        except Exception as e:
+            logger.error("Session template render failed for rule %s: %s", rule.id, e)
+    if body is None:
+        icon = "🟢" if connected else "🔴"
+        u_e, r_e, a_e = html.escape(user), html.escape(ctx["remote_ip"]), html.escape(ctx["active_ip"])
+        tail = (f"\n🕐 <b>Started:</b> {ctx['started_at']}" if connected
+                else f"\n🕐 <b>Session:</b> {ctx['started_at']} → {ctx['ended_at']} ({ctx['duration']})")
+        body = (f"{icon} <b>{vpn_type} {ctx['event_label']}</b>\n"
+                f"👤 <b>User:</b> {u_e} @ {html.escape(rule.site_name or '—')}\n"
+                f"🌐 <b>Remote IP:</b> {r_e} · <b>Active IP:</b> {a_e}{tail}")
+    parse_mode = "HTML" if "<b>" in body else None
+    subject = f"VPN {ctx['event_label']}: {user}"
+    try:
+        from app.services.notifier_helper import send_alert, load_channel_configs
+        db_configs = await load_channel_configs()
+        for channel in rule.notify_channels:
+            cfg = db_configs.get(channel)
+            if not cfg:
+                continue
+            try:
+                await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+            except Exception as e:
+                logger.error("Session notify failed for %s: %s", channel, e)
+    except Exception as e:
+        logger.error("Session notify error: %s", e)
+
+
+def _diff_sessions(
+    prev: dict[str, dict], current: dict[str, dict], now_ms: int,
+) -> tuple[list[tuple[str, str, dict]], dict[str, dict]]:
+    """Pure diff of two active-session snapshots → (events, new_state).
+
+    A username in current but not prev = connected; in prev but not current = disconnected.
+    new_state keeps each still-connected user's ORIGINAL started_at so a later disconnect
+    reports the true session length. Pure — no cluster, no DB."""
+    events: list[tuple[str, str, dict]] = []
+    for u, v in current.items():
+        if u not in prev:
+            events.append(("connected", u, {**v, "started_at": now_ms, "ended_at": None}))
+    for u, v in prev.items():
+        if u not in current:
+            events.append(("disconnected", u, {**v, "ended_at": now_ms}))
+    new_state = {
+        u: {**v, "started_at": (prev.get(u) or {}).get("started_at", now_ms)}
+        for u, v in current.items()
+    }
+    return events, new_state
+
+
+async def _evaluate_session_rule(rule: AlertRule, db: AsyncSession) -> None:
+    """Diff current active VPN sessions vs the previous poll → connect/disconnect events."""
+    current = await _fetch_active_vpn_sessions(rule)
+    state = (await db.execute(select(AlertState).where(AlertState.rule_id == rule.id))).scalar_one_or_none()
+    if not state:
+        state = AlertState(rule_id=rule.id, state="INACTIVE")
+        db.add(state)
+    now = datetime.now(timezone.utc)
+    now_ms = int(_time.time() * 1000)
+    state.last_evaluated_at = now
+
+    if current is None:  # read failed → hold, never emit disconnects on a bad read
+        state.last_read_degraded = True
+        await db.commit()
+        return
+    state.last_read_degraded = False
+    state.last_value = float(len(current))
+    prev = state.session_state
+
+    # First run (or after enable): baseline only — never blast a connect for everyone
+    # already online. Persist, no events.
+    if prev is None:
+        state.session_state = {u: {**v, "started_at": now_ms} for u, v in current.items()}
+        state.last_state_change_at = now
+        await db.commit()
+        return
+
+    events, new_state = _diff_sessions(prev, current, now_ms)
+    state.session_state = new_state
+    if events:
+        state.last_state_change_at = now
+    await db.commit()
+
+    for event, user, info in events:
+        try:
+            await _send_session_event(rule, event, user, info)
+        except Exception as e:
+            logger.error("Session event send failed for %s/%s: %s", rule.id, user, e)
+
+
 async def _run_evaluation_cycle() -> None:
     """One tick: enabled rules → grouped OS queries → state machine → batched notify.
 
@@ -1153,8 +1341,9 @@ async def _run_evaluation_cycle() -> None:
                 logger.info("Maintenance window active — skipping %s rule(s)", skipped)
 
             # Split single vs composite
-            single_rules = [r for r in active_rules if r.kind != "composite"]
+            single_rules = [r for r in active_rules if r.kind not in ("composite", "session")]
             composite_rules = [r for r in active_rules if r.kind == "composite"]
+            session_rules = [r for r in active_rules if r.kind == "session"]
 
             # ── 1. Single rules (P1 batched) ──
             # Group key is (ds, site, window, appid_sig): appid_flow rules with a distinct
@@ -1237,6 +1426,14 @@ async def _run_evaluation_cycle() -> None:
             # ── 3. Flush batched notifications (P7 grouping) ──
             if notify_queue:
                 await _flush_batch_notify(notify_queue)
+
+            # ── 4. VPN session monitors (event-on-change, sent inline per event) ──
+            for rule in session_rules:
+                try:
+                    await _evaluate_session_rule(rule, db)
+                except Exception as e:
+                    logger.error("Error evaluating session rule %s (%s): %s", rule.id, rule.name, e)
+                    await db.rollback()
 
         except Exception as e:
             logger.error("Alert evaluation cycle failed: %s", e)

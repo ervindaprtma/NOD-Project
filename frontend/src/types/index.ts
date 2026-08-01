@@ -348,7 +348,7 @@ export interface AlertRule {
   id: string;
   name: string;
   severity: "INFO" | "WARNING" | "CRITICAL";
-  kind: "single" | "composite";
+  kind: "single" | "composite" | "session";
   notify_when: "any" | "all";
   clauses: Record<string, unknown>[];
   template_id: string | null;

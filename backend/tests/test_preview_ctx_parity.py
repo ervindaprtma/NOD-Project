@@ -15,6 +15,8 @@ DOCUMENTED_VARS = [
     "target_name", "target_key",
     "filter_app", "filter_proto", "filter_port", "filter_label",
     "vpn_active_users", "vpn_total_mb", "vpn_top_user_mb", "metric_mb", "threshold_mb",
+    # VPN session-monitor event vars
+    "vpn_type", "vpn_user", "remote_ip", "active_ip", "device", "started_at", "ended_at", "duration",
 ]
 
 
