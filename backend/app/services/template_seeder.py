@@ -527,6 +527,30 @@ SEED_FIELD_CATALOG: list[dict] = [
     },
     {
         "data_source": "appid_flow",
+        "field_key": "traffic.inbound.download_mbps",
+        "display_name": "Traffic Inbound (VIP) — Download",
+        "description": "Inbound VIP path download rate (server→client, flow.server.bytes) — same "
+                       "Upload/Download split the Inbound Sankey uses.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 200.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "traffic.inbound.upload_mbps",
+        "display_name": "Traffic Inbound (VIP) — Upload",
+        "description": "Inbound VIP path upload rate (client→server, flow.client.bytes) — same "
+                       "Upload/Download split the Inbound Sankey uses.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 100.0,
+    },
+    {
+        "data_source": "appid_flow",
         "field_key": "traffic.inter_site.total_mbps",
         "display_name": "Traffic Internal — Inter-site",
         "description": "Inter-site path total rate",
@@ -535,6 +559,30 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_aggregations": ["avg", "max"],
         "valid_conditions": [">", ">="],
         "example_threshold": 500.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "traffic.inter_site.download_mbps",
+        "display_name": "Traffic Internal — Inter-site Download",
+        "description": "Inter-site path download rate (flow.server.bytes) — same Upload/Download "
+                       "split the Internal Sankey uses.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 300.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "traffic.inter_site.upload_mbps",
+        "display_name": "Traffic Internal — Inter-site Upload",
+        "description": "Inter-site path upload rate (flow.client.bytes) — same Upload/Download "
+                       "split the Internal Sankey uses.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 300.0,
     },
     {
         "data_source": "appid_flow",
