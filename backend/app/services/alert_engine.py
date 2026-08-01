@@ -139,6 +139,7 @@ async def _run_group_query(
     data_source: str,
     site_name: str | None,
     window_minutes: int,
+    appid_filter: dict | None = None,
 ) -> float | list | dict | None:
     """Execute ONE OpenSearch query for a rule group.
 
@@ -171,9 +172,13 @@ async def _run_group_query(
                 from app.opensearch import traffic_flow as tf_qb
 
                 # Per-path dict: {internet, inbound-vip, inter-site, intra-lan, _wan}
-                # each with *_mbps / *_bytes. Extractor selects node + metric.
+                # each with *_mbps / *_bytes. Extractor selects node + metric. An optional
+                # appid_filter narrows every path to one app/protocol/port.
+                af = appid_filter or {}
                 result = await tf_qb.appid_flow_alert_summary(
-                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC"
+                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC",
+                    app_filter=af.get("app") or "", protocol=af.get("protocol") or "",
+                    dst_port=af.get("port"),
                 )
 
             elif data_source == "sdwan_sla":
@@ -455,6 +460,38 @@ def _resolve_target_name(
     return None
 
 
+def _appid_filter_for(rule: AlertRule) -> dict | None:
+    """The appid_flow scoping dict {app, protocol, port} for a rule, or None. Empty → None
+    so unfiltered rules keep sharing the grouped query."""
+    if rule.data_source != "appid_flow":
+        return None
+    f = getattr(rule, "appid_filter", None) or {}
+    f = {k: v for k, v in f.items() if v not in (None, "")}
+    return f or None
+
+
+def _appid_sig(filt: dict | None) -> tuple | None:
+    """Hashable signature of an appid filter for the group key (unfiltered rules → None so
+    they share one query; each distinct filter gets its own query)."""
+    if not filt:
+        return None
+    return tuple(sorted(filt.items()))
+
+
+def _appid_filter_label(filt: dict | None) -> str | None:
+    """Human label for a notification, e.g. "app=YouTube, port=443". None when unfiltered."""
+    if not filt:
+        return None
+    parts = []
+    if filt.get("app"):
+        parts.append(f"app={filt['app']}")
+    if filt.get("protocol"):
+        parts.append(f"proto={filt['protocol']}")
+    if filt.get("port") is not None:
+        parts.append(f"port={filt['port']}")
+    return ", ".join(parts) or None
+
+
 async def _notify(rule: AlertRule, metric_value: float):
     """Dispatch notifications via configured channels (v3 §3.13).
 
@@ -719,8 +756,9 @@ async def _evaluate_composite_rule(
         target_key = clause.get("target_key")
         aggregation = clause.get("aggregation", "avg")
 
-        # §9.4: read from the cycle's pre-fetched cache when available
-        cache_key = (ds, rule.site_name, window)
+        # §9.4: read from the cycle's pre-fetched cache when available (4-tuple key; composite
+        # appid clauses use the unfiltered path → sig None).
+        cache_key = (ds, rule.site_name, window, None)
         if group_cache is not None and cache_key in group_cache:
             group_result = group_cache[cache_key]
         else:
@@ -904,9 +942,15 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         link_max = getattr(rule, "link_max_mbps", None) or None
         utilization_pct = round(mv / link_max * 100, 1) if link_max else None
         threshold_pct = round(eff_threshold / link_max * 100, 1) if link_max else None
-        # Friendly target name (interface / SD-WAN link / device) resolved at eval time.
+        # Friendly target name (interface / SD-WAN link / device / appid filter) from eval time.
         target_name = getattr(rule, "_target_name", None)
         eff_target_key = drv.get("target_key") if drv else rule.target_key
+        # appid_flow scoping, broken out so a template can show app / protocol / port separately.
+        appid_f = _appid_filter_for(rule) or {}
+        filter_app = appid_f.get("app")
+        filter_proto = appid_f.get("protocol")
+        filter_port = appid_f.get("port")
+        filter_label = _appid_filter_label(appid_f or None)
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
         # message's time. A reminder keeps fired_at = the original fire, so the operator
         # sees how long the still-unresolved issue has been firing.
@@ -950,9 +994,15 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "link_max_mbps": link_max,
                 "utilization_pct": utilization_pct,
                 "threshold_pct": threshold_pct,
-                # Friendly target: interface name / SD-WAN link name / device hostname.
+                # Friendly target: interface name / SD-WAN link name / device hostname /
+                # appid filter label.
                 "target_name": target_name,
                 "target_key": eff_target_key,
+                # appid_flow scoping (None when not an appid rule or unfiltered):
+                "filter_app": filter_app,
+                "filter_proto": filter_proto,
+                "filter_port": filter_port,
+                "filter_label": filter_label,
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
                 "fired_at": fired_str,
@@ -1051,30 +1101,38 @@ async def _run_evaluation_cycle() -> None:
             composite_rules = [r for r in active_rules if r.kind == "composite"]
 
             # ── 1. Single rules (P1 batched) ──
+            # Group key is (ds, site, window, appid_sig): appid_flow rules with a distinct
+            # app/protocol/port filter can't share the whole-path query, so the filter joins
+            # the key. Unfiltered rules → sig None → keep sharing one query.
             notify_queue: list[tuple[AlertRule, float, str, datetime]] = []
             groups: dict[tuple, list[AlertRule]] = defaultdict(list)
+            group_filters: dict[tuple, dict | None] = {}
             for rule in single_rules:
-                key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)
+                filt = _appid_filter_for(rule)
+                key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes, _appid_sig(filt))
                 groups[key].append(rule)
+                group_filters[key] = filt
 
             # §9.4: also pre-fetch for composite clause keys, sharing the
             # cache with singles that happen to share a (ds, site, window) tuple.
+            # Composite appid clauses use the unfiltered path (sig None) for now.
             for rule in composite_rules:
                 for clause in (rule.clauses or []):
                     ds = clause.get("data_source")
                     if not ds:
                         continue
                     window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
-                    groups.setdefault((ds, rule.site_name, window), [])
+                    groups.setdefault((ds, rule.site_name, window, None), [])
 
             group_cache: dict[tuple, float | list | dict | None] = {}
             for key in groups:
-                ds, site, window = key
-                group_cache[key] = await _run_group_query(ds, site, window)
+                ds, site, window, _sig = key
+                group_cache[key] = await _run_group_query(ds, site, window, group_filters.get(key))
 
             for rule in single_rules:
                 try:
-                    key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)
+                    key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes,
+                           _appid_sig(_appid_filter_for(rule)))
                     group_result = group_cache.get(key)
                     metric_value = _extract_per_rule_value(rule, group_result)
                     if metric_value is None:
@@ -1084,9 +1142,12 @@ async def _run_evaluation_cycle() -> None:
                         metric_value, rule.condition, rule.threshold_value
                     )
                     # Transient: friendly target name for the notification (reuses group_result
-                    # for the device hostname — no extra query).
-                    rule._target_name = _resolve_target_name(
-                        rule.data_source, rule.site_name, rule.target_key, group_result
+                    # for the device hostname — no extra query). appid_flow has no target_key;
+                    # its "target" is the app/protocol/port filter, so surface that instead.
+                    rule._target_name = (
+                        _appid_filter_label(_appid_filter_for(rule))
+                        if rule.data_source == "appid_flow"
+                        else _resolve_target_name(rule.data_source, rule.site_name, rule.target_key, group_result)
                     )
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:

@@ -133,6 +133,9 @@ class AlertRule(Base):
     # stored as Mbps (threshold_value = link_max × %); this remembers the max so the UI can
     # show the % again on edit. Null = absolute-Mbps rule. Eval is unchanged (Mbps compare).
     link_max_mbps: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # appid_flow only: narrow the path metric to a specific application / protocol / dest port.
+    # {"app": "YouTube", "protocol": "TCP", "port": 443} — any subset; null = whole path.
+    appid_filter: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     aggregation: Mapped[str] = mapped_column(
         String(10), nullable=False
     )  # avg, max, min, sum, count

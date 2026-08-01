@@ -330,6 +330,8 @@ async def create_alert_rule(
         link_max_mbps=body.link_max_mbps,
         kind=body.kind,
         notify_when=body.notify_when,
+        # appid_flow scoping (app/protocol/port) → plain dict, drop empty fields; None if unused.
+        appid_filter=(body.appid_filter.model_dump(exclude_none=True) or None) if body.appid_filter else None,
         # Composite clauses are stored as plain dicts (JSONB); the engine reads them via .get().
         clauses=[c.model_dump() for c in body.clauses],
         aggregation=body.aggregation,
@@ -381,6 +383,10 @@ async def update_alert_rule(
         raise HTTPException(status_code=404, detail="Alert rule not found.")
 
     update_data = body.model_dump(exclude_unset=True)
+    # Normalize the appid filter: drop empty fields, and an all-empty filter clears it (None).
+    if "appid_filter" in update_data:
+        af = update_data["appid_filter"] or {}
+        update_data["appid_filter"] = {k: v for k, v in af.items() if v not in (None, "")} or None
     for key, value in update_data.items():
         setattr(rule, key, value)
     await db.flush()
@@ -572,8 +578,11 @@ async def test_alert_rule(
             # Same per-path summary + extractor the engine uses, so the dry-run
             # value matches what the rule will actually evaluate.
             from app.services.alert_engine import _extract_appid_flow
+            af = rule.appid_filter or {}
             flow_summary = await tf_qb.appid_flow_alert_summary(
-                gte_ms=gte_ms, lte_ms=lte_ms, site_name=rule.site_name or "Site_FGT-DC"
+                gte_ms=gte_ms, lte_ms=lte_ms, site_name=rule.site_name or "Site_FGT-DC",
+                app_filter=af.get("app") or "", protocol=af.get("protocol") or "",
+                dst_port=af.get("port"),
             )
             metric_value = _extract_appid_flow(rule.metric_field, flow_summary) if isinstance(flow_summary, dict) else 0.0
         elif rule.data_source == "sdwan_sla":

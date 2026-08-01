@@ -123,6 +123,10 @@ interface RuleForm {
   metric_field: string;
   target_key: string;
   link_max_mbps: number | null;   // interface throughput: set → "% of link max" mode
+  // appid_flow scoping — narrow the path metric to an app / protocol / dest port (free text).
+  appid_app: string;
+  appid_protocol: string;
+  appid_port: string;
   aggregation: string;
   condition: string;
   threshold_value: number;
@@ -144,6 +148,9 @@ const emptyForm: RuleForm = {
   metric_field: "ha_member.cpu_usage",
   target_key: "",
   link_max_mbps: null,
+  appid_app: "",
+  appid_protocol: "",
+  appid_port: "",
   aggregation: "avg",
   condition: ">",
   threshold_value: 80,
@@ -333,6 +340,8 @@ export default function AlertsPage() {
   // Phase E: interface_stats needs a canonical site + an interface (target_key). Composite
   // clauses may also target interfaces/devices, so fetch the site's lists whenever composite.
   const isIface = form.data_source === "interface_stats";
+  // appid_flow single rules can scope the path metric to an app / protocol / dest port.
+  const isAppid = form.data_source === "appid_flow" && !isComposite;
   const { data: ifaceData } = useSWR<{ data: { key: string; label: string }[] }>(
     showModal && (isIface || isComposite) && SITES.includes(form.site_name)
       ? `/api/v1/alerts/interfaces?site_name=${form.site_name}`
@@ -509,6 +518,9 @@ export default function AlertsPage() {
       metric_field: rule.metric_field,
       target_key: rule.target_key || "",
       link_max_mbps: rule.link_max_mbps ?? null,
+      appid_app: rule.appid_filter?.app ?? "",
+      appid_protocol: rule.appid_filter?.protocol ?? "",
+      appid_port: rule.appid_filter?.port != null ? String(rule.appid_filter.port) : "",
       aggregation: rule.aggregation,
       condition: rule.condition,
       threshold_value: rule.threshold_value,
@@ -546,10 +558,21 @@ export default function AlertsPage() {
           condition: c0.condition, threshold_value: c0.threshold_value, target_key: null, link_max_mbps: null }
       : {};
 
+    // appid_flow scoping — only for a single appid rule; drop empty fields, all-empty → null.
+    let appid_filter: { app?: string; protocol?: string; port?: number } | null = null;
+    if (form.kind === "single" && form.data_source === "appid_flow") {
+      const af: { app?: string; protocol?: string; port?: number } = {};
+      if (form.appid_app.trim()) af.app = form.appid_app.trim();
+      if (form.appid_protocol.trim()) af.protocol = form.appid_protocol.trim().toUpperCase();
+      if (form.appid_port.trim() && !Number.isNaN(Number(form.appid_port))) af.port = Number(form.appid_port);
+      appid_filter = Object.keys(af).length ? af : null;
+    }
+
     const payload = {
       ...form,
       target_key: keepsTargetKey ? (form.target_key || null) : null,
       link_max_mbps: keepsLinkMax ? form.link_max_mbps : null,
+      appid_filter,
       notification_template_id: form.notification_template_id || null,
       clauses: form.kind === "composite" ? cleanClauses : [],
       ...composite,
@@ -1324,6 +1347,39 @@ export default function AlertsPage() {
                       className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                     />
                   </div>
+                </div>
+              )}
+
+              {/* appid_flow scoping — narrow the path metric to an app / protocol / dest port */}
+              {isAppid && (
+                <div>
+                  <label className="text-xs font-medium">
+                    Scope to (optional) — leave blank for the whole path
+                  </label>
+                  <div className="grid grid-cols-3 gap-3 mt-1">
+                    <input
+                      value={form.appid_app}
+                      onChange={(e) => setForm({ ...form, appid_app: e.target.value })}
+                      placeholder="Application (e.g. YouTube)"
+                      className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                    />
+                    <input
+                      value={form.appid_protocol}
+                      onChange={(e) => setForm({ ...form, appid_protocol: e.target.value })}
+                      placeholder="Protocol (TCP/UDP)"
+                      className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                    />
+                    <input
+                      value={form.appid_port}
+                      onChange={(e) => setForm({ ...form, appid_port: e.target.value })}
+                      placeholder="Dest port (e.g. 443)"
+                      inputMode="numeric"
+                      className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                    />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Filters flow.application.name / l4.proto.name / flow.server.l4.port.id. Exact match (case-insensitive protocol).
+                  </p>
                 </div>
               )}
               </>)}
