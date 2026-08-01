@@ -657,21 +657,26 @@ async def _mark_held(rule: AlertRule, db: AsyncSession) -> None:
 
 async def _evaluate_composite_rule(
     rule: AlertRule, group_cache: dict | None = None
-) -> tuple[float | None, bool]:
+) -> tuple[float | None, bool, dict | None]:
     """Evaluate a composite rule's clauses and combine with AND/OR.
 
-    Returns (max_metric_value, condition_met).
-    Returns (None, False) if no clauses could be evaluated.
+    Returns (metric_value, condition_met, driver). `driver` is the clause the
+    notification should describe — the breaching clause with the largest value
+    (or, if none breach, the largest-value clause) — as
+    {metric_field, condition, threshold_value, value}. metric_value == driver's
+    value, so the message's value and its limit come from the SAME clause (the
+    top-level rule columns are only a mirror of clause[0], so rendering
+    rule.threshold_value showed the wrong link's limit).
+    Returns (None, False, None) if no clauses could be evaluated.
 
     If group_cache is provided, clauses reuse the pre-fetched OpenSearch
     results from the same cycle (§9.4). Without it, falls back to direct
     _run_group_query (test/standalone path).
     """
     if not rule.clauses:
-        return None, False
+        return None, False, None
 
-    clause_metrics: list[float] = []
-    clause_breaches: list[bool] = []
+    clauses_detail: list[dict] = []  # {value, breached, metric_field, condition, threshold_value}
 
     for clause in rule.clauses:
         ds_raw = clause.get("data_source")
@@ -681,7 +686,7 @@ async def _evaluate_composite_rule(
         ds = ds_raw
         mf = mf_raw
         cond = clause.get("condition", ">")
-        thresh = clause.get("threshold_value", 0.0)
+        thresh = float(clause.get("threshold_value", 0.0) or 0.0)
         window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
         target_key = clause.get("target_key")
         aggregation = clause.get("aggregation", "avg")
@@ -699,19 +704,27 @@ async def _evaluate_composite_rule(
         if val is None:
             break
 
-        clause_metrics.append(val)
-        clause_breaches.append(_check_condition(val, cond, thresh))
+        clauses_detail.append({
+            "value": val,
+            "breached": _check_condition(val, cond, thresh),
+            "metric_field": mf,
+            "condition": cond,
+            "threshold_value": thresh,
+        })
 
-    if len(clause_metrics) != len(rule.clauses):
-        return None, False  # incomplete evaluation
+    if len(clauses_detail) != len(rule.clauses):
+        return None, False, None  # incomplete evaluation
 
     # Combine with AND/OR
     notify_when = rule.notify_when or "any"
-    condition_met = all(clause_breaches) if notify_when == "all" else any(clause_breaches)
+    condition_met = all(c["breached"] for c in clauses_detail) if notify_when == "all" \
+        else any(c["breached"] for c in clauses_detail)
 
-    # Report the max metric value across breaching clauses (or all clauses if none breach)
-    metric_value = max(clause_metrics)
-    return metric_value, condition_met
+    # Driver = the clause the message describes. Prefer breaching clauses so value+limit
+    # match the reason it fired; if none breach (recovery), the largest-value clause.
+    breaching = [c for c in clauses_detail if c["breached"]]
+    driver = max(breaching or clauses_detail, key=lambda c: c["value"])
+    return driver["value"], condition_met, driver
 
 
 # ponytail: _extract_per_rule_value but takes flat data_source/metric_field instead of a rule object
@@ -845,6 +858,14 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
     for rule, mv, event, fired_orig in notify_queue:
         sev = sev_emoji.get(rule.severity, "🔔")
         resolved = event == "resolved"
+        # Composite: describe the clause that actually fired, not the top-level clause[0]
+        # mirror (a composite's rule.threshold_value is a stale copy of clause[0], so a
+        # packet-loss-5% rule showed "limit > 100"). Single rules: driver is absent → use
+        # the rule's own columns.
+        drv = getattr(rule, "_fired_clause", None)
+        eff_metric_field = drv["metric_field"] if drv else rule.metric_field
+        eff_condition = drv["condition"] if drv else rule.condition
+        eff_threshold = drv["threshold_value"] if drv else rule.threshold_value
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
         # message's time. A reminder keeps fired_at = the original fire, so the operator
         # sees how long the still-unresolved issue has been firing.
@@ -871,18 +892,18 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                     "name": rule.name,
                     "severity": rule.severity,
                     "site_name": rule.site_name,
-                    "metric_field": rule.metric_field,
-                    "condition": rule.condition,
-                    "threshold_value": rule.threshold_value,
+                    "metric_field": eff_metric_field,
+                    "condition": eff_condition,
+                    "threshold_value": eff_threshold,
                 },
                 # Flat aliases for the seeded AlertTemplates.
                 "name": rule.name,
                 "severity": rule.severity,
                 "site_name": rule.site_name,
-                "metric_field": rule.metric_field,
-                "condition": rule.condition,
-                "threshold_value": rule.threshold_value,
-                "threshold": rule.threshold_value,
+                "metric_field": eff_metric_field,
+                "condition": eff_condition,
+                "threshold_value": eff_threshold,
+                "threshold": eff_threshold,
                 "metric_value": mv,
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
@@ -906,9 +927,9 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         # Include the current value AND the configured threshold so even the template-less
         # fallback answers "what value hit, and what was the limit".
         if resolved:
-            lines.append(f"✅ [RESOLVED] {nm} @ {st}: recovered (now {mv}, limit {rule.condition} {rule.threshold_value})")
+            lines.append(f"✅ [RESOLVED] {nm} @ {st}: recovered (now {mv}, limit {eff_condition} {eff_threshold})")
         else:
-            lines.append(f"{sev} [{rule.severity}] {nm} @ {st}: {mv} (limit {rule.condition} {rule.threshold_value})")
+            lines.append(f"{sev} [{rule.severity}] {nm} @ {st}: {mv} (limit {eff_condition} {eff_threshold})")
 
     # If any rule rendered an HTML template, send the rich blocks as one HTML message
     # (grouped, matching the Grafana style) and drop the plain summary header. Otherwise
@@ -1022,10 +1043,13 @@ async def _run_evaluation_cycle() -> None:
             # ── 2. Composite rules (per-rule evaluation) ──
             for rule in composite_rules:
                 try:
-                    metric_value, condition_met = await _evaluate_composite_rule(rule, group_cache)
+                    metric_value, condition_met, driver = await _evaluate_composite_rule(rule, group_cache)
                     if metric_value is None:
                         await _mark_held(rule, db)
                         continue
+                    # Transient (not persisted): tells the notifier which clause fired so the
+                    # message renders that clause's threshold, not the top-level clause[0] mirror.
+                    rule._fired_clause = driver
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:
                     logger.error("Error evaluating composite rule %s (%s): %s", rule.id, rule.name, e)
