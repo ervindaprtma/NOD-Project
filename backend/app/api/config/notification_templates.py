@@ -180,30 +180,23 @@ async def preview_notification_template(
         # Full parity with the engine's fire-time ctx (_flush_batch_notify): if a template
         # renders here, it renders at fire. Missing vars (StrictUndefined) 422 the preview —
         # `event` is the one the HTML templates branch on, so it MUST be present.
-        rule_ctx = {
-            "name": body.name or "Test Rule",
-            "severity": body.severity or "WARNING",
-            "site_name": body.site_name or "Site_FGT-DC",
-            "metric_field": body.metric_field or "cpu.usage",
-            "condition": body.condition or ">",
-            "threshold_value": body.threshold_value if body.threshold_value is not None else 80.0,
-        }
+        # Full parity with the engine's fire-time ctx via the shared builder — so a template
+        # that previews also fires (and vice-versa). See sample_render_ctx.
+        from app.services.alert_engine import sample_render_ctx
         event = body.event or "firing"
-        ctx = {
-            "rule": rule_ctx,
-            # Flat aliases for AlertTemplate-style bodies ({{ name }}, {{ threshold }}).
-            **rule_ctx,
-            "threshold": rule_ctx["threshold_value"],
-            "metric_value": body.metric_value if body.metric_value is not None else 95.5,
-            "data_source": "device_uptime",
-            "aggregation": "min",
-            "fired_at": body.fired_at or "01 Jan 2026 12:00:00 WIB",
-            # Reminders/resolves keep fired_at = original trigger; sent_at = this message's time.
-            "sent_at": (body.fired_at or "01 Jan 2026 12:00:00 WIB") if event == "firing"
-                       else "01 Jan 2026 12:20:00 WIB",
-            "event": event,
-            "event_label": "Resolved" if event == "resolved" else "Firing",
-        }
+        ctx = sample_render_ctx(
+            name=body.name or "Test Rule",
+            severity=body.severity or "WARNING",
+            site_name=body.site_name or "Site_FGT-DC",
+            metric_field=body.metric_field or "cpu.usage",
+            condition=body.condition or ">",
+            threshold_value=body.threshold_value if body.threshold_value is not None else 80.0,
+            metric_value=body.metric_value if body.metric_value is not None else 95.5,
+            fired_at=body.fired_at or "01 Jan 2026 12:00:00 WIB",
+            sent_at=(body.fired_at or "01 Jan 2026 12:00:00 WIB") if event == "firing"
+                    else "01 Jan 2026 12:20:00 WIB",
+            event=event,
+        )
 
         rendered = {}
         try:

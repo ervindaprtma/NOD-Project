@@ -152,30 +152,21 @@ async def preview_template_rule(
 
     # §9.5: render via sandbox. StrictUndefined on the engine surfaces
     # template typos to the operator at preview time, not at fire time.
-    from app.services.alert_engine import _render_template
+    from app.services.alert_engine import _render_template, sample_render_ctx
 
-    render_ctx = {
-        "rule": {
-            "name": body.name,
-            "severity": merged.get("severity", "WARNING"),
-            "site_name": merged.get("site_name"),
-            "metric_field": merged.get("metric_field", ""),
-            "condition": merged.get("condition", ">"),
-            "threshold_value": merged.get("threshold_value", 0.0),
-        },
-        # Flat aliases — match the seeded templates' body syntax
-        "name": body.name,
-        "severity": merged.get("severity", "WARNING"),
-        "site_name": merged.get("site_name"),
-        "metric_field": merged.get("metric_field", ""),
-        "condition": merged.get("condition", ">"),
-        "threshold_value": merged.get("threshold_value", 0.0),
-        "threshold": merged.get("threshold_value", 0.0),
-        "metric_value": 0.0,
-        "data_source": merged.get("data_source", ""),
-        "aggregation": merged.get("aggregation", "avg"),
-        "fired_at": "—",
-    }
+    # Shared builder → parity with the fire-time ctx (see sample_render_ctx).
+    render_ctx = sample_render_ctx(
+        name=body.name,
+        severity=merged.get("severity", "WARNING"),
+        site_name=merged.get("site_name") or "Site_FGT-DC",
+        metric_field=merged.get("metric_field", "") or "iface.throughput_mbps",
+        condition=merged.get("condition", ">"),
+        threshold_value=merged.get("threshold_value", 0.0) or 0.0,
+        metric_value=0.0,
+        data_source=merged.get("data_source", "") or "interface_stats",
+        aggregation=merged.get("aggregation", "avg"),
+        fired_at="—",
+    )
     rendered = AlertTemplateRead.model_validate(template)
     try:
         if template.subject_template:

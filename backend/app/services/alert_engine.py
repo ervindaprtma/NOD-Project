@@ -110,6 +110,39 @@ def _render_template(text: str, ctx: dict) -> str:
     return rendered
 
 
+def sample_render_ctx(
+    *, name: str = "Test Rule", severity: str = "WARNING", site_name: str = "Site_FGT-DC",
+    metric_field: str = "iface.throughput_mbps", condition: str = ">",
+    threshold_value: float = 80.0, metric_value: float = 95.5, data_source: str = "interface_stats",
+    aggregation: str = "max", fired_at: str = "01 Jan 2026 12:00:00 WIB",
+    sent_at: str | None = None, event: str = "firing",
+) -> dict:
+    """A fully-populated preview context — EVERY variable the fire-time notifier
+    (_flush_batch_notify) provides, with sample values. Preview endpoints must use this so a
+    template that renders in preview also renders when it fires (and vice-versa): the two used
+    to be hand-maintained copies and drifted, 422-ing previews of templates that used newer
+    vars. Update this whenever _flush_batch_notify's ctx gains a key."""
+    rc = {"name": name, "severity": severity, "site_name": site_name,
+          "metric_field": metric_field, "condition": condition, "threshold_value": threshold_value}
+    is_vol = metric_field in ("total_bytes", "top_user_bytes")
+    return {
+        "rule": rc, **rc, "threshold": threshold_value,
+        "metric_value": metric_value, "data_source": data_source, "aggregation": aggregation,
+        "fired_at": fired_at, "sent_at": sent_at if sent_at is not None else fired_at,
+        "event": event, "event_label": "Resolved" if event == "resolved" else "Firing",
+        # interface throughput extras
+        "link_max_mbps": 100.0, "utilization_pct": 63.0, "threshold_pct": 50.0,
+        # friendly target + appid scope (samples so target/appid templates render richly)
+        "target_name": "WAN LDP", "target_key": "16",
+        "filter_app": "YouTube", "filter_proto": "TCP", "filter_port": 443,
+        "filter_label": "app=YouTube, port=443",
+        # VPN capacity (metric_mb/threshold_mb only meaningful for a byte-volume metric)
+        "vpn_active_users": 7, "vpn_total_mb": 5500.0, "vpn_top_user_mb": 2100.0,
+        "metric_mb": round(metric_value / 1_000_000, 1) if is_vol else None,
+        "threshold_mb": round(threshold_value / 1_000_000, 1) if is_vol else None,
+    }
+
+
 # ── P1: Group query runner ──────────────────────────────────────
 # Rules sharing the same (data_source, site_name, evaluation_window_minutes)
 # are evaluated with a single OpenSearch call.  Results are cached in a
