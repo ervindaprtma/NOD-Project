@@ -286,6 +286,30 @@ def _grafana_tpl(name: str, icon: str, title: str, service: str, metric_fire: st
 
 _L = "{{ rule.condition|e }} {{ rule.threshold_value }}"
 
+
+def _vpn_lines(count_label: str) -> tuple[str, str]:
+    """Fire/resolve value lines for a VPN capacity template. Renders the consumed volume in MB
+    for a byte-volume rule (metric_mb set), else the count (users/tunnels). Always appends the
+    live active/total/top-user context when the engine provides it. `is defined` guards keep it
+    safe in the template preview, which renders with a minimal ctx."""
+    fire = (
+        "{% if metric_mb is defined and metric_mb is not none %}"
+        "<b>Consumed:</b> <b>{{ metric_mb }} MB</b> (limit {{ rule.condition|e }} {{ threshold_mb }} MB)"
+        "{% else %}<b>" + count_label + ":</b> <b>{{ metric_value }}</b> (limit " + _L + "){% endif %}"
+        "{% if vpn_active_users is defined and vpn_active_users is not none %}"
+        "\n👥 <b>Active:</b> {{ vpn_active_users }} · <b>Total:</b> {{ vpn_total_mb }} MB · <b>Top user:</b> {{ vpn_top_user_mb }} MB{% endif %}"
+    )
+    res = (
+        "{% if metric_mb is defined and metric_mb is not none %}"
+        "<b>Consumed:</b> {{ metric_mb }} MB (limit {{ rule.condition|e }} {{ threshold_mb }} MB)"
+        "{% else %}<b>" + count_label + ":</b> {{ metric_value }} (limit " + _L + "){% endif %}"
+    )
+    return fire, res
+
+
+_SSL_FIRE, _SSL_RES = _vpn_lines("Active Users")
+_IPSEC_FIRE, _IPSEC_RES = _vpn_lines("Active Tunnels")
+
 SEED_NOTIFICATION_TEMPLATES: list[dict] = [
     {
         "name": "Default Alert",
@@ -305,13 +329,11 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "<b>Volume:</b> {{ (metric_value/1000000)|round(1) }} MB (limit {{ rule.condition|e }} {{ (rule.threshold_value/1000000)|round(0) }} MB)",
         "⚠️ Check bandwidth hog / DDoS / backup job", "🎉 Traffic back to normal."),
     _grafana_tpl("SSL VPN Capacity", "🔑", "SSL VPN", "SSL VPN",
-        "<b>Active Users:</b> <b>{{ metric_value }}</b> (limit " + _L + ")",
-        "<b>Active Users:</b> {{ metric_value }} (limit " + _L + ")",
-        "⚠️ Check license capacity / concurrent users", "🎉 Capacity back to normal."),
-    _grafana_tpl("IPsec Tunnel Status", "🔗", "IPSEC TUNNEL", "IPsec",
-        "<b>Active Tunnels:</b> <b>{{ metric_value }}</b> (alert when " + _L + ")",
-        "<b>Active Tunnels:</b> {{ metric_value }} (expected clears " + _L + ")",
-        "⚠️ Check tunnel peer / IKE / routing", "🎉 Tunnels back up."),
+        _SSL_FIRE, _SSL_RES,
+        "⚠️ Check license capacity / concurrent users / heavy consumers", "🎉 Capacity back to normal."),
+    _grafana_tpl("IPsec VPN Capacity", "🔗", "IPSEC VPN", "IPsec",
+        _IPSEC_FIRE, _IPSEC_RES,
+        "⚠️ Check tunnel peer / IKE / routing / heavy consumers", "🎉 Tunnels back to normal."),
     _grafana_tpl("Device Availability Uptime", "🖥️", "DEVICE AVAILABILITY", "Device Uptime",
         "<b>Availability:</b> <b>{{ metric_value|round(2) }}%</b> (target " + _L + "%)",
         "<b>Availability:</b> {{ metric_value|round(2) }}% (target " + _L + "%)",
@@ -336,8 +358,22 @@ async def seed_notification_templates() -> int:
     sever AlertRule.notification_template_id links.
     """
     from app.db.models import NotificationTemplate
+    from sqlalchemy import update
 
     async with AsyncSessionLocal() as db:
+        # Rename the old "IPsec Tunnel Status" → "IPsec VPN Capacity" (name only, so its body and
+        # any rule links are preserved) when the new name isn't taken. Lets existing deployments
+        # pick up the rename without clobbering a customized body — edit the body in the UI to
+        # add the volume lines.
+        names0 = set((await db.execute(select(NotificationTemplate.name))).scalars().all())
+        if "IPsec Tunnel Status" in names0 and "IPsec VPN Capacity" not in names0:
+            await db.execute(
+                update(NotificationTemplate)
+                .where(NotificationTemplate.name == "IPsec Tunnel Status")
+                .values(name="IPsec VPN Capacity")
+            )
+            await db.commit()
+
         existing_names = set(
             (await db.execute(select(NotificationTemplate.name))).scalars().all()
         )
@@ -467,6 +503,31 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_conditions": [">", ">=", "=="],
         "example_threshold": 100.0,
     },
+    {
+        "data_source": "vpn_ssl",
+        "field_key": "total_bytes",
+        "display_name": "SSL VPN Total Consumed",
+        "description": "Total volume (bytes_in+bytes_out) consumed by all active SSL VPN users "
+                       "in the window — the same per-user bytes the VPN Sessions table shows. "
+                       "Threshold entered as MB/GB.",
+        "unit": "bytes",
+        "category": "capacity",
+        "valid_aggregations": ["max", "avg"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 5_000_000_000.0,  # 5 GB
+    },
+    {
+        "data_source": "vpn_ssl",
+        "field_key": "top_user_bytes",
+        "display_name": "SSL VPN Top User Consumed",
+        "description": "Volume consumed by the single heaviest active SSL VPN user — catches one "
+                       "user saturating the link. Threshold entered as MB/GB.",
+        "unit": "bytes",
+        "category": "capacity",
+        "valid_aggregations": ["max", "avg"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 1_000_000_000.0,  # 1 GB
+    },
     # vpn_ipsec
     {
         "data_source": "vpn_ipsec",
@@ -478,6 +539,30 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_aggregations": ["avg", "max"],
         "valid_conditions": ["<", "<="],
         "example_threshold": 1.0,
+    },
+    {
+        "data_source": "vpn_ipsec",
+        "field_key": "total_bytes",
+        "display_name": "IPsec VPN Total Consumed",
+        "description": "Total volume (bytes_in+bytes_out) consumed by all active IPsec users in "
+                       "the window, unioned across both endpoints. Threshold entered as MB/GB.",
+        "unit": "bytes",
+        "category": "capacity",
+        "valid_aggregations": ["max", "avg"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 5_000_000_000.0,  # 5 GB
+    },
+    {
+        "data_source": "vpn_ipsec",
+        "field_key": "top_user_bytes",
+        "display_name": "IPsec VPN Top User Consumed",
+        "description": "Volume consumed by the single heaviest active IPsec user. Threshold "
+                       "entered as MB/GB.",
+        "unit": "bytes",
+        "category": "capacity",
+        "valid_aggregations": ["max", "avg"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 1_000_000_000.0,  # 1 GB
     },
     # appid_flow - per-path traffic rate (Mbps). Split by flow.traffic.path; the engine
     # honors the "traffic.<path>.<metric>" key via appid_flow_alert_summary.

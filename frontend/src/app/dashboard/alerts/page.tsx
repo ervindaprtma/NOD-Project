@@ -127,6 +127,7 @@ interface RuleForm {
   appid_app: string;
   appid_protocol: string;
   appid_port: string;
+  volume_unit: "MB" | "GB";   // vpn_ssl/vpn_ipsec byte metrics: display unit for the threshold
   aggregation: string;
   condition: string;
   threshold_value: number;
@@ -151,6 +152,7 @@ const emptyForm: RuleForm = {
   appid_app: "",
   appid_protocol: "",
   appid_port: "",
+  volume_unit: "GB",
   aggregation: "avg",
   condition: ">",
   threshold_value: 80,
@@ -342,6 +344,11 @@ export default function AlertsPage() {
   const isIface = form.data_source === "interface_stats";
   // appid_flow single rules can scope the path metric to an app / protocol / dest port.
   const isAppid = form.data_source === "appid_flow" && !isComposite;
+  // vpn byte-volume metrics take a threshold in MB/GB (stored as bytes).
+  const isVpnVolume =
+    (form.data_source === "vpn_ssl" || form.data_source === "vpn_ipsec") &&
+    (form.metric_field === "total_bytes" || form.metric_field === "top_user_bytes");
+  const volFactor = form.volume_unit === "GB" ? 1e9 : 1e6;
   const { data: ifaceData } = useSWR<{ data: { key: string; label: string }[] }>(
     showModal && (isIface || isComposite) && SITES.includes(form.site_name)
       ? `/api/v1/alerts/interfaces?site_name=${form.site_name}`
@@ -521,6 +528,9 @@ export default function AlertsPage() {
       appid_app: rule.appid_filter?.app ?? "",
       appid_protocol: rule.appid_filter?.protocol ?? "",
       appid_port: rule.appid_filter?.port != null ? String(rule.appid_filter.port) : "",
+      // volume metrics store bytes; infer MB/GB for display (≥1 GB → GB).
+      volume_unit: (rule.metric_field === "total_bytes" || rule.metric_field === "top_user_bytes")
+        && rule.threshold_value >= 1e9 ? "GB" : "MB",
       aggregation: rule.aggregation,
       condition: rule.condition,
       threshold_value: rule.threshold_value,
@@ -1340,12 +1350,32 @@ export default function AlertsPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-xs font-medium">Threshold{selectedField?.unit ? ` (${selectedField.unit})` : ""}</label>
-                    <NumberField
-                      value={form.threshold_value}
-                      onValueChange={(n) => setForm({ ...form, threshold_value: n })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                    />
+                    <label className="text-xs font-medium">
+                      Threshold{isVpnVolume ? " (volume)" : selectedField?.unit ? ` (${selectedField.unit})` : ""}
+                    </label>
+                    {isVpnVolume ? (
+                      <div className="flex gap-2 mt-1">
+                        <NumberField
+                          value={Number((form.threshold_value / volFactor).toFixed(3))}
+                          onValueChange={(n) => setForm({ ...form, threshold_value: Math.round(n * volFactor) })}
+                          className="flex-1 px-3 py-1.5 text-sm rounded-md border bg-background"
+                        />
+                        <select
+                          value={form.volume_unit}
+                          onChange={(e) => setForm({ ...form, volume_unit: e.target.value as "MB" | "GB" })}
+                          className="px-2 py-1.5 text-sm rounded-md border bg-background"
+                        >
+                          <option value="MB">MB</option>
+                          <option value="GB">GB</option>
+                        </select>
+                      </div>
+                    ) : (
+                      <NumberField
+                        value={form.threshold_value}
+                        onValueChange={(n) => setForm({ ...form, threshold_value: n })}
+                        className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      />
+                    )}
                   </div>
                 </div>
               )}

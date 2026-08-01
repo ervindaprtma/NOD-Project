@@ -191,7 +191,8 @@ async def _run_group_query(
             elif data_source == "vpn_ssl":
                 from app.opensearch import sslvpn as sslvpn_qb
 
-                result = await sslvpn_qb.active_sslvpn_users_count(
+                # {count, total_bytes, top_user_bytes} — extractor picks count or a volume metric.
+                result = await sslvpn_qb.sslvpn_usage_summary(
                     gte_ms=gte_ms, lte_ms=lte_ms,
                     site_name=sslvpn_qb.sslvpn_measurement_for_site(site_name),
                 )
@@ -199,7 +200,7 @@ async def _run_group_query(
             elif data_source == "vpn_ipsec":
                 from app.opensearch import ipsec as ipsec_qb
 
-                result = await ipsec_qb.active_ipsec_users_count(gte_ms=gte_ms, lte_ms=lte_ms)
+                result = await ipsec_qb.ipsec_usage_summary(gte_ms=gte_ms, lte_ms=lte_ms)
 
             elif data_source == "interface_stats":
                 from app.opensearch import interface_stats as if_qb
@@ -385,15 +386,8 @@ def _extract_per_rule_value(
                 return float(vals or 0.0)
             return 0.0
 
-        if rule.data_source == "vpn_ssl":
-            if isinstance(group_result, (int, float)):
-                return float(group_result)
-            return 0.0
-
-        if rule.data_source == "vpn_ipsec":
-            if isinstance(group_result, (int, float)):
-                return float(group_result)
-            return 0.0
+        if rule.data_source in ("vpn_ssl", "vpn_ipsec"):
+            return _extract_vpn_usage(rule.metric_field, group_result)
 
         if rule.data_source == "interface_stats":
             if isinstance(group_result, dict):
@@ -415,6 +409,21 @@ def _extract_per_rule_value(
 
 
 # ── State-machine helpers ───────────────────────────────────────
+
+
+def _extract_vpn_usage(metric_field: str, group_result: Any) -> float:
+    """Pick a value from the VPN usage summary {count, total_bytes, top_user_bytes}.
+
+    Volume metrics: total_bytes (all active users) / top_user_bytes (heaviest user), in BYTES.
+    Anything else (incl. the legacy active_*_users_count field names) → count. Also accepts a
+    bare number for backward compatibility with the old count-only group result."""
+    if isinstance(group_result, (int, float)):
+        return float(group_result)
+    if isinstance(group_result, dict):
+        if metric_field in ("total_bytes", "top_user_bytes"):
+            return float(group_result.get(metric_field, 0) or 0)
+        return float(group_result.get("count", 0) or 0)
+    return 0.0
 
 
 def _check_condition(value: float, op: str, threshold: float) -> bool:
@@ -820,9 +829,7 @@ def _extract_per_rule_value_flat(
                 return _extract_appid_flow(metric_field, group_result)
             return 0.0
         if data_source in ("vpn_ssl", "vpn_ipsec"):
-            if isinstance(group_result, (int, float)):
-                return float(group_result)
-            return 0.0
+            return _extract_vpn_usage(metric_field, group_result)
         if data_source == "sdwan_sla":
             if isinstance(group_result, dict):
                 base_key, link_idx = _parse_sdwan_metric_field(metric_field)
@@ -951,6 +958,16 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         filter_proto = appid_f.get("protocol")
         filter_port = appid_f.get("port")
         filter_label = _appid_filter_label(appid_f or None)
+        # VPN capacity extras — count + consumed volume in MB, so a template can show the whole
+        # picture regardless of which metric (count / total / top-user) the rule fired on.
+        vpn = getattr(rule, "_vpn_usage", None) or {}
+        vpn_active_users = vpn.get("count")
+        vpn_total_mb = round(vpn["total_bytes"] / 1_000_000, 1) if vpn.get("total_bytes") is not None else None
+        vpn_top_user_mb = round(vpn["top_user_bytes"] / 1_000_000, 1) if vpn.get("top_user_bytes") is not None else None
+        # The fired value in MB/GB when the metric is a byte volume (total_bytes/top_user_bytes).
+        is_vol = eff_metric_field in ("total_bytes", "top_user_bytes")
+        metric_mb = round(mv / 1_000_000, 1) if is_vol else None
+        threshold_mb = round(eff_threshold / 1_000_000, 1) if is_vol else None
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
         # message's time. A reminder keeps fired_at = the original fire, so the operator
         # sees how long the still-unresolved issue has been firing.
@@ -1003,6 +1020,12 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "filter_proto": filter_proto,
                 "filter_port": filter_port,
                 "filter_label": filter_label,
+                # VPN capacity (None for non-VPN rules):
+                "vpn_active_users": vpn_active_users,
+                "vpn_total_mb": vpn_total_mb,
+                "vpn_top_user_mb": vpn_top_user_mb,
+                "metric_mb": metric_mb,
+                "threshold_mb": threshold_mb,
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
                 "fired_at": fired_str,
@@ -1148,6 +1171,11 @@ async def _run_evaluation_cycle() -> None:
                         _appid_filter_label(_appid_filter_for(rule))
                         if rule.data_source == "appid_flow"
                         else _resolve_target_name(rule.data_source, rule.site_name, rule.target_key, group_result)
+                    )
+                    # VPN usage summary {count,total_bytes,top_user_bytes} for the notification.
+                    rule._vpn_usage = (
+                        group_result if rule.data_source in ("vpn_ssl", "vpn_ipsec")
+                        and isinstance(group_result, dict) else None
                     )
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:

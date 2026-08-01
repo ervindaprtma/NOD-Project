@@ -43,6 +43,46 @@ async def _ipsec_usernames(client: AsyncOpenSearch, gte_ms: int, lte_ms: int) ->
     return {b["key"] for b in resp.get("aggregations", {}).get("users", {}).get("buckets", [])}
 
 
+async def _ipsec_usage_one(client: AsyncOpenSearch, gte_ms: int, lte_ms: int) -> dict[str, int]:
+    """Per-username consumed bytes (max cumulative bytes_in+bytes_out) on one cluster."""
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms)}},
+        "aggs": {
+            "by_user": {
+                "terms": {"field": "tag.username.keyword", "size": 1000},
+                "aggs": {
+                    "bin": {"max": {"field": "ipsec_normalized.bytes_in"}},
+                    "bout": {"max": {"field": "ipsec_normalized.bytes_out"}},
+                },
+            }
+        },
+    }
+    resp = await safe_search(client, "ipsec-*", body)
+    out: dict[str, int] = {}
+    for b in resp.get("aggregations", {}).get("by_user", {}).get("buckets", []):
+        out[b["key"]] = int(b.get("bin", {}).get("value") or 0) + int(b.get("bout", {}).get("value") or 0)
+    return out
+
+
+async def ipsec_usage_summary(gte_ms: int = 0, lte_ms: int = 0) -> dict[str, int]:
+    """Volume consumed by active IPsec users in the window (for capacity alerting).
+
+    Unions per-username bytes across BOTH clusters (DC + DRC) so it matches
+    active_ipsec_users_count's coverage; a user on both endpoints is counted once (max,
+    not summed). Returns {count, total_bytes, top_user_bytes}.
+    """
+    merged: dict[str, int] = {}
+    for get_client in (get_ipsec_client, get_dc_client):
+        try:
+            for user, val in (await _ipsec_usage_one(get_client(), gte_ms, lte_ms)).items():
+                merged[user] = max(merged.get(user, 0), val)
+        except Exception:  # a cluster without an ipsec-* index just contributes nothing
+            pass
+    totals = list(merged.values())
+    return {"count": len(merged), "total_bytes": sum(totals), "top_user_bytes": max(totals, default=0)}
+
+
 async def active_ipsec_users_count(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,
