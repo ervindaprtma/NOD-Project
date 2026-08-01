@@ -866,6 +866,14 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         eff_metric_field = drv["metric_field"] if drv else rule.metric_field
         eff_condition = drv["condition"] if drv else rule.condition
         eff_threshold = drv["threshold_value"] if drv else rule.threshold_value
+        # Interface throughput is Mbps in BOTH threshold modes (absolute, or "% of link max"
+        # where threshold_value = link_max × %). So metric_value + threshold_value are Mbps —
+        # the seeded template used to print them with a "%" (only right by luck when link
+        # max = 100). Expose link_max + a real utilization% so a template renders either unit
+        # honestly. Non-throughput rules → link_max None → the % vars are None (StrictUndefined-safe).
+        link_max = getattr(rule, "link_max_mbps", None) or None
+        utilization_pct = round(mv / link_max * 100, 1) if link_max else None
+        threshold_pct = round(eff_threshold / link_max * 100, 1) if link_max else None
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
         # message's time. A reminder keeps fired_at = the original fire, so the operator
         # sees how long the still-unresolved issue has been firing.
@@ -905,6 +913,10 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "threshold_value": eff_threshold,
                 "threshold": eff_threshold,
                 "metric_value": mv,
+                # Interface throughput extras (None for other sources / absolute mode):
+                "link_max_mbps": link_max,
+                "utilization_pct": utilization_pct,
+                "threshold_pct": threshold_pct,
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
                 "fired_at": fired_str,

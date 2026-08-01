@@ -313,9 +313,13 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "<b>Availability:</b> {{ metric_value|round(2) }}% (target " + _L + "%)",
         "⚠️ Check device power / uplink / SNMP", "🎉 Device availability restored."),
     _grafana_tpl("Interface Bandwidth Spike", "📊", "INTERFACE BANDWIDTH", "Interface Stats",
-        "<b>Peak Utilization:</b> <b>{{ metric_value|round(1) }}%</b> (limit " + _L + "%)",
-        "<b>Peak Utilization:</b> {{ metric_value|round(1) }}% (limit " + _L + "%)",
-        "⚠️ Check link capacity / top talkers", "🎉 Utilization back to normal."),
+        # metric_value + threshold_value are Mbps (both threshold modes); utilization_pct is
+        # only set in "% of link max" mode, where it shows the real % of the link the peak used.
+        "<b>Peak Throughput:</b> <b>{{ metric_value|round(1) }} Mbps</b> (limit " + _L + " Mbps)"
+        "{% if utilization_pct is defined and utilization_pct %} — {{ utilization_pct }}% of {{ link_max_mbps }} Mbps{% endif %}",
+        "<b>Peak Throughput:</b> {{ metric_value|round(1) }} Mbps (limit " + _L + " Mbps)"
+        "{% if utilization_pct is defined and utilization_pct %} — {{ utilization_pct }}% of {{ link_max_mbps }} Mbps{% endif %}",
+        "⚠️ Check link capacity / top talkers", "🎉 Throughput back to normal."),
 ]
 
 
