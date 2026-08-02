@@ -374,6 +374,27 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "is_default": False,
         "is_user_created": False,
     },
+    # Device Reboot Monitor (kind="reboot"): one message per detected reboot (SNMP uptime
+    # counter reset). Uses the per-event vars (device, device_ip, downtime, new/prev uptime).
+    {
+        "name": "Device Reboot Monitor",
+        "description": "Per-reboot events for a Device Reboot Monitor rule — which device "
+                       "rebooted, how long it was unreachable, and the new uptime it came back with.",
+        "subject_template": "🔁 Device Rebooted: {{ device }}",
+        "body_template": (
+            "🔁 <b>DEVICE REBOOTED</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🖥️ <b>Device:</b> {{ device|e }} ({{ device_ip }})\n"
+            "🏢 <b>Site:</b> {{ site_name|e }}\n"
+            "🕐 <b>Rebooted at:</b> {{ reboot_at }}\n"
+            "⏱️ <b>Unreachable:</b> {{ downtime }}\n"
+            "⬆️ <b>Back up · new uptime:</b> {{ new_uptime }} (was {{ prev_uptime }})\n"
+            "━━━━━━━━━━━━━━━━━━"
+        ),
+        "line_template": None,
+        "is_default": False,
+        "is_user_created": False,
+    },
 ]
 
 

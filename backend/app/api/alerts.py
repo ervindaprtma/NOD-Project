@@ -487,6 +487,21 @@ async def test_alert_rule(
 
     t0 = _time.monotonic()
 
+    # Event monitors (VPN Session / Device Reboot) fire on a state CHANGE detected between
+    # polls, not on a threshold — a dry-run has nothing to compare against, so Test would
+    # otherwise show a meaningless "breach". Return a clear "not applicable" instead.
+    if (rule.kind or "single") in ("session", "reboot"):
+        resp = _finish(0.0, False)
+        kind_label = "VPN Session Monitor" if rule.kind == "session" else "Device Reboot Monitor"
+        signal = "a connect/disconnect" if rule.kind == "session" else "a device reboot"
+        note = (f"{kind_label} is an EVENT monitor — it fires on {signal} detected between polls, "
+                f"not on a threshold, so Test can't dry-run it. It alerts live when the engine sees "
+                f"the change.")
+        resp.data.would_notify = False
+        resp.data.threshold_breached = False
+        resp.data.action_note = (resp.data.action_note + "; " + note).lstrip("; ")
+        return resp
+
     # ── Composite: evaluate EVERY clause with the exact engine functions, then combine
     # with AND/OR. Reuses _run_group_query (so degradation handling matches the engine)
     # + _extract_per_rule_value_flat + _check_condition — if this says breached, the

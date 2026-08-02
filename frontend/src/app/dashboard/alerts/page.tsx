@@ -116,7 +116,7 @@ interface ClauseForm {
 interface RuleForm {
   name: string;
   severity: string;
-  kind: "single" | "composite" | "session";
+  kind: "single" | "composite" | "session" | "reboot";
   notify_when: "any" | "all";   // composite: Any=OR, All=AND
   clauses: ClauseForm[];
   data_source: string;
@@ -235,6 +235,8 @@ export default function AlertsPage() {
   const isComposite = form.kind === "composite";
   // VPN Session Monitor — event on connect/disconnect, not a threshold. Only SSL/IPsec.
   const isSession = form.kind === "session";
+  // Device Reboot Monitor — event on uptime-counter reset, not a threshold. Only device_uptime.
+  const isReboot = form.kind === "reboot";
   // Full catalog (all sources) for the composite clause editor — one call, filtered client-side.
   const { data: allFieldsData } = useSWR<{ data: AlertFieldCatalog[] }>(
     showModal && isComposite ? "/api/v1/alerts/fields" : null,
@@ -552,7 +554,7 @@ export default function AlertsPage() {
     // target_key applies to interface_stats (required) and device_uptime (optional; blank =
     // any device / site-level). Cleared for every other source. Empty string → null.
     // session rules carry the username glob in target_key.
-    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla" || isSession;
+    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla" || isSession || isReboot;
     // link_max_mbps only rides along with interface throughput's %-of-max mode.
     const keepsLinkMax = form.data_source === "interface_stats" && form.metric_field === "iface.throughput_mbps";
 
@@ -581,9 +583,12 @@ export default function AlertsPage() {
       appid_filter = Object.keys(af).length ? af : null;
     }
 
-    // Session monitors have no metric/threshold — fill the NOT-NULL columns with placeholders.
-    const sessionFields = isSession
+    // Session & reboot monitors have no metric/threshold — fill the NOT-NULL columns with
+    // placeholders (the engine ignores them for event rules).
+    const eventFields = isSession
       ? { metric_field: "session", aggregation: "max", condition: "==", threshold_value: 0, link_max_mbps: null }
+      : isReboot
+      ? { data_source: "device_uptime", metric_field: "reboot", aggregation: "max", condition: "==", threshold_value: 0, link_max_mbps: null }
       : {};
 
     const payload = {
@@ -594,7 +599,7 @@ export default function AlertsPage() {
       notification_template_id: form.notification_template_id || null,
       clauses: form.kind === "composite" ? cleanClauses : [],
       ...composite,
-      ...sessionFields,
+      ...eventFields,
     };
     try {
       if (editingRule) {
@@ -1103,16 +1108,22 @@ export default function AlertsPage() {
                   <select
                     value={form.kind}
                     onChange={(e) => {
-                      const kind = e.target.value as "single" | "composite" | "session";
-                      // Session monitors only apply to SSL/IPsec — snap the source when switching in.
+                      const kind = e.target.value as "single" | "composite" | "session" | "reboot";
+                      // Session monitors only apply to SSL/IPsec; reboot monitors only to device_uptime
+                      // — snap the source when switching in.
                       const vpn = form.data_source === "vpn_ssl" || form.data_source === "vpn_ipsec";
-                      setForm({ ...form, kind, data_source: kind === "session" && !vpn ? "vpn_ssl" : form.data_source });
+                      const data_source =
+                        kind === "session" && !vpn ? "vpn_ssl"
+                        : kind === "reboot" ? "device_uptime"
+                        : form.data_source;
+                      setForm({ ...form, kind, data_source });
                     }}
                     className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                   >
                     <option value="single">Single</option>
                     <option value="composite">Composite</option>
                     <option value="session">VPN Session Monitor</option>
+                    <option value="reboot">Device Reboot Monitor</option>
                   </select>
                 </div>
                 {!isComposite ? (
@@ -1121,9 +1132,12 @@ export default function AlertsPage() {
                     <select
                       value={form.data_source}
                       onChange={(e) => setForm({ ...form, data_source: e.target.value })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      disabled={isReboot}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1 disabled:opacity-60"
                     >
-                      {(isSession ? DATA_SOURCES.filter((s) => s.value === "vpn_ssl" || s.value === "vpn_ipsec") : DATA_SOURCES)
+                      {(isSession ? DATA_SOURCES.filter((s) => s.value === "vpn_ssl" || s.value === "vpn_ipsec")
+                        : isReboot ? DATA_SOURCES.filter((s) => s.value === "device_uptime")
+                        : DATA_SOURCES)
                         .map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                     </select>
                   </div>
@@ -1154,7 +1168,7 @@ export default function AlertsPage() {
                     <input
                       value={form.target_key}
                       onChange={(e) => setForm({ ...form, target_key: e.target.value })}
-                      placeholder="blank = all users · e.g. admin*  or  nizamuddin.dzaky"
+                      placeholder="blank = all users · e.g. admin*  or  someone"
                       className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                     />
                     <p className="text-[10px] text-muted-foreground mt-1">
@@ -1178,7 +1192,40 @@ export default function AlertsPage() {
                 </div>
               )}
 
-              {!isComposite && !isSession && (<>
+              {/* Device Reboot Monitor — no threshold; alerts on uptime-counter reset */}
+              {isReboot && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium">Watch devices (optional)</label>
+                    <input
+                      value={form.target_key}
+                      onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                      placeholder="blank = all devices · e.g. 10.80.*  or  FG_DC*"
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Glob match on device IP or hostname (<code>*</code> wildcard). Fires one message per
+                      detected <b>reboot</b> (SNMP uptime counter reset), with the device, how long it was
+                      unreachable, and the new uptime it came back with.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">Detection window (min)</label>
+                    <NumberField
+                      value={form.evaluation_window_minutes}
+                      onValueChange={(n) => setForm({ ...form, evaluation_window_minutes: n })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      min={2}
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      How far back each poll looks for the reboot + its downtime (default 10, min 2 —
+                      at a 30s poll that&apos;s enough samples to measure the outage around the reset).
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!isComposite && !isSession && !isReboot && (<>
               {/* Metric — catalog-driven (choose, don't type) */}
               <div>
                 <label className="text-xs font-medium">Metric</label>

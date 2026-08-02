@@ -50,7 +50,7 @@ class AlertRuleCreate(BaseModel):
     target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
-    kind: str = Field(default="single", pattern=r"^(single|composite|session)$")
+    kind: str = Field(default="single", pattern=r"^(single|composite|session|reboot)$")
     notify_when: str = Field(default="any", pattern=r"^(any|all)$")  # composite: OR / AND
     clauses: list[AlertClause] = Field(default_factory=list)
     enabled: bool = True
@@ -73,7 +73,7 @@ class AlertRuleUpdate(BaseModel):
     target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
-    kind: Optional[str] = Field(default=None, pattern=r"^(single|composite|session)$")
+    kind: Optional[str] = Field(default=None, pattern=r"^(single|composite|session|reboot)$")
     notify_when: Optional[str] = Field(default=None, pattern=r"^(any|all)$")
     clauses: Optional[list[AlertClause]] = None
     enabled: Optional[bool] = None

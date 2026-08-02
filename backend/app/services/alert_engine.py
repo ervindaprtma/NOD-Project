@@ -141,11 +141,16 @@ def sample_render_ctx(
         "metric_mb": round(metric_value / 1_000_000, 1) if is_vol else None,
         "threshold_mb": round(threshold_value / 1_000_000, 1) if is_vol else None,
         # VPN session-monitor events (kind="session"): the per-event fields.
-        "vpn_type": "SSL VPN", "vpn_user": "nizamuddin.dzaky",
+        "vpn_type": "SSL VPN", "vpn_user": "someone",
         "remote_ip": "203.0.113.5", "active_ip": "10.212.134.8", "device": "FG_DC_GTN-01",
         "started_at": fired_at, "ended_at": "—", "duration": "—",
         "bytes_in": 524_000_000, "bytes_out": 88_000_000,
         "bytes_in_h": "524.0 MB", "bytes_out_h": "88.0 MB", "bytes_total_h": "612.0 MB",
+        # Device reboot-monitor events (kind="reboot"): the per-event fields.
+        "device_ip": "10.80.150.1", "reboot_at": fired_at,
+        "downtime_seconds": 150, "downtime": "2m 30s",
+        "new_uptime_seconds": 240, "new_uptime": "4m",
+        "prev_uptime_seconds": 3_218_400, "prev_uptime": "37d 6h",
     }
 
 
@@ -1331,6 +1336,199 @@ async def _evaluate_session_rule(rule: AlertRule, db: AsyncSession) -> None:
             logger.error("Session event send failed for %s/%s: %s", rule.id, user, e)
 
 
+# ── Device Reboot Monitor (kind="reboot") ───────────────────────
+# Event-on-state-change, not threshold: each poll snapshots the currently-reporting devices'
+# uptime counters and diffs against the previous snapshot. A DECREASE in a device's SNMP
+# sys_uptime = a reboot (counter reset), so we emit one event carrying which device rebooted,
+# how long it was unreachable, and the new uptime it came back with. Reuses the same
+# device_availability() query the device_uptime threshold rules use (what alerts == what the
+# Resources ▸ Availability page shows).
+
+async def _fetch_device_reboots(rule: AlertRule) -> dict[str, dict] | None:
+    """Currently-reporting devices for a reboot rule, as {device_key(IP):
+    {hostname, uptime_seconds, downtime_seconds}}. `downtime_seconds` is the gap around the
+    most recent real reset (a 32-bit counter wrap is excluded — note is None only for a genuine
+    reboot). target_key is an optional device glob (IP or hostname, e.g. "10.80.*"); blank = all
+    devices at the site. Returns None on a read failure so the caller HOLDS instead of treating
+    a failed query as 'no reboots'."""
+    now_ms = int(_time.time() * 1000)
+    window = max(rule.evaluation_window_minutes or 10, 2)
+    gte_ms = now_ms - window * 60 * 1000
+    try:
+        from app.opensearch import device_uptime as du
+        result = await du.device_availability(
+            site_name=rule.site_name or "Site_FGT-DC", gte_ms=gte_ms, lte_ms=now_ms, now_ms=now_ms,
+        )
+    except Exception as e:
+        logger.error("Reboot fetch failed for rule %s (%s): %s", rule.id, rule.name, e)
+        return None
+    out: dict[str, dict] = {}
+    for d in (result or {}).get("devices", []) or []:
+        up = d.get("uptime_seconds")
+        key = d.get("device_key")
+        if up is None or not key:
+            continue
+        reboots = [r for r in (d.get("reboots") or []) if r.get("note") is None]
+        out[key] = {
+            "hostname": d.get("hostname") or key,
+            "uptime_seconds": float(up),
+            "downtime_seconds": int(reboots[-1]["downtime_seconds"]) if reboots else 0,
+        }
+    glob = (rule.target_key or "").strip().lower()
+    if glob:
+        import fnmatch
+        out = {k: v for k, v in out.items()
+               if fnmatch.fnmatch(str(k).lower(), glob) or fnmatch.fnmatch(v["hostname"].lower(), glob)}
+    return out
+
+
+def _fmt_secs(secs: int | float | None) -> str:
+    """Compact duration from a raw second count: '2h 5m' / '3m 10s' / '45s' / '—'."""
+    s = int(secs or 0)
+    if s <= 0:
+        return "—"
+    h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+    return f"{h}h {m}m" if h else f"{m}m {sec}s" if m else f"{sec}s"
+
+
+def _diff_reboots(
+    prev: dict[str, dict], current: dict[str, dict], now_ms: int,
+) -> tuple[list[tuple[str, dict]], dict[str, dict]]:
+    """Pure diff of two device-uptime snapshots → (events, new_state).
+
+    A device whose uptime counter DECREASED since the last poll rebooted (SNMP sys_uptime is
+    monotonic, so a drop is unambiguous). Events carry the new uptime + the pre-reboot uptime.
+    A device new to `current` is baselined silently (first sighting ≠ reboot). new_state records
+    each current device's uptime for the next comparison. Pure — no cluster, no DB."""
+    events: list[tuple[str, dict]] = []
+    for k, v in current.items():
+        p = prev.get(k)
+        if p is None:
+            continue
+        prev_up = float(p.get("uptime_seconds", 0.0))
+        cur_up = float(v.get("uptime_seconds", 0.0))
+        # A genuine reset drops uptime toward zero; the +1s guard ignores SNMP tick rounding.
+        if cur_up + 1.0 < prev_up:
+            events.append((k, {**v, "reboot_at": now_ms, "prev_uptime_seconds": prev_up}))
+    new_state = {
+        k: {"hostname": v.get("hostname"), "uptime_seconds": float(v.get("uptime_seconds", 0.0))}
+        for k, v in current.items()
+    }
+    return events, new_state
+
+
+async def _send_reboot_event(rule: AlertRule, device_key: str, info: dict) -> None:
+    """Render + send ONE message for a single detected device reboot."""
+    from app.opensearch.device_uptime import format_uptime_short
+    new_up = float(info.get("uptime_seconds") or 0.0)
+    prev_up = float(info.get("prev_uptime_seconds") or 0.0)
+    downtime = int(info.get("downtime_seconds") or 0)
+    hostname = info.get("hostname") or str(device_key)
+    ctx = {
+        "rule": {"name": rule.name, "severity": rule.severity, "site_name": rule.site_name},
+        "name": rule.name, "severity": rule.severity, "site_name": rule.site_name,
+        "device": hostname, "device_ip": device_key, "target_key": device_key,
+        "reboot_at": _fmt_wib(info.get("reboot_at")),
+        "downtime_seconds": downtime, "downtime": _fmt_secs(downtime),
+        "new_uptime_seconds": new_up, "new_uptime": format_uptime_short(new_up),
+        "prev_uptime_seconds": prev_up, "prev_uptime": format_uptime_short(prev_up),
+        "event": "rebooted", "event_label": "Rebooted",
+        "sent_at": datetime.now(_WIB).strftime("%d %b %Y %H:%M:%S WIB"),
+    }
+    # Template: assigned (active) → seeded "Device Reboot Monitor" → hardcoded line.
+    tmpl_text: str | None = None
+    try:
+        async with AsyncSessionLocal() as tdb:
+            if rule.notification_template_id:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.id == rule.notification_template_id)
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+            if not tmpl_text:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.name == "Device Reboot Monitor")
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+    except Exception as e:
+        logger.error("Reboot template fetch failed: %s", e)
+
+    body: str | None = None
+    if tmpl_text:
+        try:
+            body = _render_template(tmpl_text, ctx)
+        except Exception as e:
+            logger.error("Reboot template render failed for rule %s: %s", rule.id, e)
+    if body is None:
+        h_e, ip_e, s_e = html.escape(hostname), html.escape(str(device_key)), html.escape(rule.site_name or "—")
+        body = (f"🔁 <b>Device Rebooted</b>\n"
+                f"🖥️ <b>Device:</b> {h_e} ({ip_e})\n"
+                f"🏢 <b>Site:</b> {s_e}\n"
+                f"🕐 <b>Rebooted at:</b> {ctx['reboot_at']}\n"
+                f"⏱️ <b>Unreachable:</b> {ctx['downtime']}\n"
+                f"⬆️ <b>Back up · new uptime:</b> {ctx['new_uptime']} (was {ctx['prev_uptime']})")
+    parse_mode = "HTML" if "<b>" in body else None
+    subject = f"Device Rebooted: {hostname}"
+    try:
+        from app.services.notifier_helper import send_alert, load_channel_configs
+        db_configs = await load_channel_configs()
+        for channel in rule.notify_channels:
+            cfg = db_configs.get(channel)
+            if not cfg:
+                continue
+            try:
+                await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+            except Exception as e:
+                logger.error("Reboot notify failed for %s: %s", channel, e)
+    except Exception as e:
+        logger.error("Reboot notify error: %s", e)
+
+
+async def _evaluate_reboot_rule(rule: AlertRule, db: AsyncSession) -> None:
+    """Diff current device uptimes vs the previous poll → reboot events (uptime-counter reset)."""
+    current = await _fetch_device_reboots(rule)
+    state = (await db.execute(select(AlertState).where(AlertState.rule_id == rule.id))).scalar_one_or_none()
+    if not state:
+        state = AlertState(rule_id=rule.id, state="INACTIVE")
+        db.add(state)
+    now = datetime.now(timezone.utc)
+    now_ms = int(_time.time() * 1000)
+    state.last_evaluated_at = now
+
+    if current is None:  # read failed → hold, never emit a phantom reboot on a bad read
+        state.last_read_degraded = True
+        await db.commit()
+        return
+    state.last_read_degraded = False
+    state.last_value = float(len(current))
+    prev = state.session_state
+
+    # First run (or after enable): baseline only — a device already up isn't a reboot.
+    if prev is None:
+        state.session_state = {
+            k: {"hostname": v["hostname"], "uptime_seconds": v["uptime_seconds"]}
+            for k, v in current.items()
+        }
+        state.last_state_change_at = now
+        await db.commit()
+        return
+
+    events, new_state = _diff_reboots(prev, current, now_ms)
+    state.session_state = new_state
+    if events:
+        state.last_state_change_at = now
+    await db.commit()
+
+    for device_key, info in events:
+        try:
+            await _send_reboot_event(rule, device_key, info)
+        except Exception as e:
+            logger.error("Reboot event send failed for %s/%s: %s", rule.id, device_key, e)
+
+
 async def _run_evaluation_cycle() -> None:
     """One tick: enabled rules → grouped OS queries → state machine → batched notify.
 
@@ -1363,9 +1561,10 @@ async def _run_evaluation_cycle() -> None:
                 logger.info("Maintenance window active — skipping %s rule(s)", skipped)
 
             # Split single vs composite
-            single_rules = [r for r in active_rules if r.kind not in ("composite", "session")]
+            single_rules = [r for r in active_rules if r.kind not in ("composite", "session", "reboot")]
             composite_rules = [r for r in active_rules if r.kind == "composite"]
             session_rules = [r for r in active_rules if r.kind == "session"]
+            reboot_rules = [r for r in active_rules if r.kind == "reboot"]
 
             # ── 1. Single rules (P1 batched) ──
             # Group key is (ds, site, window, appid_sig): appid_flow rules with a distinct
@@ -1455,6 +1654,14 @@ async def _run_evaluation_cycle() -> None:
                     await _evaluate_session_rule(rule, db)
                 except Exception as e:
                     logger.error("Error evaluating session rule %s (%s): %s", rule.id, rule.name, e)
+                    await db.rollback()
+
+            # ── 5. Device reboot monitors (event-on-change, sent inline per event) ──
+            for rule in reboot_rules:
+                try:
+                    await _evaluate_reboot_rule(rule, db)
+                except Exception as e:
+                    logger.error("Error evaluating reboot rule %s (%s): %s", rule.id, rule.name, e)
                     await db.rollback()
 
         except Exception as e:
