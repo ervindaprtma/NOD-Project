@@ -488,6 +488,23 @@ def _check_condition(value: float, op: str, threshold: float) -> bool:
     return False
 
 
+def _clause_severity(c: dict) -> float:
+    """How stressed a composite clause is relative to ITS OWN limit, normalized so
+    clauses of different units/scales compare fairly. Picks the driver clause a message
+    describes — the same clause at fire (most over its limit) and at resolve (closest to
+    it). Without this the resolve path took the largest RAW value, so a recovered
+    packet-loss-5% clause (now 2) lost to a latency clause (26.53, limit 100) and the
+    message borrowed 'limit > 100'. Direction-aware; guards divide-by-zero."""
+    val = c.get("value") or 0.0
+    thr = c.get("threshold_value") or 0.0
+    op = c.get("condition", ">")
+    if op in ("<", "<="):          # lower is worse → severity rises as value drops below limit
+        return (thr / val) if val else float("inf")
+    if op == "==":                 # equality is binary — breached or not
+        return 1.0 if c.get("breached") else 0.0
+    return (val / thr) if thr else float("inf")   # ">", ">=": higher is worse
+
+
 def _resolve_target_name(
     data_source: str | None, site_name: str | None, target_key: str | None,
     group_result: Any = None,
@@ -849,9 +866,11 @@ async def _evaluate_composite_rule(
         else any(c["breached"] for c in clauses_detail)
 
     # Driver = the clause the message describes. Prefer breaching clauses so value+limit
-    # match the reason it fired; if none breach (recovery), the largest-value clause.
+    # match the reason it fired; if none breach (recovery), the clause CLOSEST to its own
+    # limit — normalized per-clause so a recovered packet-loss-5% rule keeps describing
+    # packet loss instead of borrowing a higher-raw-value latency clause's "limit > 100".
     breaching = [c for c in clauses_detail if c["breached"]]
-    driver = max(breaching or clauses_detail, key=lambda c: c["value"])
+    driver = max(breaching or clauses_detail, key=_clause_severity)
     return driver["value"], condition_met, driver
 
 
