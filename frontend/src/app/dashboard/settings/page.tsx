@@ -584,7 +584,10 @@ function TelegramConfigForm({
 
   async function handleSave() {
     setError("");
-    if (!botToken && !tokenIsSet) {
+    // Require the token only when creating a brand-new channel (no stored config).
+    // For an existing channel, a settings-only change (min_severity / enabled) must not be
+    // blocked by a missing secret — that stranded remote configs whose token was never stored.
+    if (!botToken && !tokenIsSet && !config) {
       setError("Bot token is required.");
       return;
     }
@@ -755,8 +758,8 @@ function SMTPConfigForm({
     setError("");
     if (!host) { setError("SMTP host is required."); return; }
     if (!fromAddress) { setError("From address is required."); return; }
-    if (!user && !userSet) { setError("Username is required."); return; }
-    if (!password && !passSet) { setError("Password is required."); return; }
+    if (!user && !userSet && !config) { setError("Username is required."); return; }
+    if (!password && !passSet && !config) { setError("Password is required."); return; }
 
     setSaving(true);
     try {
@@ -935,7 +938,7 @@ function WhatsAppConfigForm({
   async function handleSave() {
     setError("");
     if (!phoneNumberId) { setError("Phone Number ID is required."); return; }
-    if (!apiToken && !tokenSet) { setError("API token is required."); return; }
+    if (!apiToken && !tokenSet && !config) { setError("API token is required."); return; }
 
     setSaving(true);
     try {
@@ -1058,7 +1061,7 @@ function DiscordConfigForm({
 
   async function handleSave() {
     setError("");
-    if (!webhookUrl && !urlSet) {
+    if (!webhookUrl && !urlSet && !config) {
       setError("Webhook URL is required.");
       return;
     }
