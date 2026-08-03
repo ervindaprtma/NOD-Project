@@ -28,6 +28,27 @@ def test_disconnect_carries_original_start_and_ended_now():
     assert new_state == {}
 
 
+def test_disconnect_stamps_real_last_seen_not_now():
+    # last_seen captured while the user was still visible → ended_at is that real edge,
+    # NOT the poll (now_ms) that finally noticed the absence. The window still decides WHEN.
+    prev = {"alice": {**_s("1.1.1.1", "10.0.0.1"), "started_at": 1000, "last_seen": 7000}}
+    events, _ = _diff_sessions(prev, current={}, now_ms=13000)  # noticed ~6s of hold later
+    ev, user, info = events[0]
+    assert ev == "disconnected" and user == "alice"
+    assert info["ended_at"] == 7000              # real last activity, not 13000
+    assert _fmt_duration(info["started_at"], info["ended_at"]) == "6s"  # 1000→7000 real span, not 1000→13000
+
+
+def test_new_state_carries_last_seen_for_a_future_disconnect():
+    # A still-connected user's newest last_seen is persisted, so the NEXT poll's disconnect
+    # can stamp it. (Two-poll story: seen at 7000, gone next poll.)
+    current = {"alice": {**_s("1.1.1.1", "10.0.0.1"), "login_ms": 1000, "last_seen": 7000}}
+    _, new_state = _diff_sessions(prev={}, current=current, now_ms=8000)
+    assert new_state["alice"]["last_seen"] == 7000
+    events, _ = _diff_sessions(new_state, current={}, now_ms=13000)
+    assert events[0][2]["ended_at"] == 7000      # the persisted edge, not 13000
+
+
 def test_stay_connected_preserves_original_started_at():
     prev = {"alice": {**_s("1.1.1.1", "10.0.0.1"), "started_at": 1000}}
     current = {"alice": _s("1.1.1.1", "10.0.0.1")}

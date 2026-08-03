@@ -444,6 +444,7 @@ async def active_sslvpn_users(
             "bytes_in": int(site_data.get("bytes_in", 0) or 0),
             "bytes_out": int(site_data.get("bytes_out", 0) or 0),
             "session_started": session_started,
+            "last_seen": latest_ms or None,  # newest sample ts — the real last-activity edge
         })
 
     return results
