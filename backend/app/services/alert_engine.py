@@ -486,7 +486,7 @@ def _check_condition(value: float, op: str, threshold: float) -> bool:
 
 
 def _resolve_target_name(
-    data_source: str, site_name: str | None, target_key: str | None,
+    data_source: str | None, site_name: str | None, target_key: str | None,
     group_result: Any = None,
 ) -> str | None:
     """Friendly name for a rule's target so notifications read "WAN LDP" not "16".
@@ -1157,8 +1157,8 @@ async def _fetch_active_vpn_sessions(rule: AlertRule) -> dict[str, dict] | None:
                                       "bytes_in": int(u.get("bytes_in") or 0),
                                       "bytes_out": int(u.get("bytes_out") or 0)}
         elif rule.data_source == "vpn_ipsec":
-            from app.opensearch import ipsec as q
-            for u in await q.active_ipsec_users_detail(gte_ms=gte_ms, lte_ms=now_ms):
+            from app.opensearch import ipsec as ipsec_q
+            for u in await ipsec_q.active_ipsec_users_detail(gte_ms=gte_ms, lte_ms=now_ms):
                 out[u["username"]] = {"remote_ip": u.get("remote_gw_ip", ""),
                                       "active_ip": u.get("assigned_ip", ""), "device": u.get("device", ""),
                                       "bytes_in": int(u.get("bytes_in") or 0),
@@ -1636,8 +1636,9 @@ async def _run_evaluation_cycle() -> None:
                     # message renders that clause's threshold, not the top-level clause[0] mirror.
                     rule._fired_clause = driver
                     # Name the driver clause's target (static maps → no query; device falls back to IP).
+                    drv = driver or {}
                     rule._target_name = _resolve_target_name(
-                        driver.get("data_source"), rule.site_name, driver.get("target_key")
+                        drv.get("data_source"), rule.site_name, drv.get("target_key")
                     )
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:

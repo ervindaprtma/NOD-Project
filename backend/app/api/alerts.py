@@ -447,7 +447,10 @@ async def test_alert_rule(
     from app.services.notifier_helper import load_channel_configs
     channel_cfgs = await load_channel_configs()
 
-    def _finish(metric_value, breached, clause_results=None):
+    def _finish(
+        metric_value: float, breached: bool,
+        clause_results: list[AlertTestClauseResult] | None = None,
+    ) -> APIResponse[AlertTestResult]:
         elapsed = int((_time.monotonic() - t0) * 1000)
         would_notify = True
         notes: list[str] = []
@@ -492,6 +495,7 @@ async def test_alert_rule(
     # otherwise show a meaningless "breach". Return a clear "not applicable" instead.
     if (rule.kind or "single") in ("session", "reboot"):
         resp = _finish(0.0, False)
+        assert resp.data is not None  # _finish always sets data
         kind_label = "VPN Session Monitor" if rule.kind == "session" else "Device Reboot Monitor"
         signal = "a connect/disconnect" if rule.kind == "session" else "a device reboot"
         note = (f"{kind_label} is an EVENT monitor — it fires on {signal} detected between polls, "
@@ -546,6 +550,7 @@ async def test_alert_rule(
                 combined = any(breaches)
             reported = max(values) if values else 0.0
             resp = _finish(reported, combined, clause_results)
+            assert resp.data is not None  # _finish always sets data
             if any_held:
                 held = [c.metric_field for c in clause_results if c.value is None]
                 extra = (f"HELD — clause(s) {', '.join(held)} returned no data this read; "
