@@ -291,6 +291,22 @@ def _grafana_tpl(name: str, icon: str, title: str, service: str, metric_fire: st
 _L = "{{ rule.condition|e }} {{ rule.threshold_value }}"
 
 
+def _sdwan_metric_line(bold: bool) -> str:
+    """Metric-aware SD-WAN value line, chosen from `metric_field`:
+    Packet Loss (%) / Latency (ms) / Jitter (ms) / Link Status (Up/Down).
+
+    Was hardcoded to "Packet Loss …%", which mislabelled every non-loss rule — a
+    100 ms latency limit rendered as "Packet Loss … (limit > 100%)". Now each metric
+    shows its real name + unit. `bold` wraps the value in <b> for the fire line."""
+    b0, b1 = ("<b>", "</b>") if bold else ("", "")
+    return (
+        "{% if metric_field == 'avg_latency' %}<b>Latency:</b> " + b0 + "{{ metric_value|round(2) }} ms" + b1 + " (limit " + _L + " ms)"
+        "{% elif metric_field == 'avg_jitter' %}<b>Jitter:</b> " + b0 + "{{ metric_value|round(2) }} ms" + b1 + " (limit " + _L + " ms)"
+        "{% elif metric_field == 'status' %}<b>Link Status:</b> " + b0 + "{% if metric_value >= 1 %}DOWN{% else %}UP{% endif %}" + b1 +
+        "{% else %}<b>Packet Loss:</b> " + b0 + "{{ metric_value|round(2) }}%" + b1 + " (limit " + _L + "%){% endif %}"
+    )
+
+
 def _vpn_lines(count_label: str) -> tuple[str, str]:
     """Fire/resolve value lines for a VPN capacity template. Renders the consumed volume in MB
     for a byte-volume rule (metric_mb set), else the count (users/tunnels). Always appends the
@@ -325,8 +341,7 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "is_user_created": False,
     },
     _grafana_tpl("SD-WAN SLA Breach", "📶", "SD-WAN", "SD-WAN",
-        "<b>Packet Loss:</b> <b>{{ metric_value|round(2) }}%</b> (limit " + _L + "%)",
-        "<b>Packet Loss:</b> {{ metric_value|round(2) }}% (limit " + _L + "%)",
+        _sdwan_metric_line(True), _sdwan_metric_line(False),
         "⚠️ Check ISP / Tunnel / Routing Path", "🎉 All monitored paths back to normal."),
     _grafana_tpl("Application Throughput Spike", "📈", "THROUGHPUT", "AppID Flow",
         # metric_value is Mbps (traffic.*.total_mbps), NOT bytes — was dividing by 1e6 and
