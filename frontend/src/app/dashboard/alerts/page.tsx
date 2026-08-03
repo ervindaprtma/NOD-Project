@@ -441,6 +441,10 @@ export default function AlertsPage() {
   // condition+threshold instead of raw numeric inputs.
   const isSdwanStatus = isSdwan && form.metric_field === "status";
   const sdwanWantsUp = form.condition === "==" && form.threshold_value === 0;
+  // Interface oper status is raw SNMP ifOperStatus (1=up, 2+=down). A Down/Up toggle keeps
+  // operators off the generic ==0 mistake. "Up" = exactly 1; "Down" = ≥2 (down/lowerLayerDown).
+  const isIfaceOperStatus = isIface && form.metric_field === "iface.oper_status";
+  const ifaceWantsUp = form.condition === "==" && form.threshold_value === 1;
   // Interface throughput: absolute Mbps, or % of an operator-entered link max (link_max_mbps
   // set → % mode; threshold_value stays Mbps = max × %).
   const isThroughput = isIface && form.metric_field === "iface.throughput_mbps";
@@ -1363,6 +1367,33 @@ export default function AlertsPage() {
                   </div>
                   <p className="text-[10px] text-muted-foreground mt-1">
                     Fires when the link is {sdwanWantsUp ? "Up (status = 0)" : "Down (status ≥ 1)"} — debounced by the sustain window.
+                  </p>
+                </div>
+              ) : isIfaceOperStatus ? (
+                <div>
+                  <label className="text-xs font-medium">Alert when interface is</label>
+                  <div className="flex mt-1 rounded-md border overflow-hidden w-fit">
+                    {([["Down", ">=", 2], ["Up", "==", 1]] as const).map(([lbl, cond, thr]) => {
+                      const active = lbl === "Up" ? ifaceWantsUp : !ifaceWantsUp;
+                      return (
+                        <button
+                          key={lbl}
+                          type="button"
+                          onClick={() => setForm({ ...form, aggregation: "max", condition: cond, threshold_value: thr })}
+                          className={
+                            "px-4 py-1.5 text-sm " +
+                            (active
+                              ? (lbl === "Down" ? "bg-red-600 text-white" : "bg-emerald-600 text-white")
+                              : "bg-background hover:bg-muted")
+                          }
+                        >
+                          {lbl === "Down" ? "🔴 Down" : "🟢 Up"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Fires when the interface is {ifaceWantsUp ? "Up (ifOperStatus = 1)" : "Down (ifOperStatus ≥ 2)"} — SNMP oper status, debounced by the sustain window.
                   </p>
                 </div>
               ) : isThroughput ? (
