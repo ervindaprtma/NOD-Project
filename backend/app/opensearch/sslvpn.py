@@ -6,7 +6,7 @@ Q-01: ALL queries include @timestamp range filter with gte/lte.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Optional
+from typing import Any, Optional
 from opensearchpy import AsyncOpenSearch
 from app.opensearch.client import get_dc_client
 from app.opensearch.query import safe_search
@@ -210,12 +210,13 @@ async def sslvpn_usage_summary(
     gte_ms: int = 0,
     lte_ms: int = 0,
     site_name: str = "Site_FGT-DC_SSLVPN",
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Volume consumed by active SSL VPN users in the window (for capacity alerting).
 
     Per user, bytes_in/bytes_out are cumulative session counters — max over the window is
-    that user's consumption. Returns {count, total_bytes, top_user_bytes}: the same
-    per-user bytes the VPN Sessions active table shows, aggregated for alerting.
+    that user's consumption. Returns {count, total_bytes, top_user_bytes, top_users}:
+    top_users is the per-user breakdown [{user, bytes}] sorted heaviest-first, so a
+    notification can name the offending users, not just count them.
     ponytail: max-per-user = one session's peak; a reconnect (counter reset) counts the
     larger session, not the sum — fine for a capacity threshold.
     """
@@ -236,9 +237,18 @@ async def sslvpn_usage_summary(
     }
     resp = await safe_search(client, "telegraf-index*", body)
     buckets = resp.get("aggregations", {}).get("by_user", {}).get("buckets", [])
-    totals = [int(b.get("bin", {}).get("value") or 0) + int(b.get("bout", {}).get("value") or 0)
-              for b in buckets]
-    return {"count": len(buckets), "total_bytes": sum(totals), "top_user_bytes": max(totals, default=0)}
+    per_user = sorted(
+        ((str(b["key"]),
+          int(b.get("bin", {}).get("value") or 0) + int(b.get("bout", {}).get("value") or 0))
+         for b in buckets),
+        key=lambda kv: kv[1], reverse=True,
+    )
+    return {
+        "count": len(per_user),
+        "total_bytes": sum(v for _, v in per_user),
+        "top_user_bytes": per_user[0][1] if per_user else 0,
+        "top_users": [{"user": u, "bytes": v} for u, v in per_user[:20]],
+    }
 
 
 async def active_sslvpn_users_count(

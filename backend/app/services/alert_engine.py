@@ -138,6 +138,9 @@ def sample_render_ctx(
         "filter_label": "app=YouTube, port=443",
         # VPN capacity (metric_mb/threshold_mb only meaningful for a byte-volume metric)
         "vpn_active_users": 7, "vpn_total_mb": 5500.0, "vpn_top_user_mb": 2100.0,
+        "vpn_top_user": "someone",
+        "vpn_over_users": [{"user": "someone", "mb": 2900.1}, {"user": "vpn-user-2", "mb": 2100.0}],
+        "vpn_over_users_text": "someone (2900.1 MB), vpn-user-2 (2100.0 MB)",
         "metric_mb": round(metric_value / 1_000_000, 1) if is_vol else None,
         "threshold_mb": round(threshold_value / 1_000_000, 1) if is_vol else None,
         # VPN session-monitor events (kind="session"): the per-event fields.
@@ -1010,6 +1013,14 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         vpn_top_user_mb = round(vpn["top_user_bytes"] / 1_000_000, 1) if vpn.get("top_user_bytes") is not None else None
         # The fired value in MB/GB when the metric is a byte volume (total_bytes/top_user_bytes).
         is_vol = eff_metric_field in ("total_bytes", "top_user_bytes")
+        # WHO consumed it: the per-user breakdown, so a template can name the offending users
+        # instead of only counting them. vpn_over_users = the users whose own usage exceeds the
+        # rule's threshold (a per-user metric); vpn_top_user = the single heaviest.
+        vpn_top_users = vpn.get("top_users") or []
+        vpn_top_user = vpn_top_users[0]["user"] if vpn_top_users else None
+        _over = [u for u in vpn_top_users if u.get("bytes", 0) > eff_threshold] if is_vol else []
+        vpn_over_users = [{"user": u["user"], "mb": round(u["bytes"] / 1_000_000, 1)} for u in _over]
+        vpn_over_users_text = ", ".join(f'{u["user"]} ({u["mb"]} MB)' for u in vpn_over_users) or None
         metric_mb = round(mv / 1_000_000, 1) if is_vol else None
         threshold_mb = round(eff_threshold / 1_000_000, 1) if is_vol else None
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
@@ -1070,6 +1081,11 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "vpn_active_users": vpn_active_users,
                 "vpn_total_mb": vpn_total_mb,
                 "vpn_top_user_mb": vpn_top_user_mb,
+                # WHO exceeded: heaviest user's name, the over-threshold users [{user, mb}],
+                # and a ready-joined string (the sandbox has no `join` filter).
+                "vpn_top_user": vpn_top_user,
+                "vpn_over_users": vpn_over_users,
+                "vpn_over_users_text": vpn_over_users_text,
                 "metric_mb": metric_mb,
                 "threshold_mb": threshold_mb,
                 "data_source": rule.data_source,

@@ -5,6 +5,8 @@ Q-03: _source includes only required fields.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from opensearchpy import AsyncOpenSearch
 from app.opensearch.client import get_dc_client, get_ipsec_client
 from app.opensearch.query import safe_search
@@ -65,12 +67,14 @@ async def _ipsec_usage_one(client: AsyncOpenSearch, gte_ms: int, lte_ms: int) ->
     return out
 
 
-async def ipsec_usage_summary(gte_ms: int = 0, lte_ms: int = 0) -> dict[str, int]:
+async def ipsec_usage_summary(gte_ms: int = 0, lte_ms: int = 0) -> dict[str, Any]:
     """Volume consumed by active IPsec users in the window (for capacity alerting).
 
     Unions per-username bytes across BOTH clusters (DC + DRC) so it matches
     active_ipsec_users_count's coverage; a user on both endpoints is counted once (max,
-    not summed). Returns {count, total_bytes, top_user_bytes}.
+    not summed). Returns {count, total_bytes, top_user_bytes, top_users}: top_users is the
+    per-user breakdown [{user, bytes}] sorted heaviest-first, so a notification can name
+    the offending users, not just count them.
     """
     merged: dict[str, int] = {}
     for get_client in (get_ipsec_client, get_dc_client):
@@ -79,8 +83,13 @@ async def ipsec_usage_summary(gte_ms: int = 0, lte_ms: int = 0) -> dict[str, int
                 merged[user] = max(merged.get(user, 0), val)
         except Exception:  # a cluster without an ipsec-* index just contributes nothing
             pass
-    totals = list(merged.values())
-    return {"count": len(merged), "total_bytes": sum(totals), "top_user_bytes": max(totals, default=0)}
+    per_user = sorted(merged.items(), key=lambda kv: kv[1], reverse=True)
+    return {
+        "count": len(per_user),
+        "total_bytes": sum(v for _, v in per_user),
+        "top_user_bytes": per_user[0][1] if per_user else 0,
+        "top_users": [{"user": u, "bytes": v} for u, v in per_user[:20]],
+    }
 
 
 async def active_ipsec_users_count(
