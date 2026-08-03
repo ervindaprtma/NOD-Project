@@ -114,6 +114,11 @@ async def update_notification_template(
             tmpl.body_template = body.body_template
         if body.line_template is not None:
             tmpl.line_template = body.line_template
+        # A content edit makes this the operator's own version — mark it so the seeder's
+        # refresh of unedited seed rows never reverts it. A mere active/default toggle
+        # (no content change) leaves the flag alone, so those rows still track source fixes.
+        if any(v is not None for v in (body.subject_template, body.body_template, body.line_template)):
+            tmpl.is_user_created = True
         if body.is_active is not None:
             tmpl.is_active = body.is_active
         if body.is_default is not None:

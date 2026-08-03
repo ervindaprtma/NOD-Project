@@ -21,7 +21,7 @@ SEED_TEMPLATES: list[dict] = [
         "description": "Alert when an SD-WAN link SLA is breached. Pick the link (WAN uplink or "
                        "IPsec/ADVPN tunnel) and the metric — packet loss, latency, jitter, or Link "
                        "Status for a Down/Up alert.",
-        "body_template": "SD-WAN SLA Breach: {{ name }}\nMetric: {{ metric_field }}\nValue: {{ metric_value }}\nThreshold: {{ condition }} {{ threshold }}",
+        "body_template": "SD-WAN SLA Breach: {{ name }}\n{% if target_name %}Link: {{ target_name }}\n{% endif %}Metric: {{ metric_field }}\nValue: {{ metric_value }}\nThreshold: {{ condition }} {{ threshold }}",
         "underlying_kind": "single",
         "locked_fields": {
             "data_source": "sdwan_sla",
@@ -118,7 +118,9 @@ SEED_TEMPLATES: list[dict] = [
         "description": "Alert when a device's counter-based availability drops below the target "
                        "over the window (worst device at the site). Reads 'unknown' and holds when "
                        "history is insufficient, so it never false-fires on a fresh device.",
-        "body_template": "Device Availability Low: {{ name }}\nAvailability: {{ metric_value }}%\n"
+        "body_template": "Device Availability Low: {{ name }}\n"
+                         "{% if target_name %}Device: {{ target_name }}\n{% endif %}"
+                         "Availability: {{ metric_value }}%\n"
                          "Threshold: {{ condition }} {{ threshold }}%\nSite: {{ site_name }}",
         "underlying_kind": "single",
         # Matches the device_uptime → availability_pct field-catalog row exactly:
@@ -146,7 +148,9 @@ SEED_TEMPLATES: list[dict] = [
                        "window crosses the threshold. Set an absolute Mbps limit, or a % of a link max "
                        "you enter (the UI computes Mbps = max × %). max aggregation = window peak, so a "
                        "brief burst trips it. Pick the interface after selecting this template.",
-        "body_template": "Interface Bandwidth Spike: {{ name }}\nPeak throughput: {{ metric_value }} Mbps  "
+        "body_template": "Interface Bandwidth Spike: {{ name }}\n"
+                         "{% if target_name %}Interface: {{ target_name }}\n{% endif %}"
+                         "Peak throughput: {{ metric_value }} Mbps  "
                          "(limit {{ condition }} {{ threshold }} Mbps)\nSite: {{ site_name }}",
         "underlying_kind": "single",
         # Spike logic = the interface_stats extractor's PEAK: aggregation "max" returns the
@@ -325,8 +329,10 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "<b>Packet Loss:</b> {{ metric_value|round(2) }}% (limit " + _L + "%)",
         "⚠️ Check ISP / Tunnel / Routing Path", "🎉 All monitored paths back to normal."),
     _grafana_tpl("Application Throughput Spike", "📈", "THROUGHPUT", "AppID Flow",
-        "<b>Volume:</b> <b>{{ (metric_value/1000000)|round(1) }} MB</b> (limit {{ rule.condition|e }} {{ (rule.threshold_value/1000000)|round(0) }} MB)",
-        "<b>Volume:</b> {{ (metric_value/1000000)|round(1) }} MB (limit {{ rule.condition|e }} {{ (rule.threshold_value/1000000)|round(0) }} MB)",
+        # metric_value is Mbps (traffic.*.total_mbps), NOT bytes — was dividing by 1e6 and
+        # showing "0.0 MB" for a real Mbps spike. threshold_value is Mbps too.
+        "<b>Throughput:</b> <b>{{ metric_value|round(1) }} Mbps</b> (limit {{ rule.condition|e }} {{ rule.threshold_value|round(0) }} Mbps)",
+        "<b>Throughput:</b> {{ metric_value|round(1) }} Mbps (limit {{ rule.condition|e }} {{ rule.threshold_value|round(0) }} Mbps)",
         "⚠️ Check bandwidth hog / DDoS / backup job", "🎉 Traffic back to normal."),
     _grafana_tpl("SSL VPN Capacity", "🔑", "SSL VPN", "SSL VPN",
         _SSL_FIRE, _SSL_RES,
@@ -399,12 +405,18 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
 
 
 async def seed_notification_templates() -> int:
-    """Insert any seed notification templates missing by name.
+    """Insert missing seed notification templates, and refresh the content of existing
+    seeded rows that the operator hasn't edited.
 
-    Idempotent (same pattern as the alert templates): matches on `name`, so the 6
-    Grafana-style HTML templates reach already-seeded DBs without duplicating or
-    clobbering existing (incl. user-created) rows. Never delete+reinsert — that would
-    sever AlertRule.notification_template_id links.
+    Insert-only used to be the whole story, which meant a body fix in source (e.g. the
+    Interface template that labelled Mbps as %, or the VPN templates that had no
+    byte-volume branch) never reached an already-seeded DB — the row stayed stale and the
+    only recourse was a manual UI edit. Now, for an existing row that is NOT user-authored
+    or user-edited (is_user_created=False), we refresh the render-affecting content
+    (subject/body/line/description) in place, keeping its id (so AlertRule links survive)
+    and its operator-set flags (is_active/is_default/name). A row the user cloned or edited
+    in the UI is marked is_user_created=True by the update endpoint, so it is never touched
+    here. Never delete+reinsert — that would sever AlertRule.notification_template_id links.
     """
     from app.db.models import NotificationTemplate
     from sqlalchemy import update
@@ -423,20 +435,30 @@ async def seed_notification_templates() -> int:
             )
             await db.commit()
 
-        existing_names = set(
-            (await db.execute(select(NotificationTemplate.name))).scalars().all()
-        )
+        existing = {
+            r.name: r for r in (await db.execute(select(NotificationTemplate))).scalars().all()
+        }
         count = 0
+        refreshed = 0
         for data in SEED_NOTIFICATION_TEMPLATES:
-            if data["name"] in existing_names:
-                continue
-            db.add(NotificationTemplate(**data))
-            await db.flush()
-            count += 1
+            row = existing.get(data["name"])
+            if row is None:
+                db.add(NotificationTemplate(**data))
+                await db.flush()
+                count += 1
+            elif not row.is_user_created:
+                # Refresh content in place; leave is_active/is_default/name as the operator set them.
+                changed = False
+                for k in ("subject_template", "body_template", "line_template", "description"):
+                    if k in data and getattr(row, k) != data[k]:
+                        setattr(row, k, data[k])
+                        changed = True
+                if changed:
+                    refreshed += 1
 
-        if count:
+        if count or refreshed:
             await db.commit()
-            logger.info("Seeded %d new notification templates", count)
+            logger.info("Seeded %d new notification templates (%d refreshed)", count, refreshed)
         return count
 
 

@@ -1017,13 +1017,15 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         # sees how long the still-unresolved issue has been firing.
         fired_str = (fired_orig.astimezone(_WIB).strftime("%d %b %Y %H:%M:%S WIB")
                      if fired_orig else now_str)
-        # Resolution: assigned (active) template → active default → AlertTemplate body →
-        # hardcoded. nt_line only holds active templates, so an inactive assignment falls
-        # through to the default here.
+        # Resolution: assigned (active) template → the rule's own AlertTemplate body →
+        # active default → hardcoded. The AlertTemplate (built from the rule's template) is
+        # more specific than the generic active default, so it must win — otherwise activating
+        # the default would shadow every AlertTemplate's tailored body. nt_line only holds
+        # active templates, so an inactive assignment falls through here.
         tmpl_text = (
             (nt_line.get(rule.notification_template_id) if rule.notification_template_id else None)
-            or default_line
             or (template_body.get(rule.template_id) if rule.template_id else None)
+            or default_line
         )
         # A recovery only renders through the template if that template branches on
         # `event` ({% if event == 'resolved' %}…) — otherwise an alert-worded template
