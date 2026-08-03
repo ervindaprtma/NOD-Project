@@ -152,30 +152,21 @@ async def preview_template_rule(
 
     # §9.5: render via sandbox. StrictUndefined on the engine surfaces
     # template typos to the operator at preview time, not at fire time.
-    from app.services.alert_engine import _render_template
+    from app.services.alert_engine import _render_template, sample_render_ctx
 
-    render_ctx = {
-        "rule": {
-            "name": body.name,
-            "severity": merged.get("severity", "WARNING"),
-            "site_name": merged.get("site_name"),
-            "metric_field": merged.get("metric_field", ""),
-            "condition": merged.get("condition", ">"),
-            "threshold_value": merged.get("threshold_value", 0.0),
-        },
-        # Flat aliases — match the seeded templates' body syntax
-        "name": body.name,
-        "severity": merged.get("severity", "WARNING"),
-        "site_name": merged.get("site_name"),
-        "metric_field": merged.get("metric_field", ""),
-        "condition": merged.get("condition", ">"),
-        "threshold_value": merged.get("threshold_value", 0.0),
-        "threshold": merged.get("threshold_value", 0.0),
-        "metric_value": 0.0,
-        "data_source": merged.get("data_source", ""),
-        "aggregation": merged.get("aggregation", "avg"),
-        "fired_at": "—",
-    }
+    # Shared builder → parity with the fire-time ctx (see sample_render_ctx).
+    render_ctx = sample_render_ctx(
+        name=body.name,
+        severity=merged.get("severity", "WARNING"),
+        site_name=merged.get("site_name") or "Site_FGT-DC",
+        metric_field=merged.get("metric_field", "") or "iface.throughput_mbps",
+        condition=merged.get("condition", ">"),
+        threshold_value=merged.get("threshold_value", 0.0) or 0.0,
+        metric_value=0.0,
+        data_source=merged.get("data_source", "") or "interface_stats",
+        aggregation=merged.get("aggregation", "avg"),
+        fired_at="—",
+    )
     rendered = AlertTemplateRead.model_validate(template)
     try:
         if template.subject_template:
@@ -330,6 +321,8 @@ async def create_alert_rule(
         link_max_mbps=body.link_max_mbps,
         kind=body.kind,
         notify_when=body.notify_when,
+        # appid_flow scoping (app/protocol/port) → plain dict, drop empty fields; None if unused.
+        appid_filter=(body.appid_filter.model_dump(exclude_none=True) or None) if body.appid_filter else None,
         # Composite clauses are stored as plain dicts (JSONB); the engine reads them via .get().
         clauses=[c.model_dump() for c in body.clauses],
         aggregation=body.aggregation,
@@ -381,6 +374,10 @@ async def update_alert_rule(
         raise HTTPException(status_code=404, detail="Alert rule not found.")
 
     update_data = body.model_dump(exclude_unset=True)
+    # Normalize the appid filter: drop empty fields, and an all-empty filter clears it (None).
+    if "appid_filter" in update_data:
+        af = update_data["appid_filter"] or {}
+        update_data["appid_filter"] = {k: v for k, v in af.items() if v not in (None, "")} or None
     for key, value in update_data.items():
         setattr(rule, key, value)
     await db.flush()
@@ -450,7 +447,10 @@ async def test_alert_rule(
     from app.services.notifier_helper import load_channel_configs
     channel_cfgs = await load_channel_configs()
 
-    def _finish(metric_value, breached, clause_results=None):
+    def _finish(
+        metric_value: float, breached: bool,
+        clause_results: list[AlertTestClauseResult] | None = None,
+    ) -> APIResponse[AlertTestResult]:
         elapsed = int((_time.monotonic() - t0) * 1000)
         would_notify = True
         notes: list[str] = []
@@ -489,6 +489,22 @@ async def test_alert_rule(
         ))
 
     t0 = _time.monotonic()
+
+    # Event monitors (VPN Session / Device Reboot) fire on a state CHANGE detected between
+    # polls, not on a threshold — a dry-run has nothing to compare against, so Test would
+    # otherwise show a meaningless "breach". Return a clear "not applicable" instead.
+    if (rule.kind or "single") in ("session", "reboot"):
+        resp = _finish(0.0, False)
+        assert resp.data is not None  # _finish always sets data
+        kind_label = "VPN Session Monitor" if rule.kind == "session" else "Device Reboot Monitor"
+        signal = "a connect/disconnect" if rule.kind == "session" else "a device reboot"
+        note = (f"{kind_label} is an EVENT monitor — it fires on {signal} detected between polls, "
+                f"not on a threshold, so Test can't dry-run it. It alerts live when the engine sees "
+                f"the change.")
+        resp.data.would_notify = False
+        resp.data.threshold_breached = False
+        resp.data.action_note = (resp.data.action_note + "; " + note).lstrip("; ")
+        return resp
 
     # ── Composite: evaluate EVERY clause with the exact engine functions, then combine
     # with AND/OR. Reuses _run_group_query (so degradation handling matches the engine)
@@ -534,6 +550,7 @@ async def test_alert_rule(
                 combined = any(breaches)
             reported = max(values) if values else 0.0
             resp = _finish(reported, combined, clause_results)
+            assert resp.data is not None  # _finish always sets data
             if any_held:
                 held = [c.metric_field for c in clause_results if c.value is None]
                 extra = (f"HELD — clause(s) {', '.join(held)} returned no data this read; "
@@ -572,8 +589,11 @@ async def test_alert_rule(
             # Same per-path summary + extractor the engine uses, so the dry-run
             # value matches what the rule will actually evaluate.
             from app.services.alert_engine import _extract_appid_flow
+            af = rule.appid_filter or {}
             flow_summary = await tf_qb.appid_flow_alert_summary(
-                gte_ms=gte_ms, lte_ms=lte_ms, site_name=rule.site_name or "Site_FGT-DC"
+                gte_ms=gte_ms, lte_ms=lte_ms, site_name=rule.site_name or "Site_FGT-DC",
+                app_filter=af.get("app") or "", protocol=af.get("protocol") or "",
+                dst_port=af.get("port"),
             )
             metric_value = _extract_appid_flow(rule.metric_field, flow_summary) if isinstance(flow_summary, dict) else 0.0
         elif rule.data_source == "sdwan_sla":
@@ -588,16 +608,16 @@ async def test_alert_rule(
             vals = summary.get(base_key, [0.0])
             metric_value = float(vals[link_idx] if link_idx < len(vals) else (vals[0] if isinstance(vals, list) else vals or 0.0))
         elif rule.data_source == "vpn_ssl":
+            from app.services.alert_engine import _extract_vpn_usage
             site = sslvpn_qb.sslvpn_measurement_for_site(rule.site_name)
-            count = await sslvpn_qb.active_sslvpn_users_count(
+            usage = await sslvpn_qb.sslvpn_usage_summary(
                 gte_ms=gte_ms, lte_ms=lte_ms, site_name=site,
             )
-            metric_value = float(count)
+            metric_value = _extract_vpn_usage(rule.metric_field, usage)
         elif rule.data_source == "vpn_ipsec":
-            count = await ipsec_qb.active_ipsec_users_count(
-                gte_ms=gte_ms, lte_ms=lte_ms,
-            )
-            metric_value = float(count)
+            from app.services.alert_engine import _extract_vpn_usage
+            usage = await ipsec_qb.ipsec_usage_summary(gte_ms=gte_ms, lte_ms=lte_ms)
+            metric_value = _extract_vpn_usage(rule.metric_field, usage)
         elif rule.data_source == "interface_stats":
             # Same summary + extractor the engine uses, so the dry-run matches live.
             from app.opensearch import interface_stats as if_qb

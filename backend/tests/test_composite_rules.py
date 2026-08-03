@@ -40,8 +40,8 @@ def test_composite_and_or_combination():
     """One clause true, one false: AND (all) must NOT fire, OR (any) must fire. Uses a
     stubbed group_cache so no OpenSearch call happens."""
     cache = {
-        ("interface_stats", "Site_FGT-DC", 15): {"39": {"throughput_mbps": {"avg": 30.0, "max": 37.7}}},
-        ("sdwan_sla", "Site_FGT-DC", 15): {"avg_latency": [13.5], "status": [0.0]},
+        ("interface_stats", "Site_FGT-DC", 15, None): {"39": {"throughput_mbps": {"avg": 30.0, "max": 37.7}}},
+        ("sdwan_sla", "Site_FGT-DC", 15, None): {"avg_latency": [13.5], "status": [0.0]},
     }
     mv_all, fire_all, drv_all = asyncio.run(_evaluate_composite_rule(_rule("all"), cache))
     mv_any, fire_any, drv_any = asyncio.run(_evaluate_composite_rule(_rule("any"), cache))
@@ -58,8 +58,8 @@ def test_composite_holds_when_a_clause_cannot_read():
     """If any clause's group read is None (degraded/missing), the whole rule holds
     (None, False) — never evaluate a multi-metric rule on partial data."""
     cache = {
-        ("interface_stats", "Site_FGT-DC", 15): {"39": {"throughput_mbps": {"avg": 30.0, "max": 37.7}}},
-        ("sdwan_sla", "Site_FGT-DC", 15): None,  # degraded
+        ("interface_stats", "Site_FGT-DC", 15, None): {"39": {"throughput_mbps": {"avg": 30.0, "max": 37.7}}},
+        ("sdwan_sla", "Site_FGT-DC", 15, None): None,  # degraded
     }
     mv, fire, drv = asyncio.run(_evaluate_composite_rule(_rule("any"), cache))
     assert mv is None and fire is False and drv is None

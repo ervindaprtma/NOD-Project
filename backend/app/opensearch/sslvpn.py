@@ -205,6 +205,42 @@ def _sslvpn_filters(gte_ms: int, lte_ms: int, site_name: str) -> list[dict]:
     ]
 
 
+async def sslvpn_usage_summary(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    site_name: str = "Site_FGT-DC_SSLVPN",
+) -> dict[str, int]:
+    """Volume consumed by active SSL VPN users in the window (for capacity alerting).
+
+    Per user, bytes_in/bytes_out are cumulative session counters — max over the window is
+    that user's consumption. Returns {count, total_bytes, top_user_bytes}: the same
+    per-user bytes the VPN Sessions active table shows, aggregated for alerting.
+    ponytail: max-per-user = one session's peak; a reconnect (counter reset) counts the
+    larger session, not the sum — fine for a capacity threshold.
+    """
+    if client is None:
+        client = get_dc_client()
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": _sslvpn_filters(gte_ms, lte_ms, site_name)}},
+        "aggs": {
+            "by_user": {
+                "terms": {"field": "tag.username.keyword", "size": 1000},
+                "aggs": {
+                    "bin": {"max": {"field": f"{site_name}.bytes_in"}},
+                    "bout": {"max": {"field": f"{site_name}.bytes_out"}},
+                },
+            }
+        },
+    }
+    resp = await safe_search(client, "telegraf-index*", body)
+    buckets = resp.get("aggregations", {}).get("by_user", {}).get("buckets", [])
+    totals = [int(b.get("bin", {}).get("value") or 0) + int(b.get("bout", {}).get("value") or 0)
+              for b in buckets]
+    return {"count": len(buckets), "total_bytes": sum(totals), "top_user_bytes": max(totals, default=0)}
+
+
 async def active_sslvpn_users_count(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,

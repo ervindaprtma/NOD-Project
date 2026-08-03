@@ -11,6 +11,15 @@ from pydantic import BaseModel, Field
 _DATA_SOURCE_RE = r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec|interface_stats|device_uptime)$"
 
 
+class AppidFilter(BaseModel):
+    """appid_flow scoping — narrow a path metric to a specific application / protocol / port.
+    Any subset; all-empty means the whole path. Fields map to flow.application.name,
+    l4.proto.name, flow.server.l4.port.id."""
+    app: Optional[str] = Field(default=None, max_length=128)
+    protocol: Optional[str] = Field(default=None, max_length=16)
+    port: Optional[int] = Field(default=None, ge=0, le=65535)
+
+
 class AlertClause(BaseModel):
     """One clause of a composite rule. Evaluated independently, then combined by
     notify_when (all=AND / any=OR). target_key = interface ifIndex / device IP where the
@@ -40,7 +49,8 @@ class AlertRuleCreate(BaseModel):
     site_name: Optional[str] = Field(default=None, max_length=128)
     target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
-    kind: str = Field(default="single", pattern=r"^(single|composite)$")
+    appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
+    kind: str = Field(default="single", pattern=r"^(single|composite|session|reboot)$")
     notify_when: str = Field(default="any", pattern=r"^(any|all)$")  # composite: OR / AND
     clauses: list[AlertClause] = Field(default_factory=list)
     enabled: bool = True
@@ -62,7 +72,8 @@ class AlertRuleUpdate(BaseModel):
     site_name: Optional[str] = Field(default=None, max_length=128)
     target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
-    kind: Optional[str] = Field(default=None, pattern=r"^(single|composite)$")
+    appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
+    kind: Optional[str] = Field(default=None, pattern=r"^(single|composite|session|reboot)$")
     notify_when: Optional[str] = Field(default=None, pattern=r"^(any|all)$")
     clauses: Optional[list[AlertClause]] = None
     enabled: Optional[bool] = None
@@ -76,6 +87,7 @@ class AlertRuleRead(BaseModel):
     metric_field: str
     target_key: Optional[str] = None
     link_max_mbps: Optional[float] = None
+    appid_filter: Optional[dict] = None
     kind: str = "single"
     notify_when: str = "any"
     clauses: list[dict] = Field(default_factory=list)

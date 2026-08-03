@@ -67,3 +67,6 @@ backend/alembic/versions/*.pyc
 # Generated code documentation
 docs/
 Documentation/
+
+# Claude Code local session/config dir
+.claude/

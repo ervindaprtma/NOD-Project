@@ -348,7 +348,7 @@ export interface AlertRule {
   id: string;
   name: string;
   severity: "INFO" | "WARNING" | "CRITICAL";
-  kind: "single" | "composite";
+  kind: "single" | "composite" | "session" | "reboot";
   notify_when: "any" | "all";
   clauses: Record<string, unknown>[];
   template_id: string | null;
@@ -357,6 +357,7 @@ export interface AlertRule {
   metric_field: string;
   target_key?: string | null; // interface_stats ifIndex
   link_max_mbps?: number | null; // interface throughput: % of link max mode
+  appid_filter?: { app?: string | null; protocol?: string | null; port?: number | null } | null;
   aggregation: string;
   condition: string;
   threshold_value: number;

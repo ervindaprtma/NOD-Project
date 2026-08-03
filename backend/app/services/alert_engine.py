@@ -110,6 +110,50 @@ def _render_template(text: str, ctx: dict) -> str:
     return rendered
 
 
+def sample_render_ctx(
+    *, name: str = "Test Rule", severity: str = "WARNING", site_name: str = "Site_FGT-DC",
+    metric_field: str = "iface.throughput_mbps", condition: str = ">",
+    threshold_value: float = 80.0, metric_value: float = 95.5, data_source: str = "interface_stats",
+    aggregation: str = "max", fired_at: str = "01 Jan 2026 12:00:00 WIB",
+    sent_at: str | None = None, event: str = "firing",
+) -> dict:
+    """A fully-populated preview context — EVERY variable the fire-time notifier
+    (_flush_batch_notify) provides, with sample values. Preview endpoints must use this so a
+    template that renders in preview also renders when it fires (and vice-versa): the two used
+    to be hand-maintained copies and drifted, 422-ing previews of templates that used newer
+    vars. Update this whenever _flush_batch_notify's ctx gains a key."""
+    rc = {"name": name, "severity": severity, "site_name": site_name,
+          "metric_field": metric_field, "condition": condition, "threshold_value": threshold_value}
+    is_vol = metric_field in ("total_bytes", "top_user_bytes")
+    return {
+        "rule": rc, **rc, "threshold": threshold_value,
+        "metric_value": metric_value, "data_source": data_source, "aggregation": aggregation,
+        "fired_at": fired_at, "sent_at": sent_at if sent_at is not None else fired_at,
+        "event": event, "event_label": "Resolved" if event == "resolved" else "Firing",
+        # interface throughput extras
+        "link_max_mbps": 100.0, "utilization_pct": 63.0, "threshold_pct": 50.0,
+        # friendly target + appid scope (samples so target/appid templates render richly)
+        "target_name": "WAN LDP", "target_key": "16",
+        "filter_app": "YouTube", "filter_proto": "TCP", "filter_port": 443,
+        "filter_label": "app=YouTube, port=443",
+        # VPN capacity (metric_mb/threshold_mb only meaningful for a byte-volume metric)
+        "vpn_active_users": 7, "vpn_total_mb": 5500.0, "vpn_top_user_mb": 2100.0,
+        "metric_mb": round(metric_value / 1_000_000, 1) if is_vol else None,
+        "threshold_mb": round(threshold_value / 1_000_000, 1) if is_vol else None,
+        # VPN session-monitor events (kind="session"): the per-event fields.
+        "vpn_type": "SSL VPN", "vpn_user": "someone",
+        "remote_ip": "203.0.113.5", "active_ip": "10.212.134.8", "device": "FG_DC_GTN-01",
+        "started_at": fired_at, "ended_at": "—", "duration": "—",
+        "bytes_in": 524_000_000, "bytes_out": 88_000_000,
+        "bytes_in_h": "524.0 MB", "bytes_out_h": "88.0 MB", "bytes_total_h": "612.0 MB",
+        # Device reboot-monitor events (kind="reboot"): the per-event fields.
+        "device_ip": "10.80.150.1", "reboot_at": fired_at,
+        "downtime_seconds": 150, "downtime": "2m 30s",
+        "new_uptime_seconds": 240, "new_uptime": "4m",
+        "prev_uptime_seconds": 3_218_400, "prev_uptime": "37d 6h",
+    }
+
+
 # ── P1: Group query runner ──────────────────────────────────────
 # Rules sharing the same (data_source, site_name, evaluation_window_minutes)
 # are evaluated with a single OpenSearch call.  Results are cached in a
@@ -139,6 +183,7 @@ async def _run_group_query(
     data_source: str,
     site_name: str | None,
     window_minutes: int,
+    appid_filter: dict | None = None,
 ) -> float | list | dict | None:
     """Execute ONE OpenSearch query for a rule group.
 
@@ -171,9 +216,13 @@ async def _run_group_query(
                 from app.opensearch import traffic_flow as tf_qb
 
                 # Per-path dict: {internet, inbound-vip, inter-site, intra-lan, _wan}
-                # each with *_mbps / *_bytes. Extractor selects node + metric.
+                # each with *_mbps / *_bytes. Extractor selects node + metric. An optional
+                # appid_filter narrows every path to one app/protocol/port.
+                af = appid_filter or {}
                 result = await tf_qb.appid_flow_alert_summary(
-                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC"
+                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC",
+                    app_filter=af.get("app") or "", protocol=af.get("protocol") or "",
+                    dst_port=af.get("port"),
                 )
 
             elif data_source == "sdwan_sla":
@@ -186,7 +235,8 @@ async def _run_group_query(
             elif data_source == "vpn_ssl":
                 from app.opensearch import sslvpn as sslvpn_qb
 
-                result = await sslvpn_qb.active_sslvpn_users_count(
+                # {count, total_bytes, top_user_bytes} — extractor picks count or a volume metric.
+                result = await sslvpn_qb.sslvpn_usage_summary(
                     gte_ms=gte_ms, lte_ms=lte_ms,
                     site_name=sslvpn_qb.sslvpn_measurement_for_site(site_name),
                 )
@@ -194,7 +244,7 @@ async def _run_group_query(
             elif data_source == "vpn_ipsec":
                 from app.opensearch import ipsec as ipsec_qb
 
-                result = await ipsec_qb.active_ipsec_users_count(gte_ms=gte_ms, lte_ms=lte_ms)
+                result = await ipsec_qb.ipsec_usage_summary(gte_ms=gte_ms, lte_ms=lte_ms)
 
             elif data_source == "interface_stats":
                 from app.opensearch import interface_stats as if_qb
@@ -380,15 +430,8 @@ def _extract_per_rule_value(
                 return float(vals or 0.0)
             return 0.0
 
-        if rule.data_source == "vpn_ssl":
-            if isinstance(group_result, (int, float)):
-                return float(group_result)
-            return 0.0
-
-        if rule.data_source == "vpn_ipsec":
-            if isinstance(group_result, (int, float)):
-                return float(group_result)
-            return 0.0
+        if rule.data_source in ("vpn_ssl", "vpn_ipsec"):
+            return _extract_vpn_usage(rule.metric_field, group_result)
 
         if rule.data_source == "interface_stats":
             if isinstance(group_result, dict):
@@ -412,6 +455,21 @@ def _extract_per_rule_value(
 # ── State-machine helpers ───────────────────────────────────────
 
 
+def _extract_vpn_usage(metric_field: str, group_result: Any) -> float:
+    """Pick a value from the VPN usage summary {count, total_bytes, top_user_bytes}.
+
+    Volume metrics: total_bytes (all active users) / top_user_bytes (heaviest user), in BYTES.
+    Anything else (incl. the legacy active_*_users_count field names) → count. Also accepts a
+    bare number for backward compatibility with the old count-only group result."""
+    if isinstance(group_result, (int, float)):
+        return float(group_result)
+    if isinstance(group_result, dict):
+        if metric_field in ("total_bytes", "top_user_bytes"):
+            return float(group_result.get(metric_field, 0) or 0)
+        return float(group_result.get("count", 0) or 0)
+    return 0.0
+
+
 def _check_condition(value: float, op: str, threshold: float) -> bool:
     match op:
         case ">":
@@ -425,6 +483,66 @@ def _check_condition(value: float, op: str, threshold: float) -> bool:
         case "==":
             return abs(value - threshold) < 0.001
     return False
+
+
+def _resolve_target_name(
+    data_source: str | None, site_name: str | None, target_key: str | None,
+    group_result: Any = None,
+) -> str | None:
+    """Friendly name for a rule's target so notifications read "WAN LDP" not "16".
+
+    interface_stats → interface label, sdwan_sla → SD-WAN link name (both static maps);
+    device_uptime → the hostname, taken from the device_availability result the engine
+    already fetched to evaluate the rule (no extra query), falling back to the IP.
+    Returns None when there's nothing to name (blank target, or an unmapped key).
+    """
+    if not target_key:
+        return None
+    if data_source == "interface_stats":
+        from app.opensearch.interface_stats import SITE_IFINDEX_MAP
+        return SITE_IFINDEX_MAP.get(site_name or "", {}).get(str(target_key))
+    if data_source == "sdwan_sla":
+        from app.schemas.sdwan_resource_vpn import SITE_LINK_LABELS
+        return SITE_LINK_LABELS.get(site_name or "", {}).get(f"link{target_key}")
+    if data_source == "device_uptime":
+        if isinstance(group_result, dict):
+            for d in group_result.get("devices", []) or []:
+                if d.get("device_key") == target_key:
+                    return d.get("hostname") or str(target_key)
+        return str(target_key)  # fall back to the IP
+    return None
+
+
+def _appid_filter_for(rule: AlertRule) -> dict | None:
+    """The appid_flow scoping dict {app, protocol, port} for a rule, or None. Empty → None
+    so unfiltered rules keep sharing the grouped query."""
+    if rule.data_source != "appid_flow":
+        return None
+    f = getattr(rule, "appid_filter", None) or {}
+    f = {k: v for k, v in f.items() if v not in (None, "")}
+    return f or None
+
+
+def _appid_sig(filt: dict | None) -> tuple | None:
+    """Hashable signature of an appid filter for the group key (unfiltered rules → None so
+    they share one query; each distinct filter gets its own query)."""
+    if not filt:
+        return None
+    return tuple(sorted(filt.items()))
+
+
+def _appid_filter_label(filt: dict | None) -> str | None:
+    """Human label for a notification, e.g. "app=YouTube, port=443". None when unfiltered."""
+    if not filt:
+        return None
+    parts = []
+    if filt.get("app"):
+        parts.append(f"app={filt['app']}")
+    if filt.get("protocol"):
+        parts.append(f"proto={filt['protocol']}")
+    if filt.get("port") is not None:
+        parts.append(f"port={filt['port']}")
+    return ", ".join(parts) or None
 
 
 async def _notify(rule: AlertRule, metric_value: float):
@@ -691,8 +809,9 @@ async def _evaluate_composite_rule(
         target_key = clause.get("target_key")
         aggregation = clause.get("aggregation", "avg")
 
-        # §9.4: read from the cycle's pre-fetched cache when available
-        cache_key = (ds, rule.site_name, window)
+        # §9.4: read from the cycle's pre-fetched cache when available (4-tuple key; composite
+        # appid clauses use the unfiltered path → sig None).
+        cache_key = (ds, rule.site_name, window, None)
         if group_cache is not None and cache_key in group_cache:
             group_result = group_cache[cache_key]
         else:
@@ -710,6 +829,8 @@ async def _evaluate_composite_rule(
             "metric_field": mf,
             "condition": cond,
             "threshold_value": thresh,
+            "data_source": ds,
+            "target_key": target_key,
         })
 
     if len(clauses_detail) != len(rule.clauses):
@@ -752,9 +873,7 @@ def _extract_per_rule_value_flat(
                 return _extract_appid_flow(metric_field, group_result)
             return 0.0
         if data_source in ("vpn_ssl", "vpn_ipsec"):
-            if isinstance(group_result, (int, float)):
-                return float(group_result)
-            return 0.0
+            return _extract_vpn_usage(metric_field, group_result)
         if data_source == "sdwan_sla":
             if isinstance(group_result, dict):
                 base_key, link_idx = _parse_sdwan_metric_field(metric_field)
@@ -866,18 +985,47 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         eff_metric_field = drv["metric_field"] if drv else rule.metric_field
         eff_condition = drv["condition"] if drv else rule.condition
         eff_threshold = drv["threshold_value"] if drv else rule.threshold_value
+        # Interface throughput is Mbps in BOTH threshold modes (absolute, or "% of link max"
+        # where threshold_value = link_max × %). So metric_value + threshold_value are Mbps —
+        # the seeded template used to print them with a "%" (only right by luck when link
+        # max = 100). Expose link_max + a real utilization% so a template renders either unit
+        # honestly. Non-throughput rules → link_max None → the % vars are None (StrictUndefined-safe).
+        link_max = getattr(rule, "link_max_mbps", None) or None
+        utilization_pct = round(mv / link_max * 100, 1) if link_max else None
+        threshold_pct = round(eff_threshold / link_max * 100, 1) if link_max else None
+        # Friendly target name (interface / SD-WAN link / device / appid filter) from eval time.
+        target_name = getattr(rule, "_target_name", None)
+        eff_target_key = drv.get("target_key") if drv else rule.target_key
+        # appid_flow scoping, broken out so a template can show app / protocol / port separately.
+        appid_f = _appid_filter_for(rule) or {}
+        filter_app = appid_f.get("app")
+        filter_proto = appid_f.get("protocol")
+        filter_port = appid_f.get("port")
+        filter_label = _appid_filter_label(appid_f or None)
+        # VPN capacity extras — count + consumed volume in MB, so a template can show the whole
+        # picture regardless of which metric (count / total / top-user) the rule fired on.
+        vpn = getattr(rule, "_vpn_usage", None) or {}
+        vpn_active_users = vpn.get("count")
+        vpn_total_mb = round(vpn["total_bytes"] / 1_000_000, 1) if vpn.get("total_bytes") is not None else None
+        vpn_top_user_mb = round(vpn["top_user_bytes"] / 1_000_000, 1) if vpn.get("top_user_bytes") is not None else None
+        # The fired value in MB/GB when the metric is a byte volume (total_bytes/top_user_bytes).
+        is_vol = eff_metric_field in ("total_bytes", "top_user_bytes")
+        metric_mb = round(mv / 1_000_000, 1) if is_vol else None
+        threshold_mb = round(eff_threshold / 1_000_000, 1) if is_vol else None
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
         # message's time. A reminder keeps fired_at = the original fire, so the operator
         # sees how long the still-unresolved issue has been firing.
         fired_str = (fired_orig.astimezone(_WIB).strftime("%d %b %Y %H:%M:%S WIB")
                      if fired_orig else now_str)
-        # Resolution: assigned (active) template → active default → AlertTemplate body →
-        # hardcoded. nt_line only holds active templates, so an inactive assignment falls
-        # through to the default here.
+        # Resolution: assigned (active) template → the rule's own AlertTemplate body →
+        # active default → hardcoded. The AlertTemplate (built from the rule's template) is
+        # more specific than the generic active default, so it must win — otherwise activating
+        # the default would shadow every AlertTemplate's tailored body. nt_line only holds
+        # active templates, so an inactive assignment falls through here.
         tmpl_text = (
             (nt_line.get(rule.notification_template_id) if rule.notification_template_id else None)
-            or default_line
             or (template_body.get(rule.template_id) if rule.template_id else None)
+            or default_line
         )
         # A recovery only renders through the template if that template branches on
         # `event` ({% if event == 'resolved' %}…) — otherwise an alert-worded template
@@ -905,6 +1053,25 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "threshold_value": eff_threshold,
                 "threshold": eff_threshold,
                 "metric_value": mv,
+                # Interface throughput extras (None for other sources / absolute mode):
+                "link_max_mbps": link_max,
+                "utilization_pct": utilization_pct,
+                "threshold_pct": threshold_pct,
+                # Friendly target: interface name / SD-WAN link name / device hostname /
+                # appid filter label.
+                "target_name": target_name,
+                "target_key": eff_target_key,
+                # appid_flow scoping (None when not an appid rule or unfiltered):
+                "filter_app": filter_app,
+                "filter_proto": filter_proto,
+                "filter_port": filter_port,
+                "filter_label": filter_label,
+                # VPN capacity (None for non-VPN rules):
+                "vpn_active_users": vpn_active_users,
+                "vpn_total_mb": vpn_total_mb,
+                "vpn_top_user_mb": vpn_top_user_mb,
+                "metric_mb": metric_mb,
+                "threshold_mb": threshold_mb,
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
                 "fired_at": fired_str,
@@ -967,6 +1134,403 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         logger.error("Batch notify flush error: %s", e)
 
 
+# ── VPN Session Monitor (kind="session") ────────────────────────
+# Event-on-state-change, not threshold: each poll snapshots the currently-active VPN
+# sessions and diffs against the previous snapshot to emit connect/disconnect alerts.
+# Reuses the VPN Sessions page's active queries so what alerts == what the page shows.
+
+async def _fetch_active_vpn_sessions(rule: AlertRule) -> dict[str, dict] | None:
+    """Currently-active VPN sessions for a session rule, as {username: {remote_ip, active_ip,
+    device}}. Presence window = the rule's evaluation window (default 5min = the session gap):
+    a user seen within it is "connected". target_key is an optional username glob (e.g.
+    "admin*"); blank = all users. Returns None on a read failure so the caller HOLDS instead
+    of treating a failed query as "everyone disconnected"."""
+    now_ms = int(_time.time() * 1000)
+    window = max(rule.evaluation_window_minutes or 5, 1)
+    gte_ms = now_ms - window * 60 * 1000
+    out: dict[str, dict] = {}
+    try:
+        if rule.data_source == "vpn_ssl":
+            from app.opensearch import sslvpn as q
+            site = q.sslvpn_measurement_for_site(rule.site_name)
+            for u in await q.active_sslvpn_users(gte_ms=gte_ms, lte_ms=now_ms, site_name=site):
+                out[u["username"]] = {"remote_ip": u.get("remote_ip", ""),
+                                      "active_ip": u.get("vpn_ip", ""), "device": u.get("device", ""),
+                                      "bytes_in": int(u.get("bytes_in") or 0),
+                                      "bytes_out": int(u.get("bytes_out") or 0)}
+        elif rule.data_source == "vpn_ipsec":
+            from app.opensearch import ipsec as ipsec_q
+            for u in await ipsec_q.active_ipsec_users_detail(gte_ms=gte_ms, lte_ms=now_ms):
+                out[u["username"]] = {"remote_ip": u.get("remote_gw_ip", ""),
+                                      "active_ip": u.get("assigned_ip", ""), "device": u.get("device", ""),
+                                      "bytes_in": int(u.get("bytes_in") or 0),
+                                      "bytes_out": int(u.get("bytes_out") or 0)}
+        else:
+            return None
+    except Exception as e:
+        logger.error("Session fetch failed for rule %s (%s): %s", rule.id, rule.name, e)
+        return None
+    glob = (rule.target_key or "").strip().lower()
+    if glob:
+        import fnmatch
+        out = {u: v for u, v in out.items() if fnmatch.fnmatch(u.lower(), glob)}
+    return out
+
+
+def _fmt_wib(ms: int | None) -> str:
+    if not ms:
+        return "—"
+    return datetime.fromtimestamp(ms / 1000, tz=_WIB).strftime("%d %b %Y %H:%M:%S WIB")
+
+
+def _fmt_bytes(n: int | float | None) -> str:
+    """Human bytes, decimal units (1 KB = 1000 B) to match the Mbps/MB convention elsewhere."""
+    b = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if b < 1000 or unit == "TB":
+            return f"{int(b)} {unit}" if unit == "B" else f"{b:.1f} {unit}"
+        b /= 1000
+    return f"{b:.1f} TB"
+
+
+def _fmt_duration(start_ms: int | None, end_ms: int | None) -> str:
+    if not start_ms or not end_ms or end_ms < start_ms:
+        return "—"
+    secs = int((end_ms - start_ms) / 1000)
+    h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
+    return (f"{h}h {m}m" if h else f"{m}m {s}s" if m else f"{s}s")
+
+
+async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict) -> None:
+    """Render + send ONE message for a single connect/disconnect event."""
+    vpn_type = "SSL VPN" if rule.data_source == "vpn_ssl" else "IPsec VPN"
+    connected = event == "connected"
+    started_ms, ended_ms = info.get("started_at"), info.get("ended_at")
+    # Cumulative bytes the user consumed over the session (last-known counter at disconnect).
+    b_in, b_out = int(info.get("bytes_in") or 0), int(info.get("bytes_out") or 0)
+    ctx = {
+        "rule": {"name": rule.name, "severity": rule.severity, "site_name": rule.site_name},
+        "name": rule.name, "severity": rule.severity, "site_name": rule.site_name,
+        "vpn_type": vpn_type, "vpn_user": user,
+        "remote_ip": info.get("remote_ip") or "—", "active_ip": info.get("active_ip") or "—",
+        "device": info.get("device") or "—",
+        "started_at": _fmt_wib(started_ms),
+        "ended_at": _fmt_wib(ended_ms) if ended_ms else "—",
+        "duration": _fmt_duration(started_ms, ended_ms) if not connected else "—",
+        "bytes_in": b_in, "bytes_out": b_out,
+        "bytes_in_h": _fmt_bytes(b_in), "bytes_out_h": _fmt_bytes(b_out),
+        "bytes_total_h": _fmt_bytes(b_in + b_out),
+        "event": event, "event_label": "Connected" if connected else "Disconnected",
+        "sent_at": datetime.now(_WIB).strftime("%d %b %Y %H:%M:%S WIB"),
+    }
+    # Template: assigned (active) → seeded "VPN Session Monitor" → hardcoded line.
+    tmpl_text: str | None = None
+    try:
+        async with AsyncSessionLocal() as tdb:
+            if rule.notification_template_id:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.id == rule.notification_template_id)
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+            if not tmpl_text:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.name == "VPN Session Monitor")
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+    except Exception as e:
+        logger.error("Session template fetch failed: %s", e)
+
+    body: str | None = None
+    if tmpl_text:
+        try:
+            body = _render_template(tmpl_text, ctx)
+        except Exception as e:
+            logger.error("Session template render failed for rule %s: %s", rule.id, e)
+    if body is None:
+        icon = "🟢" if connected else "🔴"
+        u_e, r_e, a_e = html.escape(user), html.escape(ctx["remote_ip"]), html.escape(ctx["active_ip"])
+        tail = (f"\n🕐 <b>Started:</b> {ctx['started_at']}" if connected
+                else f"\n🕐 <b>Session:</b> {ctx['started_at']} → {ctx['ended_at']} ({ctx['duration']})"
+                     f"\n📊 <b>Data:</b> ↓ {ctx['bytes_in_h']} · ↑ {ctx['bytes_out_h']} (total {ctx['bytes_total_h']})")
+        body = (f"{icon} <b>{vpn_type} {ctx['event_label']}</b>\n"
+                f"👤 <b>User:</b> {u_e} @ {html.escape(rule.site_name or '—')}\n"
+                f"🌐 <b>Remote IP:</b> {r_e} · <b>Active IP:</b> {a_e}{tail}")
+    parse_mode = "HTML" if "<b>" in body else None
+    subject = f"VPN {ctx['event_label']}: {user}"
+    try:
+        from app.services.notifier_helper import send_alert, load_channel_configs
+        db_configs = await load_channel_configs()
+        for channel in rule.notify_channels:
+            cfg = db_configs.get(channel)
+            if not cfg:
+                continue
+            try:
+                await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+            except Exception as e:
+                logger.error("Session notify failed for %s: %s", channel, e)
+    except Exception as e:
+        logger.error("Session notify error: %s", e)
+
+
+def _diff_sessions(
+    prev: dict[str, dict], current: dict[str, dict], now_ms: int,
+) -> tuple[list[tuple[str, str, dict]], dict[str, dict]]:
+    """Pure diff of two active-session snapshots → (events, new_state).
+
+    A username in current but not prev = connected; in prev but not current = disconnected.
+    new_state keeps each still-connected user's ORIGINAL started_at so a later disconnect
+    reports the true session length. Pure — no cluster, no DB."""
+    events: list[tuple[str, str, dict]] = []
+    for u, v in current.items():
+        if u not in prev:
+            events.append(("connected", u, {**v, "started_at": now_ms, "ended_at": None}))
+    for u, v in prev.items():
+        if u not in current:
+            events.append(("disconnected", u, {**v, "ended_at": now_ms}))
+    new_state = {
+        u: {**v, "started_at": (prev.get(u) or {}).get("started_at", now_ms)}
+        for u, v in current.items()
+    }
+    return events, new_state
+
+
+async def _evaluate_session_rule(rule: AlertRule, db: AsyncSession) -> None:
+    """Diff current active VPN sessions vs the previous poll → connect/disconnect events."""
+    current = await _fetch_active_vpn_sessions(rule)
+    state = (await db.execute(select(AlertState).where(AlertState.rule_id == rule.id))).scalar_one_or_none()
+    if not state:
+        state = AlertState(rule_id=rule.id, state="INACTIVE")
+        db.add(state)
+    now = datetime.now(timezone.utc)
+    now_ms = int(_time.time() * 1000)
+    state.last_evaluated_at = now
+
+    if current is None:  # read failed → hold, never emit disconnects on a bad read
+        state.last_read_degraded = True
+        await db.commit()
+        return
+    state.last_read_degraded = False
+    state.last_value = float(len(current))
+    prev = state.session_state
+
+    # First run (or after enable): baseline only — never blast a connect for everyone
+    # already online. Persist, no events.
+    if prev is None:
+        state.session_state = {u: {**v, "started_at": now_ms} for u, v in current.items()}
+        state.last_state_change_at = now
+        await db.commit()
+        return
+
+    events, new_state = _diff_sessions(prev, current, now_ms)
+    state.session_state = new_state
+    if events:
+        state.last_state_change_at = now
+    await db.commit()
+
+    for event, user, info in events:
+        try:
+            await _send_session_event(rule, event, user, info)
+        except Exception as e:
+            logger.error("Session event send failed for %s/%s: %s", rule.id, user, e)
+
+
+# ── Device Reboot Monitor (kind="reboot") ───────────────────────
+# Event-on-state-change, not threshold: each poll snapshots the currently-reporting devices'
+# uptime counters and diffs against the previous snapshot. A DECREASE in a device's SNMP
+# sys_uptime = a reboot (counter reset), so we emit one event carrying which device rebooted,
+# how long it was unreachable, and the new uptime it came back with. Reuses the same
+# device_availability() query the device_uptime threshold rules use (what alerts == what the
+# Resources ▸ Availability page shows).
+
+async def _fetch_device_reboots(rule: AlertRule) -> dict[str, dict] | None:
+    """Currently-reporting devices for a reboot rule, as {device_key(IP):
+    {hostname, uptime_seconds, downtime_seconds}}. `downtime_seconds` is the gap around the
+    most recent real reset (a 32-bit counter wrap is excluded — note is None only for a genuine
+    reboot). target_key is an optional device glob (IP or hostname, e.g. "10.80.*"); blank = all
+    devices at the site. Returns None on a read failure so the caller HOLDS instead of treating
+    a failed query as 'no reboots'."""
+    now_ms = int(_time.time() * 1000)
+    window = max(rule.evaluation_window_minutes or 10, 2)
+    gte_ms = now_ms - window * 60 * 1000
+    try:
+        from app.opensearch import device_uptime as du
+        result = await du.device_availability(
+            site_name=rule.site_name or "Site_FGT-DC", gte_ms=gte_ms, lte_ms=now_ms, now_ms=now_ms,
+        )
+    except Exception as e:
+        logger.error("Reboot fetch failed for rule %s (%s): %s", rule.id, rule.name, e)
+        return None
+    out: dict[str, dict] = {}
+    for d in (result or {}).get("devices", []) or []:
+        up = d.get("uptime_seconds")
+        key = d.get("device_key")
+        if up is None or not key:
+            continue
+        reboots = [r for r in (d.get("reboots") or []) if r.get("note") is None]
+        out[key] = {
+            "hostname": d.get("hostname") or key,
+            "uptime_seconds": float(up),
+            "downtime_seconds": int(reboots[-1]["downtime_seconds"]) if reboots else 0,
+        }
+    glob = (rule.target_key or "").strip().lower()
+    if glob:
+        import fnmatch
+        out = {k: v for k, v in out.items()
+               if fnmatch.fnmatch(str(k).lower(), glob) or fnmatch.fnmatch(v["hostname"].lower(), glob)}
+    return out
+
+
+def _fmt_secs(secs: int | float | None) -> str:
+    """Compact duration from a raw second count: '2h 5m' / '3m 10s' / '45s' / '—'."""
+    s = int(secs or 0)
+    if s <= 0:
+        return "—"
+    h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+    return f"{h}h {m}m" if h else f"{m}m {sec}s" if m else f"{sec}s"
+
+
+def _diff_reboots(
+    prev: dict[str, dict], current: dict[str, dict], now_ms: int,
+) -> tuple[list[tuple[str, dict]], dict[str, dict]]:
+    """Pure diff of two device-uptime snapshots → (events, new_state).
+
+    A device whose uptime counter DECREASED since the last poll rebooted (SNMP sys_uptime is
+    monotonic, so a drop is unambiguous). Events carry the new uptime + the pre-reboot uptime.
+    A device new to `current` is baselined silently (first sighting ≠ reboot). new_state records
+    each current device's uptime for the next comparison. Pure — no cluster, no DB."""
+    events: list[tuple[str, dict]] = []
+    for k, v in current.items():
+        p = prev.get(k)
+        if p is None:
+            continue
+        prev_up = float(p.get("uptime_seconds", 0.0))
+        cur_up = float(v.get("uptime_seconds", 0.0))
+        # A genuine reset drops uptime toward zero; the +1s guard ignores SNMP tick rounding.
+        if cur_up + 1.0 < prev_up:
+            events.append((k, {**v, "reboot_at": now_ms, "prev_uptime_seconds": prev_up}))
+    new_state = {
+        k: {"hostname": v.get("hostname"), "uptime_seconds": float(v.get("uptime_seconds", 0.0))}
+        for k, v in current.items()
+    }
+    return events, new_state
+
+
+async def _send_reboot_event(rule: AlertRule, device_key: str, info: dict) -> None:
+    """Render + send ONE message for a single detected device reboot."""
+    from app.opensearch.device_uptime import format_uptime_short
+    new_up = float(info.get("uptime_seconds") or 0.0)
+    prev_up = float(info.get("prev_uptime_seconds") or 0.0)
+    downtime = int(info.get("downtime_seconds") or 0)
+    hostname = info.get("hostname") or str(device_key)
+    ctx = {
+        "rule": {"name": rule.name, "severity": rule.severity, "site_name": rule.site_name},
+        "name": rule.name, "severity": rule.severity, "site_name": rule.site_name,
+        "device": hostname, "device_ip": device_key, "target_key": device_key,
+        "reboot_at": _fmt_wib(info.get("reboot_at")),
+        "downtime_seconds": downtime, "downtime": _fmt_secs(downtime),
+        "new_uptime_seconds": new_up, "new_uptime": format_uptime_short(new_up),
+        "prev_uptime_seconds": prev_up, "prev_uptime": format_uptime_short(prev_up),
+        "event": "rebooted", "event_label": "Rebooted",
+        "sent_at": datetime.now(_WIB).strftime("%d %b %Y %H:%M:%S WIB"),
+    }
+    # Template: assigned (active) → seeded "Device Reboot Monitor" → hardcoded line.
+    tmpl_text: str | None = None
+    try:
+        async with AsyncSessionLocal() as tdb:
+            if rule.notification_template_id:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.id == rule.notification_template_id)
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+            if not tmpl_text:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.name == "Device Reboot Monitor")
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+    except Exception as e:
+        logger.error("Reboot template fetch failed: %s", e)
+
+    body: str | None = None
+    if tmpl_text:
+        try:
+            body = _render_template(tmpl_text, ctx)
+        except Exception as e:
+            logger.error("Reboot template render failed for rule %s: %s", rule.id, e)
+    if body is None:
+        h_e, ip_e, s_e = html.escape(hostname), html.escape(str(device_key)), html.escape(rule.site_name or "—")
+        body = (f"🔁 <b>Device Rebooted</b>\n"
+                f"🖥️ <b>Device:</b> {h_e} ({ip_e})\n"
+                f"🏢 <b>Site:</b> {s_e}\n"
+                f"🕐 <b>Rebooted at:</b> {ctx['reboot_at']}\n"
+                f"⏱️ <b>Unreachable:</b> {ctx['downtime']}\n"
+                f"⬆️ <b>Back up · new uptime:</b> {ctx['new_uptime']} (was {ctx['prev_uptime']})")
+    parse_mode = "HTML" if "<b>" in body else None
+    subject = f"Device Rebooted: {hostname}"
+    try:
+        from app.services.notifier_helper import send_alert, load_channel_configs
+        db_configs = await load_channel_configs()
+        for channel in rule.notify_channels:
+            cfg = db_configs.get(channel)
+            if not cfg:
+                continue
+            try:
+                await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+            except Exception as e:
+                logger.error("Reboot notify failed for %s: %s", channel, e)
+    except Exception as e:
+        logger.error("Reboot notify error: %s", e)
+
+
+async def _evaluate_reboot_rule(rule: AlertRule, db: AsyncSession) -> None:
+    """Diff current device uptimes vs the previous poll → reboot events (uptime-counter reset)."""
+    current = await _fetch_device_reboots(rule)
+    state = (await db.execute(select(AlertState).where(AlertState.rule_id == rule.id))).scalar_one_or_none()
+    if not state:
+        state = AlertState(rule_id=rule.id, state="INACTIVE")
+        db.add(state)
+    now = datetime.now(timezone.utc)
+    now_ms = int(_time.time() * 1000)
+    state.last_evaluated_at = now
+
+    if current is None:  # read failed → hold, never emit a phantom reboot on a bad read
+        state.last_read_degraded = True
+        await db.commit()
+        return
+    state.last_read_degraded = False
+    state.last_value = float(len(current))
+    prev = state.session_state
+
+    # First run (or after enable): baseline only — a device already up isn't a reboot.
+    if prev is None:
+        state.session_state = {
+            k: {"hostname": v["hostname"], "uptime_seconds": v["uptime_seconds"]}
+            for k, v in current.items()
+        }
+        state.last_state_change_at = now
+        await db.commit()
+        return
+
+    events, new_state = _diff_reboots(prev, current, now_ms)
+    state.session_state = new_state
+    if events:
+        state.last_state_change_at = now
+    await db.commit()
+
+    for device_key, info in events:
+        try:
+            await _send_reboot_event(rule, device_key, info)
+        except Exception as e:
+            logger.error("Reboot event send failed for %s/%s: %s", rule.id, device_key, e)
+
+
 async def _run_evaluation_cycle() -> None:
     """One tick: enabled rules → grouped OS queries → state machine → batched notify.
 
@@ -999,34 +1563,44 @@ async def _run_evaluation_cycle() -> None:
                 logger.info("Maintenance window active — skipping %s rule(s)", skipped)
 
             # Split single vs composite
-            single_rules = [r for r in active_rules if r.kind != "composite"]
+            single_rules = [r for r in active_rules if r.kind not in ("composite", "session", "reboot")]
             composite_rules = [r for r in active_rules if r.kind == "composite"]
+            session_rules = [r for r in active_rules if r.kind == "session"]
+            reboot_rules = [r for r in active_rules if r.kind == "reboot"]
 
             # ── 1. Single rules (P1 batched) ──
+            # Group key is (ds, site, window, appid_sig): appid_flow rules with a distinct
+            # app/protocol/port filter can't share the whole-path query, so the filter joins
+            # the key. Unfiltered rules → sig None → keep sharing one query.
             notify_queue: list[tuple[AlertRule, float, str, datetime]] = []
             groups: dict[tuple, list[AlertRule]] = defaultdict(list)
+            group_filters: dict[tuple, dict | None] = {}
             for rule in single_rules:
-                key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)
+                filt = _appid_filter_for(rule)
+                key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes, _appid_sig(filt))
                 groups[key].append(rule)
+                group_filters[key] = filt
 
             # §9.4: also pre-fetch for composite clause keys, sharing the
             # cache with singles that happen to share a (ds, site, window) tuple.
+            # Composite appid clauses use the unfiltered path (sig None) for now.
             for rule in composite_rules:
                 for clause in (rule.clauses or []):
                     ds = clause.get("data_source")
                     if not ds:
                         continue
                     window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
-                    groups.setdefault((ds, rule.site_name, window), [])
+                    groups.setdefault((ds, rule.site_name, window, None), [])
 
             group_cache: dict[tuple, float | list | dict | None] = {}
             for key in groups:
-                ds, site, window = key
-                group_cache[key] = await _run_group_query(ds, site, window)
+                ds, site, window, _sig = key
+                group_cache[key] = await _run_group_query(ds, site, window, group_filters.get(key))
 
             for rule in single_rules:
                 try:
-                    key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes)
+                    key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes,
+                           _appid_sig(_appid_filter_for(rule)))
                     group_result = group_cache.get(key)
                     metric_value = _extract_per_rule_value(rule, group_result)
                     if metric_value is None:
@@ -1034,6 +1608,19 @@ async def _run_evaluation_cycle() -> None:
                         continue
                     condition_met = _check_condition(
                         metric_value, rule.condition, rule.threshold_value
+                    )
+                    # Transient: friendly target name for the notification (reuses group_result
+                    # for the device hostname — no extra query). appid_flow has no target_key;
+                    # its "target" is the app/protocol/port filter, so surface that instead.
+                    rule._target_name = (
+                        _appid_filter_label(_appid_filter_for(rule))
+                        if rule.data_source == "appid_flow"
+                        else _resolve_target_name(rule.data_source, rule.site_name, rule.target_key, group_result)
+                    )
+                    # VPN usage summary {count,total_bytes,top_user_bytes} for the notification.
+                    rule._vpn_usage = (
+                        group_result if rule.data_source in ("vpn_ssl", "vpn_ipsec")
+                        and isinstance(group_result, dict) else None
                     )
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:
@@ -1050,6 +1637,11 @@ async def _run_evaluation_cycle() -> None:
                     # Transient (not persisted): tells the notifier which clause fired so the
                     # message renders that clause's threshold, not the top-level clause[0] mirror.
                     rule._fired_clause = driver
+                    # Name the driver clause's target (static maps → no query; device falls back to IP).
+                    drv = driver or {}
+                    rule._target_name = _resolve_target_name(
+                        drv.get("data_source"), rule.site_name, drv.get("target_key")
+                    )
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:
                     logger.error("Error evaluating composite rule %s (%s): %s", rule.id, rule.name, e)
@@ -1058,6 +1650,22 @@ async def _run_evaluation_cycle() -> None:
             # ── 3. Flush batched notifications (P7 grouping) ──
             if notify_queue:
                 await _flush_batch_notify(notify_queue)
+
+            # ── 4. VPN session monitors (event-on-change, sent inline per event) ──
+            for rule in session_rules:
+                try:
+                    await _evaluate_session_rule(rule, db)
+                except Exception as e:
+                    logger.error("Error evaluating session rule %s (%s): %s", rule.id, rule.name, e)
+                    await db.rollback()
+
+            # ── 5. Device reboot monitors (event-on-change, sent inline per event) ──
+            for rule in reboot_rules:
+                try:
+                    await _evaluate_reboot_rule(rule, db)
+                except Exception as e:
+                    logger.error("Error evaluating reboot rule %s (%s): %s", rule.id, rule.name, e)
+                    await db.rollback()
 
         except Exception as e:
             logger.error("Alert evaluation cycle failed: %s", e)

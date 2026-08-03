@@ -116,13 +116,18 @@ interface ClauseForm {
 interface RuleForm {
   name: string;
   severity: string;
-  kind: "single" | "composite";
+  kind: "single" | "composite" | "session" | "reboot";
   notify_when: "any" | "all";   // composite: Any=OR, All=AND
   clauses: ClauseForm[];
   data_source: string;
   metric_field: string;
   target_key: string;
   link_max_mbps: number | null;   // interface throughput: set → "% of link max" mode
+  // appid_flow scoping — narrow the path metric to an app / protocol / dest port (free text).
+  appid_app: string;
+  appid_protocol: string;
+  appid_port: string;
+  volume_unit: "MB" | "GB";   // vpn_ssl/vpn_ipsec byte metrics: display unit for the threshold
   aggregation: string;
   condition: string;
   threshold_value: number;
@@ -144,6 +149,10 @@ const emptyForm: RuleForm = {
   metric_field: "ha_member.cpu_usage",
   target_key: "",
   link_max_mbps: null,
+  appid_app: "",
+  appid_protocol: "",
+  appid_port: "",
+  volume_unit: "GB",
   aggregation: "avg",
   condition: ">",
   threshold_value: 80,
@@ -224,6 +233,10 @@ export default function AlertsPage() {
   const selectedField = fields.find((f) => f.field_key === form.metric_field) || null;
 
   const isComposite = form.kind === "composite";
+  // VPN Session Monitor — event on connect/disconnect, not a threshold. Only SSL/IPsec.
+  const isSession = form.kind === "session";
+  // Device Reboot Monitor — event on uptime-counter reset, not a threshold. Only device_uptime.
+  const isReboot = form.kind === "reboot";
   // Full catalog (all sources) for the composite clause editor — one call, filtered client-side.
   const { data: allFieldsData } = useSWR<{ data: AlertFieldCatalog[] }>(
     showModal && isComposite ? "/api/v1/alerts/fields" : null,
@@ -333,6 +346,13 @@ export default function AlertsPage() {
   // Phase E: interface_stats needs a canonical site + an interface (target_key). Composite
   // clauses may also target interfaces/devices, so fetch the site's lists whenever composite.
   const isIface = form.data_source === "interface_stats";
+  // appid_flow single rules can scope the path metric to an app / protocol / dest port.
+  const isAppid = form.data_source === "appid_flow" && !isComposite;
+  // vpn byte-volume metrics take a threshold in MB/GB (stored as bytes).
+  const isVpnVolume =
+    (form.data_source === "vpn_ssl" || form.data_source === "vpn_ipsec") &&
+    (form.metric_field === "total_bytes" || form.metric_field === "top_user_bytes");
+  const volFactor = form.volume_unit === "GB" ? 1e9 : 1e6;
   const { data: ifaceData } = useSWR<{ data: { key: string; label: string }[] }>(
     showModal && (isIface || isComposite) && SITES.includes(form.site_name)
       ? `/api/v1/alerts/interfaces?site_name=${form.site_name}`
@@ -509,6 +529,12 @@ export default function AlertsPage() {
       metric_field: rule.metric_field,
       target_key: rule.target_key || "",
       link_max_mbps: rule.link_max_mbps ?? null,
+      appid_app: rule.appid_filter?.app ?? "",
+      appid_protocol: rule.appid_filter?.protocol ?? "",
+      appid_port: rule.appid_filter?.port != null ? String(rule.appid_filter.port) : "",
+      // volume metrics store bytes; infer MB/GB for display (≥1 GB → GB).
+      volume_unit: (rule.metric_field === "total_bytes" || rule.metric_field === "top_user_bytes")
+        && rule.threshold_value >= 1e9 ? "GB" : "MB",
       aggregation: rule.aggregation,
       condition: rule.condition,
       threshold_value: rule.threshold_value,
@@ -527,7 +553,8 @@ export default function AlertsPage() {
     setSaving(true);
     // target_key applies to interface_stats (required) and device_uptime (optional; blank =
     // any device / site-level). Cleared for every other source. Empty string → null.
-    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla";
+    // session rules carry the username glob in target_key.
+    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla" || isSession || isReboot;
     // link_max_mbps only rides along with interface throughput's %-of-max mode.
     const keepsLinkMax = form.data_source === "interface_stats" && form.metric_field === "iface.throughput_mbps";
 
@@ -546,13 +573,33 @@ export default function AlertsPage() {
           condition: c0.condition, threshold_value: c0.threshold_value, target_key: null, link_max_mbps: null }
       : {};
 
+    // appid_flow scoping — only for a single appid rule; drop empty fields, all-empty → null.
+    let appid_filter: { app?: string; protocol?: string; port?: number } | null = null;
+    if (form.kind === "single" && form.data_source === "appid_flow") {
+      const af: { app?: string; protocol?: string; port?: number } = {};
+      if (form.appid_app.trim()) af.app = form.appid_app.trim();
+      if (form.appid_protocol.trim()) af.protocol = form.appid_protocol.trim().toUpperCase();
+      if (form.appid_port.trim() && !Number.isNaN(Number(form.appid_port))) af.port = Number(form.appid_port);
+      appid_filter = Object.keys(af).length ? af : null;
+    }
+
+    // Session & reboot monitors have no metric/threshold — fill the NOT-NULL columns with
+    // placeholders (the engine ignores them for event rules).
+    const eventFields = isSession
+      ? { metric_field: "session", aggregation: "max", condition: "==", threshold_value: 0, link_max_mbps: null }
+      : isReboot
+      ? { data_source: "device_uptime", metric_field: "reboot", aggregation: "max", condition: "==", threshold_value: 0, link_max_mbps: null }
+      : {};
+
     const payload = {
       ...form,
       target_key: keepsTargetKey ? (form.target_key || null) : null,
       link_max_mbps: keepsLinkMax ? form.link_max_mbps : null,
+      appid_filter,
       notification_template_id: form.notification_template_id || null,
       clauses: form.kind === "composite" ? cleanClauses : [],
       ...composite,
+      ...eventFields,
     };
     try {
       if (editingRule) {
@@ -1011,7 +1058,10 @@ export default function AlertsPage() {
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowModal(false)}>
           <div
-            className="bg-card border rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+            // Dynamic width: grows with the viewport instead of a hard 512px cap, so denser
+            // rows (e.g. SSL VPN "Consumed bytes" — number + MB/GB unit in one grid cell, or the
+            // composite clause editor) get room to breathe on larger screens.
+            className="bg-card border rounded-xl shadow-2xl w-full max-w-xl sm:max-w-2xl lg:max-w-3xl mx-4 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6 space-y-4">
@@ -1060,22 +1110,38 @@ export default function AlertsPage() {
                   <label className="text-xs font-medium">Kind</label>
                   <select
                     value={form.kind}
-                    onChange={(e) => setForm({ ...form, kind: e.target.value as "single" | "composite" })}
+                    onChange={(e) => {
+                      const kind = e.target.value as "single" | "composite" | "session" | "reboot";
+                      // Session monitors only apply to SSL/IPsec; reboot monitors only to device_uptime
+                      // — snap the source when switching in.
+                      const vpn = form.data_source === "vpn_ssl" || form.data_source === "vpn_ipsec";
+                      const data_source =
+                        kind === "session" && !vpn ? "vpn_ssl"
+                        : kind === "reboot" ? "device_uptime"
+                        : form.data_source;
+                      setForm({ ...form, kind, data_source });
+                    }}
                     className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                   >
                     <option value="single">Single</option>
                     <option value="composite">Composite</option>
+                    <option value="session">VPN Session Monitor</option>
+                    <option value="reboot">Device Reboot Monitor</option>
                   </select>
                 </div>
                 {!isComposite ? (
                   <div>
-                    <label className="text-xs font-medium">Data Source</label>
+                    <label className="text-xs font-medium">{isSession ? "VPN Type" : "Data Source"}</label>
                     <select
                       value={form.data_source}
                       onChange={(e) => setForm({ ...form, data_source: e.target.value })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      disabled={isReboot}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1 disabled:opacity-60"
                     >
-                      {DATA_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                      {(isSession ? DATA_SOURCES.filter((s) => s.value === "vpn_ssl" || s.value === "vpn_ipsec")
+                        : isReboot ? DATA_SOURCES.filter((s) => s.value === "device_uptime")
+                        : DATA_SOURCES)
+                        .map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                     </select>
                   </div>
                 ) : (
@@ -1097,7 +1163,72 @@ export default function AlertsPage() {
                 )}
               </div>
 
-              {!isComposite && (<>
+              {/* VPN Session Monitor — no threshold; alerts on connect/disconnect */}
+              {isSession && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium">Watch users (optional)</label>
+                    <input
+                      value={form.target_key}
+                      onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                      placeholder="blank = all users · e.g. admin*  or  someone"
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Glob match on username (<code>*</code> wildcard). Fires one message per <b>connect</b> and
+                      per <b>disconnect</b>, with user, remote IP, active IP, and session start/end.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">Presence window (min)</label>
+                    <NumberField
+                      value={form.evaluation_window_minutes}
+                      onValueChange={(n) => setForm({ ...form, evaluation_window_minutes: n })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      min={1}
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      A user seen within this window counts as connected (default 5 = the session gap).
+                      Disconnect is detected ~this long after their last activity.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Device Reboot Monitor — no threshold; alerts on uptime-counter reset */}
+              {isReboot && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium">Watch devices (optional)</label>
+                    <input
+                      value={form.target_key}
+                      onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                      placeholder="blank = all devices · e.g. 10.80.*  or  FG_DC*"
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Glob match on device IP or hostname (<code>*</code> wildcard). Fires one message per
+                      detected <b>reboot</b> (SNMP uptime counter reset), with the device, how long it was
+                      unreachable, and the new uptime it came back with.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">Detection window (min)</label>
+                    <NumberField
+                      value={form.evaluation_window_minutes}
+                      onValueChange={(n) => setForm({ ...form, evaluation_window_minutes: n })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      min={2}
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      How far back each poll looks for the reboot + its downtime (default 10, min 2 —
+                      at a 30s poll that&apos;s enough samples to measure the outage around the reset).
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!isComposite && !isSession && !isReboot && (<>
               {/* Metric — catalog-driven (choose, don't type) */}
               <div>
                 <label className="text-xs font-medium">Metric</label>
@@ -1317,13 +1448,66 @@ export default function AlertsPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-xs font-medium">Threshold{selectedField?.unit ? ` (${selectedField.unit})` : ""}</label>
-                    <NumberField
-                      value={form.threshold_value}
-                      onValueChange={(n) => setForm({ ...form, threshold_value: n })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    <label className="text-xs font-medium">
+                      Threshold{isVpnVolume ? " (volume)" : selectedField?.unit ? ` (${selectedField.unit})` : ""}
+                    </label>
+                    {isVpnVolume ? (
+                      <div className="flex gap-2 mt-1">
+                        <NumberField
+                          value={Number((form.threshold_value / volFactor).toFixed(3))}
+                          onValueChange={(n) => setForm({ ...form, threshold_value: Math.round(n * volFactor) })}
+                          className="flex-1 px-3 py-1.5 text-sm rounded-md border bg-background"
+                        />
+                        <select
+                          value={form.volume_unit}
+                          onChange={(e) => setForm({ ...form, volume_unit: e.target.value as "MB" | "GB" })}
+                          className="px-2 py-1.5 text-sm rounded-md border bg-background"
+                        >
+                          <option value="MB">MB</option>
+                          <option value="GB">GB</option>
+                        </select>
+                      </div>
+                    ) : (
+                      <NumberField
+                        value={form.threshold_value}
+                        onValueChange={(n) => setForm({ ...form, threshold_value: n })}
+                        className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* appid_flow scoping — narrow the path metric to an app / protocol / dest port */}
+              {isAppid && (
+                <div>
+                  <label className="text-xs font-medium">
+                    Scope to (optional) — leave blank for the whole path
+                  </label>
+                  <div className="grid grid-cols-3 gap-3 mt-1">
+                    <input
+                      value={form.appid_app}
+                      onChange={(e) => setForm({ ...form, appid_app: e.target.value })}
+                      placeholder="Application (e.g. YouTube)"
+                      className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                    />
+                    <input
+                      value={form.appid_protocol}
+                      onChange={(e) => setForm({ ...form, appid_protocol: e.target.value })}
+                      placeholder="Protocol (TCP/UDP)"
+                      className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                    />
+                    <input
+                      value={form.appid_port}
+                      onChange={(e) => setForm({ ...form, appid_port: e.target.value })}
+                      placeholder="Dest port (e.g. 443)"
+                      inputMode="numeric"
+                      className="px-3 py-1.5 text-sm rounded-md border bg-background"
                     />
                   </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Filters flow.application.name / l4.proto.name / flow.server.l4.port.id. Exact match (case-insensitive protocol).
+                  </p>
                 </div>
               )}
               </>)}

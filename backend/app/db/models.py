@@ -133,6 +133,9 @@ class AlertRule(Base):
     # stored as Mbps (threshold_value = link_max × %); this remembers the max so the UI can
     # show the % again on edit. Null = absolute-Mbps rule. Eval is unchanged (Mbps compare).
     link_max_mbps: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # appid_flow only: narrow the path metric to a specific application / protocol / dest port.
+    # {"app": "YouTube", "protocol": "TCP", "port": 443} — any subset; null = whole path.
+    appid_filter: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     aggregation: Mapped[str] = mapped_column(
         String(10), nullable=False
     )  # avg, max, min, sum, count
@@ -313,6 +316,9 @@ class AlertState(Base):
     last_read_degraded: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false"), default=False
     )  # last read was held (OpenSearch degraded) — "data delayed" badge
+    # kind="session" rules only: the previous poll's active VPN sessions, so the next poll can
+    # diff for connect/disconnect. {username: {remote_ip, active_ip, started_at, device}}.
+    session_state: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),

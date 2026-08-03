@@ -613,6 +613,9 @@ async def appid_flow_alert_summary(
     gte_ms: int = 0,
     lte_ms: int = 0,
     site_name: str = "Site_FGT-DC",
+    app_filter: str = "",
+    protocol: str = "",
+    dst_port: int | None = None,
 ) -> dict[str, dict[str, float | int]]:
     """One query → per-`flow.traffic.path` throughput for alerting.
 
@@ -627,9 +630,20 @@ async def appid_flow_alert_summary(
     """
     if client is None:
         client = _get_client(site_name)
+    # Optional app/protocol/port scoping — same fields the flow pages filter on
+    # (flow.application.name / l4.proto.name / flow.server.l4.port.id).
+    scope: list[dict] = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
+    f = _multi_wildcard("flow.application.name", app_filter)
+    if f:
+        scope.append(f)
+    f = _multi_term("l4.proto.name", protocol.upper())  # proto names are uppercase
+    if f:
+        scope.append(f)
+    if dst_port is not None:
+        scope.append({"term": {"flow.server.l4.port.id": dst_port}})
     body = {
         "size": 0,
-        "query": {"bool": {"filter": [_time_range(gte_ms, lte_ms), _site_filter(site_name)]}},
+        "query": {"bool": {"filter": scope}},
         "aggs": {
             "by_path": {
                 "terms": {"field": "flow.traffic.path", "size": 12},
