@@ -1058,7 +1058,10 @@ export default function AlertsPage() {
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowModal(false)}>
           <div
-            className="bg-card border rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+            // Dynamic width: grows with the viewport instead of a hard 512px cap, so denser
+            // rows (e.g. SSL VPN "Consumed bytes" — number + MB/GB unit in one grid cell, or the
+            // composite clause editor) get room to breathe on larger screens.
+            className="bg-card border rounded-xl shadow-2xl w-full max-w-xl sm:max-w-2xl lg:max-w-3xl mx-4 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6 space-y-4">
