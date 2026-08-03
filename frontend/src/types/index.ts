@@ -363,6 +363,7 @@ export interface AlertRule {
   threshold_value: number;
   evaluation_window_minutes: number;
   sustained_for_minutes: number;
+  renotify_interval_minutes?: number | null;
   notify_channels: string[];
   site_name: string | null;
   enabled: boolean;

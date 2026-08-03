@@ -701,8 +701,12 @@ async def _advance_state_machine(
                     )
 
         elif state.state == "FIRING":
-            if state.last_notified_at:
-                renotify_seconds = settings.ALERT_RENOTIFY_INTERVAL_MINUTES * 60
+            # Per-rule re-notify cadence: None → global default; 0 → notify once (no reminders).
+            interval_min = rule.renotify_interval_minutes
+            if interval_min is None:
+                interval_min = settings.ALERT_RENOTIFY_INTERVAL_MINUTES
+            if state.last_notified_at and interval_min > 0:
+                renotify_seconds = interval_min * 60
                 elapsed = (now - state.last_notified_at).total_seconds()
                 if elapsed >= renotify_seconds:
                     state.last_notified_at = now
@@ -1173,14 +1177,16 @@ async def _fetch_active_vpn_sessions(rule: AlertRule) -> dict[str, dict] | None:
                 out[u["username"]] = {"remote_ip": u.get("remote_ip", ""),
                                       "active_ip": u.get("vpn_ip", ""), "device": u.get("device", ""),
                                       "bytes_in": int(u.get("bytes_in") or 0),
-                                      "bytes_out": int(u.get("bytes_out") or 0)}
+                                      "bytes_out": int(u.get("bytes_out") or 0),
+                                      "login_ms": u.get("session_started")}
         elif rule.data_source == "vpn_ipsec":
             from app.opensearch import ipsec as ipsec_q
             for u in await ipsec_q.active_ipsec_users_detail(gte_ms=gte_ms, lte_ms=now_ms):
                 out[u["username"]] = {"remote_ip": u.get("remote_gw_ip", ""),
                                       "active_ip": u.get("assigned_ip", ""), "device": u.get("device", ""),
                                       "bytes_in": int(u.get("bytes_in") or 0),
-                                      "bytes_out": int(u.get("bytes_out") or 0)}
+                                      "bytes_out": int(u.get("bytes_out") or 0),
+                                      "login_ms": u.get("session_started")}
         else:
             return None
     except Exception as e:
@@ -1303,12 +1309,16 @@ def _diff_sessions(
     events: list[tuple[str, str, dict]] = []
     for u, v in current.items():
         if u not in prev:
-            events.append(("connected", u, {**v, "started_at": now_ms, "ended_at": None}))
+            # Real login from the data (latest sample − session age), falling back to the
+            # detection time only when the device didn't report an age. This makes the "Started"
+            # line the actual login, not the poll tick that detected it.
+            events.append(("connected", u, {**v, "started_at": v.get("login_ms") or now_ms, "ended_at": None}))
     for u, v in prev.items():
         if u not in current:
             events.append(("disconnected", u, {**v, "ended_at": now_ms}))
     new_state = {
-        u: {**v, "started_at": (prev.get(u) or {}).get("started_at", now_ms)}
+        # Keep the original started_at across polls; seed a new user from their real login.
+        u: {**v, "started_at": (prev.get(u) or {}).get("started_at") or v.get("login_ms") or now_ms}
         for u, v in current.items()
     }
     return events, new_state
@@ -1336,7 +1346,8 @@ async def _evaluate_session_rule(rule: AlertRule, db: AsyncSession) -> None:
     # First run (or after enable): baseline only — never blast a connect for everyone
     # already online. Persist, no events.
     if prev is None:
-        state.session_state = {u: {**v, "started_at": now_ms} for u, v in current.items()}
+        state.session_state = {u: {**v, "started_at": v.get("login_ms") or now_ms}
+                               for u, v in current.items()}
         state.last_state_change_at = now
         await db.commit()
         return

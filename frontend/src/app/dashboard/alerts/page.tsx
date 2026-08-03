@@ -133,6 +133,7 @@ interface RuleForm {
   threshold_value: number;
   evaluation_window_minutes: number;
   sustained_for_minutes: number;
+  renotify_interval_minutes: number;   // reminder cadence while firing; 0 = notify once
   notify_channels: string[];
   notification_template_id: string;
   site_name: string;
@@ -158,6 +159,7 @@ const emptyForm: RuleForm = {
   threshold_value: 80,
   evaluation_window_minutes: 5,
   sustained_for_minutes: 2,
+  renotify_interval_minutes: 30,
   notify_channels: ["telegram"],
   notification_template_id: "",
   site_name: "Site_FGT-DC",
@@ -540,6 +542,8 @@ export default function AlertsPage() {
       threshold_value: rule.threshold_value,
       evaluation_window_minutes: rule.evaluation_window_minutes,
       sustained_for_minutes: rule.sustained_for_minutes,
+      // null (inherit the global default) surfaces as the default value in the form.
+      renotify_interval_minutes: rule.renotify_interval_minutes ?? 30,
       notify_channels: rule.notify_channels,
       notification_template_id: rule.notification_template_id || "",
       site_name: rule.site_name || "",
@@ -1618,6 +1622,22 @@ export default function AlertsPage() {
                   />
                 </div>
               </div>
+
+              {/* Re-notify cadence — threshold/composite only (event monitors fire per-event). */}
+              {!isSession && !isReboot && (
+                <div>
+                  <label className="text-xs font-medium">Re-notify while firing (min)</label>
+                  <NumberField
+                    min={0}
+                    value={form.renotify_interval_minutes}
+                    onValueChange={(n) => setForm({ ...form, renotify_interval_minutes: n })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Reminder cadence while the alert stays firing. <b>0</b> = notify once (no reminders).
+                  </p>
+                </div>
+              )}
 
               {/* Notify Channels */}
               <div>

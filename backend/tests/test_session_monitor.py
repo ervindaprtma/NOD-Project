@@ -39,7 +39,17 @@ def test_stay_connected_preserves_original_started_at():
 def test_new_user_started_at_is_now():
     events, new_state = _diff_sessions({}, {"bob": _s("2.2.2.2", "10.0.0.2")}, now_ms=4200)
     assert events[0][0] == "connected"
-    assert new_state["bob"]["started_at"] == 4200
+    assert new_state["bob"]["started_at"] == 4200  # no login_ms → falls back to detection time
+
+
+def test_new_user_uses_real_login_when_known():
+    # login_ms present (from the data's session age) → started_at is the real login, not the poll.
+    current = {"bob": {**_s("2.2.2.2", "10.0.0.2"), "login_ms": 1500}}
+    events, new_state = _diff_sessions({}, current, now_ms=4200)
+    ev, user, info = events[0]
+    assert ev == "connected" and user == "bob"
+    assert info["started_at"] == 1500              # real login, not now_ms
+    assert new_state["bob"]["started_at"] == 1500  # persisted, so a later disconnect spans it
 
 
 def test_duration_formatting():

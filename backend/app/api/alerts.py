@@ -330,6 +330,7 @@ async def create_alert_rule(
         threshold_value=body.threshold_value,
         evaluation_window_minutes=body.evaluation_window_minutes,
         sustained_for_minutes=body.sustained_for_minutes,
+        renotify_interval_minutes=body.renotify_interval_minutes,
         notify_channels=body.notify_channels,
         template_id=body.template_id,
         notification_template_id=body.notification_template_id,

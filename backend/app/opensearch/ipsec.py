@@ -180,6 +180,7 @@ async def active_ipsec_users_detail(
                                     "ipsec_normalized.bytes_in",
                                     "ipsec_normalized.bytes_out",
                                     "ipsec_normalized.tunnel_lifetime",
+                                    "ipsec_normalized.session_duration_seconds",
                                     "tag.device",
                                     "tag.username",
                                     "tag.remote_gw_ip",
@@ -204,6 +205,10 @@ async def active_ipsec_users_detail(
         src = hits[0]["_source"]
         ipsec = src.get("ipsec_normalized", {})
         tag = src.get("tag", {})
+        # Real login epoch-ms = latest sample time − session age (same as the History page).
+        latest_ms = int((hits[0].get("sort") or [0])[0] or 0)
+        dur_s = int(ipsec.get("session_duration_seconds", 0) or 0)
+        session_started = (latest_ms - dur_s * 1000) if (latest_ms and dur_s > 0) else None
 
         results.append({
             "username": tag.get("username", bucket["key"]),
@@ -213,6 +218,7 @@ async def active_ipsec_users_detail(
             "bytes_in": int(ipsec.get("bytes_in", 0) or 0),
             "bytes_out": int(ipsec.get("bytes_out", 0) or 0),
             "tunnel_lifetime_sec": int(ipsec.get("tunnel_lifetime", 0) or 0),
+            "session_started": session_started,
         })
 
     return results

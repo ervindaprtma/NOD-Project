@@ -406,6 +406,7 @@ async def active_sslvpn_users(
                                     f"{site_name}.bytes_out",
                                     f"{site_name}.remote_ip",
                                     f"{site_name}.vpn_ip",
+                                    f"{site_name}.session_duration",
                                     "tag.device",
                                     "tag.username.keyword",
                                 ]
@@ -428,6 +429,12 @@ async def active_sslvpn_users(
         src = hits[0]["_source"]
         site_data = src.get(site_name, {})
         tag = src.get("tag", {})
+        # Real login epoch-ms = latest sample time − the device's session age. `sort` carries
+        # the doc's @timestamp (ms) since we sort by it. None when the age field is absent, so
+        # callers can fall back. Same derivation the Sessions History page uses.
+        latest_ms = int((hits[0].get("sort") or [0])[0] or 0)
+        dur_s = int(site_data.get("session_duration", 0) or 0)
+        session_started = (latest_ms - dur_s * 1000) if (latest_ms and dur_s > 0) else None
 
         results.append({
             "username": tag.get("username", bucket["key"]),
@@ -436,6 +443,7 @@ async def active_sslvpn_users(
             "vpn_ip": site_data.get("vpn_ip", ""),
             "bytes_in": int(site_data.get("bytes_in", 0) or 0),
             "bytes_out": int(site_data.get("bytes_out", 0) or 0),
+            "session_started": session_started,
         })
 
     return results

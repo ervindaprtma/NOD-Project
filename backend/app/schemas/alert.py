@@ -43,6 +43,8 @@ class AlertRuleCreate(BaseModel):
     threshold_value: float
     evaluation_window_minutes: int = Field(..., ge=1)
     sustained_for_minutes: int = Field(..., ge=0)
+    # Re-notify cadence while FIRING: None = inherit global default, 0 = notify once, N = every N min.
+    renotify_interval_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     notify_channels: list[str] = Field(default_factory=list)
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
@@ -66,6 +68,7 @@ class AlertRuleUpdate(BaseModel):
     threshold_value: Optional[float] = None
     evaluation_window_minutes: Optional[int] = Field(default=None, ge=1)
     sustained_for_minutes: Optional[int] = Field(default=None, ge=0)
+    renotify_interval_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     notify_channels: Optional[list[str]] = None
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
@@ -96,6 +99,7 @@ class AlertRuleRead(BaseModel):
     threshold_value: float
     evaluation_window_minutes: int
     sustained_for_minutes: int
+    renotify_interval_minutes: Optional[int] = None
     notify_channels: list[str]
     template_id: Optional[str] = None
     notification_template_id: Optional[str] = None

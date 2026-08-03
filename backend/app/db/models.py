@@ -145,6 +145,9 @@ class AlertRule(Base):
     threshold_value: Mapped[float] = mapped_column(Float, nullable=False)
     evaluation_window_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     sustained_for_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Per-rule re-notify cadence while FIRING (minutes). NULL = inherit the global
+    # ALERT_RENOTIFY_INTERVAL_MINUTES; 0 = notify once (no reminders); N>0 = every N min.
+    renotify_interval_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     notify_channels: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     clauses: Mapped[list[dict]] = mapped_column(
         JSONB, nullable=False, default=list,
