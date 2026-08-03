@@ -219,6 +219,7 @@ async def active_ipsec_users_detail(
             "bytes_out": int(ipsec.get("bytes_out", 0) or 0),
             "tunnel_lifetime_sec": int(ipsec.get("tunnel_lifetime", 0) or 0),
             "session_started": session_started,
+            "last_seen": latest_ms or None,  # newest sample ts — the real last-activity edge
         })
 
     return results

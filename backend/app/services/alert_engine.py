@@ -1178,7 +1178,8 @@ async def _fetch_active_vpn_sessions(rule: AlertRule) -> dict[str, dict] | None:
                                       "active_ip": u.get("vpn_ip", ""), "device": u.get("device", ""),
                                       "bytes_in": int(u.get("bytes_in") or 0),
                                       "bytes_out": int(u.get("bytes_out") or 0),
-                                      "login_ms": u.get("session_started")}
+                                      "login_ms": u.get("session_started"),
+                                      "last_seen": u.get("last_seen")}
         elif rule.data_source == "vpn_ipsec":
             from app.opensearch import ipsec as ipsec_q
             for u in await ipsec_q.active_ipsec_users_detail(gte_ms=gte_ms, lte_ms=now_ms):
@@ -1186,7 +1187,8 @@ async def _fetch_active_vpn_sessions(rule: AlertRule) -> dict[str, dict] | None:
                                       "active_ip": u.get("assigned_ip", ""), "device": u.get("device", ""),
                                       "bytes_in": int(u.get("bytes_in") or 0),
                                       "bytes_out": int(u.get("bytes_out") or 0),
-                                      "login_ms": u.get("session_started")}
+                                      "login_ms": u.get("session_started"),
+                                      "last_seen": u.get("last_seen")}
         else:
             return None
     except Exception as e:
@@ -1315,9 +1317,14 @@ def _diff_sessions(
             events.append(("connected", u, {**v, "started_at": v.get("login_ms") or now_ms, "ended_at": None}))
     for u, v in prev.items():
         if u not in current:
-            events.append(("disconnected", u, {**v, "ended_at": now_ms}))
+            # Ended = the user's real last-activity edge (newest sample observed while they
+            # were still in the presence window), NOT now_ms. The 5-min window still decides
+            # WHEN the disconnect fires; this only fixes the stamped logout time (and duration).
+            # Falls back to now_ms only if last_seen was never captured.
+            events.append(("disconnected", u, {**v, "ended_at": v.get("last_seen") or now_ms}))
     new_state = {
         # Keep the original started_at across polls; seed a new user from their real login.
+        # last_seen rides along via {**v} (current's newest sample), so a later disconnect can stamp it.
         u: {**v, "started_at": (prev.get(u) or {}).get("started_at") or v.get("login_ms") or now_ms}
         for u, v in current.items()
     }
