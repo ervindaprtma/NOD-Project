@@ -51,6 +51,7 @@ def _base_filters(
     protocol_not: str = "", dst_port_not: int | None = None, src_as_org_not: str = "",
     ingress_interface_not: str = "",
     egress_interface_not: str = "",
+    **_ignore,  # tolerate any unknown *_not param (stale bookmark / URL edit) → never crash the query
 ) -> tuple[list[dict], list[dict]]:
     """Returns (filter, must_not) — see traffic_flow._base_filters. Exclude reuses the same
     per-field helper (incl. _service_filter's name-OR-port block) routed to must_not."""

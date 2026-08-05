@@ -112,6 +112,14 @@ def test_appid_label_renders_negations():
     assert "not app=Teams" in lbl and "not port=445" in lbl and "app=YouTube" in lbl
 
 
+def test_unknown_not_param_never_crashes_the_query():
+    """A stale bookmark / URL edit can send an unexpected *_not param through pack_excludes →
+    **exclude. The builder must swallow it (no TypeError → no false 'data unavailable')."""
+    for qb in (tf, ti, tn):
+        filt, excl = qb._base_filters(0, 1, "Site_FGT-DC", bogus_not="x", another_weird_not="y")
+        assert isinstance(filt, list) and excl == []   # unknown keys ignored, valid query
+
+
 def test_appid_ctx_keys_in_sample_render_ctx():
     """Preview-parity hard rule: every fire-time ctx key must exist in sample_render_ctx."""
     from app.services.alert_engine import sample_render_ctx

@@ -50,6 +50,7 @@ def _base_filters(
     dst_port_not: int | None = None, dst_as_org_not: str = "",
     ingress_interface_not: str = "",
     egress_interface_not: str = "",
+    **_ignore,  # tolerate any unknown *_not param (stale bookmark / URL edit) → never crash the query
 ) -> tuple[list[dict], list[dict]]:
     """Returns (filter, must_not). Scope (time/site/path/direction) is include-only; every
     narrowing field has an optional `_not` twin built with the SAME helper but routed to the

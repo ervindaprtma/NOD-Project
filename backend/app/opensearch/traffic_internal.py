@@ -66,6 +66,7 @@ def _base_filters(
     protocol_not: str = "", dst_port_not: int | None = None,
     ingress_interface_not: str = "",
     egress_interface_not: str = "",
+    **_ignore,  # tolerate any unknown *_not param (stale bookmark / URL edit) → never crash the query
 ) -> tuple[list[dict], list[dict]]:
     """Returns (filter, must_not) — see traffic_flow._base_filters. traffic_path is scope
     (include-only); every narrowing field has a `_not` twin routed to must_not."""
