@@ -21,7 +21,7 @@ SEED_TEMPLATES: list[dict] = [
         "description": "Alert when an SD-WAN link SLA is breached. Pick the link (WAN uplink or "
                        "IPsec/ADVPN tunnel) and the metric — packet loss, latency, jitter, or Link "
                        "Status for a Down/Up alert.",
-        "body_template": "SD-WAN SLA Breach: {{ name }}\n{% if target_name %}Link: {{ target_name }}\n{% endif %}Metric: {{ metric_field }}\nValue: {{ metric_value }}\nThreshold: {{ condition }} {{ threshold }}",
+        "body_template": "SD-WAN SLA Breach: {{ name }}\n{% if target_name %}Link: {{ target_name }}\n{% endif %}{{ metric_label }}: {{ metric_value|round(2) }}{% if metric_unit %} {{ metric_unit }}{% endif %}\nThreshold: {{ condition }} {{ threshold }}{% if metric_unit %} {{ metric_unit }}{% endif %}",
         "underlying_kind": "single",
         "locked_fields": {
             "data_source": "sdwan_sla",
@@ -292,18 +292,16 @@ _L = "{{ rule.condition|e }} {{ rule.threshold_value }}"
 
 
 def _sdwan_metric_line(bold: bool) -> str:
-    """Metric-aware SD-WAN value line, chosen from `metric_field`:
-    Packet Loss (%) / Latency (ms) / Jitter (ms) / Link Status (Up/Down).
-
-    Was hardcoded to "Packet Loss …%", which mislabelled every non-loss rule — a
-    100 ms latency limit rendered as "Packet Loss … (limit > 100%)". Now each metric
-    shows its real name + unit. `bold` wraps the value in <b> for the fire line."""
+    """Metric-aware SD-WAN value line. metric_label/metric_unit name the clause that fired
+    (Packet Loss %/Latency ms/Jitter ms), supplied by the engine from the driver's field —
+    so this no longer switches on metric_field and can't miss an aggregation variant
+    (the old switch matched only avg_latency, so max_latency fell through to "Packet Loss").
+    `bold` wraps the value in <b> for the fire line."""
     b0, b1 = ("<b>", "</b>") if bold else ("", "")
+    u = "{% if metric_unit %} {{ metric_unit }}{% endif %}"
     return (
-        "{% if metric_field == 'avg_latency' %}<b>Latency:</b> " + b0 + "{{ metric_value|round(2) }} ms" + b1 + " (limit " + _L + " ms)"
-        "{% elif metric_field == 'avg_jitter' %}<b>Jitter:</b> " + b0 + "{{ metric_value|round(2) }} ms" + b1 + " (limit " + _L + " ms)"
-        "{% elif metric_field == 'status' %}<b>Link Status:</b> " + b0 + "{% if metric_value >= 1 %}DOWN{% else %}UP{% endif %}" + b1 +
-        "{% else %}<b>Packet Loss:</b> " + b0 + "{{ metric_value|round(2) }}%" + b1 + " (limit " + _L + "%){% endif %}"
+        "{% if metric_field == 'status' %}<b>Link Status:</b> " + b0 + "{% if metric_value >= 1 %}DOWN{% else %}UP{% endif %}" + b1 +
+        "{% else %}<b>{{ metric_label }}:</b> " + b0 + "{{ metric_value|round(2) }}" + u + b1 + " (limit " + _L + u + "){% endif %}"
     )
 
 

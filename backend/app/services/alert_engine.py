@@ -125,8 +125,10 @@ def sample_render_ctx(
     rc = {"name": name, "severity": severity, "site_name": site_name,
           "metric_field": metric_field, "condition": condition, "threshold_value": threshold_value}
     is_vol = metric_field in ("total_bytes", "top_user_bytes")
+    metric_label, metric_unit = _metric_label_unit(metric_field)
     return {
         "rule": rc, **rc, "threshold": threshold_value,
+        "metric_label": metric_label, "metric_unit": metric_unit,
         "metric_value": metric_value, "data_source": data_source, "aggregation": aggregation,
         "fired_at": fired_at, "sent_at": sent_at if sent_at is not None else fired_at,
         "event": event, "event_label": "Resolved" if event == "resolved" else "Firing",
@@ -488,6 +490,26 @@ def _check_condition(value: float, op: str, threshold: float) -> bool:
     return False
 
 
+# Human label + unit for a driver clause's metric_field, so a notification names the metric
+# that ACTUALLY fired instead of the template hardcoding one — a latency-driven SD-WAN alert
+# was rendering "Packet Loss: 142% (%)" because the composite driver can be any clause but the
+# ctx exposed no metric name/unit. Composite SD-WAN clauses arrive agg-prefixed (avg_/max_…).
+_METRIC_UNIT_HINTS = (
+    ("packet_loss", "%"), ("latency", "ms"), ("jitter", "ms"),
+    ("_mbps", "Mbps"), ("throughput", "Mbps"), ("_bytes", "bytes"), ("_pct", "%"),
+)
+
+
+def _metric_label_unit(metric_field: str) -> tuple[str, str]:
+    """('avg_packet_loss') → ('Packet Loss', '%'). Strips the aggregation prefix, maps a unit
+    by substring, and title-cases the rest. Unit '' when unknown (StrictUndefined-safe: the
+    key is always present, just empty)."""
+    base = re.sub(r"^(avg|max|min|sum|count)_", "", (metric_field or "").strip())
+    unit = next((u for key, u in _METRIC_UNIT_HINTS if key in base), "")
+    label = base.replace("_", " ").replace(".", " ").strip().title() or "Metric"
+    return label, unit
+
+
 def _clause_severity(c: dict) -> float:
     """How stressed a composite clause is relative to ITS OWN limit, normalized so
     clauses of different units/scales compare fairly. Picks the driver clause a message
@@ -696,6 +718,9 @@ async def _advance_state_machine(
                             "aggregation": rule.aggregation,
                             "condition": rule.condition,
                             "threshold_value": rule.threshold_value,
+                            # Composite: the exact clause that fired, so the recovery message
+                            # describes the SAME metric instead of re-picking at resolve time.
+                            "driver": getattr(rule, "_fired_clause", None),
                         },
                     ))
                     await db.flush()
@@ -748,13 +773,6 @@ async def _advance_state_machine(
             state.pending_since = None
             await db.flush()
 
-            # Recovery notification — same channels that got the alert now get the
-            # all-clear. Only for a rule that actually FIRED: a PENDING→RESOLVED rule
-            # was still debouncing and never notified, so a "recovered" message would
-            # reference an alert the operator never received.
-            if was_firing and notify_queue is not None:
-                notify_queue.append((rule, metric_value, "resolved", state.last_fired_at or now))
-
             log_result = await db.execute(
                 select(AlertLog)
                 .where(AlertLog.rule_id == rule.id)
@@ -765,6 +783,27 @@ async def _advance_state_machine(
             if alert_log and not alert_log.resolved_at:
                 alert_log.resolved_at = now
                 await db.flush()
+
+            # Composite recovery must describe the clause that FIRED (from the AlertLog), not
+            # whatever clause is now nearest its limit — else a packet-loss alert recovers as a
+            # latency message. Re-find that clause in this cycle's reads and report its current
+            # value; fall back to the cycle driver if the rule's clauses changed since firing.
+            resolved_value = metric_value
+            fired_driver = (alert_log.rule_snapshot or {}).get("driver") if alert_log else None
+            if fired_driver:
+                rule._fired_clause = fired_driver
+                for c in getattr(rule, "_clauses_detail", None) or []:
+                    if (c.get("metric_field") == fired_driver.get("metric_field")
+                            and c.get("target_key") == fired_driver.get("target_key")):
+                        resolved_value = c["value"]
+                        break
+
+            # Recovery notification — same channels that got the alert now get the
+            # all-clear. Only for a rule that actually FIRED: a PENDING→RESOLVED rule
+            # was still debouncing and never notified, so a "recovered" message would
+            # reference an alert the operator never received.
+            if was_firing and notify_queue is not None:
+                notify_queue.append((rule, resolved_value, "resolved", state.last_fired_at or now))
 
             await sse_broadcast("resolved",
                 rule_id=rule.id,
@@ -871,6 +910,10 @@ async def _evaluate_composite_rule(
     # packet loss instead of borrowing a higher-raw-value latency clause's "limit > 100".
     breaching = [c for c in clauses_detail if c["breached"]]
     driver = max(breaching or clauses_detail, key=_clause_severity)
+    # Keep this cycle's per-clause reads so the RESOLVE path can re-find the clause that
+    # actually fired (stored in the AlertLog) and report ITS current value — otherwise a
+    # recovery re-picks the nearest-limit clause and describes a different metric than the alert.
+    rule._clauses_detail = clauses_detail
     return driver["value"], condition_met, driver
 
 
@@ -1011,6 +1054,9 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         eff_metric_field = drv["metric_field"] if drv else rule.metric_field
         eff_condition = drv["condition"] if drv else rule.condition
         eff_threshold = drv["threshold_value"] if drv else rule.threshold_value
+        # Friendly name + unit of the clause that fired, so a template renders "Latency: 142 ms"
+        # instead of hardcoding "Packet Loss: 142 %" for whatever clause happened to drive it.
+        metric_label, metric_unit = _metric_label_unit(eff_metric_field)
         # Interface throughput is Mbps in BOTH threshold modes (absolute, or "% of link max"
         # where threshold_value = link_max × %). So metric_value + threshold_value are Mbps —
         # the seeded template used to print them with a "%" (only right by luck when link
@@ -1086,6 +1132,9 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "condition": eff_condition,
                 "threshold_value": eff_threshold,
                 "threshold": eff_threshold,
+                # Metric name + unit of the fired clause (SD-WAN composite: Packet Loss/Latency/Jitter).
+                "metric_label": metric_label,
+                "metric_unit": metric_unit,
                 "metric_value": mv,
                 # Interface throughput extras (None for other sources / absolute mode):
                 "link_max_mbps": link_max,

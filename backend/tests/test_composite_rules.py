@@ -9,7 +9,20 @@ from types import SimpleNamespace
 
 from app.services.alert_engine import (
     _clause_severity, _evaluate_composite_rule, _extract_per_rule_value_flat,
+    _metric_label_unit,
 )
+
+
+def test_metric_label_unit_names_the_fired_metric():
+    """The mislabel bug: a latency-driven SD-WAN alert rendered 'Packet Loss: 142% (%)'
+    because the ctx exposed no metric name/unit. Each SD-WAN clause field maps to its own
+    label+unit so a template stops hardcoding one."""
+    assert _metric_label_unit("avg_packet_loss") == ("Packet Loss", "%")
+    assert _metric_label_unit("max_latency") == ("Latency", "ms")
+    assert _metric_label_unit("avg_jitter") == ("Jitter", "ms")
+    # unknown field → present-but-empty unit (StrictUndefined-safe), prettified label
+    label, unit = _metric_label_unit("some_new_field")
+    assert unit == "" and label == "Some New Field"
 
 
 def test_resolve_driver_picks_clause_nearest_its_own_limit():
