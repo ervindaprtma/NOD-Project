@@ -287,17 +287,21 @@ export default function OverviewPage() {
           )}
         </div>
 
-        {/* SD-WAN Link Status — 1/3 width */}
-        <ClickCard onClick={() => router.push("/dashboard/sdwan")}>
+        {/* SD-WAN Link Status — 1/3 width; each site is clickable → SD-WAN page pre-selected */}
+        <ClickCard>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold">SD-WAN Link Status</h2>
-            <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View details →</span>
           </div>
           {isLoading ? <SkeletonBars count={4} /> : overview?.sdwan_sites?.length ? (
             <div className="space-y-3">
               {overview.sdwan_sites.map((site) => (
-                <div key={site.site}>
-                  <h3 className="text-xs font-medium text-muted-foreground mb-1">{SITE_SHORT[site.site] || site.site}{site.device && <span className="ml-1 text-[10px]">({site.device})</span>}</h3>
+                <div key={site.site}
+                  onClick={() => router.push(`/dashboard/sdwan?site=${site.site}`)}
+                  className="cursor-pointer rounded-md -mx-1 px-1 py-1 hover:bg-muted/40 transition-colors">
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-xs font-medium text-muted-foreground">{SITE_SHORT[site.site] || site.site}{site.device && <span className="ml-1 text-[10px]">({site.device})</span>}</h3>
+                    <span className="text-[10px] text-muted-foreground/70">View →</span>
+                  </div>
                   <div className="grid grid-cols-2 gap-1.5">
                     {site.links?.map((link) => (
                       <div key={link.link} className="flex items-center justify-between p-1.5 bg-muted/50 rounded-md">
