@@ -59,6 +59,13 @@ export default function TrafficInboundPage() {
   const [selectedPreset, setSelectedPreset] = useState("15m");
   const [activePresetSeconds, setActivePresetSeconds] = useState(TIME_PRESETS[0].seconds);
   const [siteName, setSiteName] = useState("Site_FGT-DC");
+  // Pre-select the site when navigated from Overview with ?site=… (client-only; a useState
+  // initializer reading the URL would hydration-mismatch the SSR default). Inbound has DC/DRC
+  // only, so an unknown/Office value harmlessly falls back to the default.
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get("site");
+    if (s && SITES.includes(s)) setSiteName(s);
+  }, []);
   const [refreshInterval, setRefreshInterval] = useState(DEFAULT_REFRESH_MS);
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);

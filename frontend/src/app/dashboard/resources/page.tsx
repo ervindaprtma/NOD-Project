@@ -69,6 +69,12 @@ export default function ResourcesPage() {
   const [refreshInterval, setRefreshInterval] = useState(DEFAULT_REFRESH_MS);
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [siteName, setSiteName] = useState("Site_FGT-DC");
+  // Pre-select the site when navigated from Overview with ?site=… . Read on the client after
+  // mount (a useState initializer reading the URL would hydration-mismatch the SSR default).
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get("site");
+    if (s && SITES.includes(s)) setSiteName(s);
+  }, []);
   const [expanded, setExpanded] = useState<SectionId | null>(null);
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);

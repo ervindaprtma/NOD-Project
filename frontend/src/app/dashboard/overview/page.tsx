@@ -234,7 +234,7 @@ export default function OverviewPage() {
                 const dcData = resDatas[0]?.data?.current || [];
                 if (dcData.length === 0) return null;
                 return (
-                  <ClickCard onClick={() => router.push("/dashboard/resources")}>
+                  <ClickCard onClick={() => router.push("/dashboard/resources?site=Site_FGT-DC")}>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-xs font-semibold text-primary">DC</h3>
                       {overview?.ha_status && (
@@ -258,7 +258,7 @@ export default function OverviewPage() {
                 const drcData = resDatas[1]?.data?.current || [];
                 if (drcData.length === 0) return null;
                 return (
-                  <ClickCard onClick={() => router.push("/dashboard/resources")}>
+                  <ClickCard onClick={() => router.push("/dashboard/resources?site=Site_FGT-DRC")}>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-xs font-semibold text-emerald-600">DRC</h3>
                     </div>
@@ -273,7 +273,7 @@ export default function OverviewPage() {
                 const offData = resDatas[2]?.data?.current || [];
                 if (offData.length === 0) return null;
                 return (
-                  <ClickCard onClick={() => router.push("/dashboard/resources")}>
+                  <ClickCard onClick={() => router.push("/dashboard/resources?site=Site_FGT_Office")}>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-xs font-semibold text-amber-600">Office</h3>
                     </div>
@@ -333,13 +333,13 @@ export default function OverviewPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {SITES.map((site, idx) => (
             <SiteAvailabilityCard key={`avail-${site}`} label={SITE_SHORT[site]} env={availDatas[idx]}
-              onClick={() => router.push("/dashboard/resources")} />
+              onClick={() => router.push(`/dashboard/resources?site=${site}`)} />
           ))}
         </div>
       </div>
 
       {/* ═══ ROW 4 — WAN/MPLS Bandwidth (full width) ═══ */}
-      <ClickCard onClick={() => router.push("/dashboard/resources")}>
+      <ClickCard onClick={() => router.push(`/dashboard/resources?site=${wanSite}`)}>
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h2 className="text-sm font-semibold">WAN/MPLS Bandwidth</h2>
           <div className="flex items-center gap-2">
@@ -388,7 +388,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 5 — Top Client Internet (3 sites) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {SITES.map((site, idx) => (
-          <ClickCard key={`client-${site}`} onClick={() => router.push("/dashboard/traffic")}>
+          <ClickCard key={`client-${site}`} onClick={() => router.push(`/dashboard/traffic?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Top Client Internet — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
@@ -412,7 +412,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 6 — Top Application Internet Usage (3 sites) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {SITES.map((site, idx) => (
-          <ClickCard key={`app-${site}`} onClick={() => router.push("/dashboard/traffic")}>
+          <ClickCard key={`app-${site}`} onClick={() => router.push(`/dashboard/traffic?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Top Application Internet Usage — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
@@ -436,7 +436,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 7 — Top Destination Internet AS Org (3 sites) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {SITES.map((site, idx) => (
-          <ClickCard key={`as-${site}`} onClick={() => router.push("/dashboard/traffic")}>
+          <ClickCard key={`as-${site}`} onClick={() => router.push(`/dashboard/traffic?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Top Destination Internet AS Org — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
@@ -460,7 +460,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 8 — Inbound VIP (DC + DRC) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {inboundSites.map((site, idx) => (
-          <ClickCard key={`inb-${site}`} onClick={() => router.push("/dashboard/traffic-inbound")}>
+          <ClickCard key={`inb-${site}`} onClick={() => router.push(`/dashboard/traffic-inbound?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Inbound VIP — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
@@ -484,7 +484,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 9 — Top Customer AS — Inbound VIP (DC + DRC) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {inboundSites.map((site, idx) => (
-          <ClickCard key={`cas-${site}`} onClick={() => router.push("/dashboard/traffic-inbound")}>
+          <ClickCard key={`cas-${site}`} onClick={() => router.push(`/dashboard/traffic-inbound?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Top Customer AS — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
