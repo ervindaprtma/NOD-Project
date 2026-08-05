@@ -14,10 +14,14 @@ _DATA_SOURCE_RE = r"^(appid_flow|sdwan_sla|ha_resource|vpn_ssl|vpn_ipsec|interfa
 class AppidFilter(BaseModel):
     """appid_flow scoping — narrow a path metric to a specific application / protocol / port.
     Any subset; all-empty means the whole path. Fields map to flow.application.name,
-    l4.proto.name, flow.server.l4.port.id."""
+    l4.proto.name, flow.server.l4.port.id. The *_not twins EXCLUDE (e.g. alert on all internet
+    traffic except Windows-Update). JSONB column absorbs the new keys with no migration."""
     app: Optional[str] = Field(default=None, max_length=128)
     protocol: Optional[str] = Field(default=None, max_length=16)
     port: Optional[int] = Field(default=None, ge=0, le=65535)
+    app_not: Optional[str] = Field(default=None, max_length=128)
+    protocol_not: Optional[str] = Field(default=None, max_length=16)
+    port_not: Optional[int] = Field(default=None, ge=0, le=65535)
 
 
 class AlertClause(BaseModel):

@@ -127,6 +127,9 @@ interface RuleForm {
   appid_app: string;
   appid_protocol: string;
   appid_port: string;
+  appid_app_not: string;
+  appid_protocol_not: string;
+  appid_port_not: string;
   volume_unit: "MB" | "GB";   // vpn_ssl/vpn_ipsec byte metrics: display unit for the threshold
   aggregation: string;
   condition: string;
@@ -153,6 +156,9 @@ const emptyForm: RuleForm = {
   appid_app: "",
   appid_protocol: "",
   appid_port: "",
+  appid_app_not: "",
+  appid_protocol_not: "",
+  appid_port_not: "",
   volume_unit: "GB",
   aggregation: "avg",
   condition: ">",
@@ -538,6 +544,9 @@ export default function AlertsPage() {
       appid_app: rule.appid_filter?.app ?? "",
       appid_protocol: rule.appid_filter?.protocol ?? "",
       appid_port: rule.appid_filter?.port != null ? String(rule.appid_filter.port) : "",
+      appid_app_not: rule.appid_filter?.app_not ?? "",
+      appid_protocol_not: rule.appid_filter?.protocol_not ?? "",
+      appid_port_not: rule.appid_filter?.port_not != null ? String(rule.appid_filter.port_not) : "",
       // volume metrics store bytes; infer MB/GB for display (≥1 GB → GB).
       volume_unit: (rule.metric_field === "total_bytes" || rule.metric_field === "top_user_bytes")
         && rule.threshold_value >= 1e9 ? "GB" : "MB",
@@ -582,12 +591,15 @@ export default function AlertsPage() {
       : {};
 
     // appid_flow scoping — only for a single appid rule; drop empty fields, all-empty → null.
-    let appid_filter: { app?: string; protocol?: string; port?: number } | null = null;
+    let appid_filter: { app?: string; protocol?: string; port?: number; app_not?: string; protocol_not?: string; port_not?: number } | null = null;
     if (form.kind === "single" && form.data_source === "appid_flow") {
-      const af: { app?: string; protocol?: string; port?: number } = {};
+      const af: { app?: string; protocol?: string; port?: number; app_not?: string; protocol_not?: string; port_not?: number } = {};
       if (form.appid_app.trim()) af.app = form.appid_app.trim();
       if (form.appid_protocol.trim()) af.protocol = form.appid_protocol.trim().toUpperCase();
       if (form.appid_port.trim() && !Number.isNaN(Number(form.appid_port))) af.port = Number(form.appid_port);
+      if (form.appid_app_not.trim()) af.app_not = form.appid_app_not.trim();
+      if (form.appid_protocol_not.trim()) af.protocol_not = form.appid_protocol_not.trim().toUpperCase();
+      if (form.appid_port_not.trim() && !Number.isNaN(Number(form.appid_port_not))) af.port_not = Number(form.appid_port_not);
       appid_filter = Object.keys(af).length ? af : null;
     }
 
@@ -1540,8 +1552,32 @@ export default function AlertsPage() {
                       className="px-3 py-1.5 text-sm rounded-md border bg-background"
                     />
                   </div>
+                  <label className="text-xs font-medium text-destructive mt-2 block">
+                    Exclude (optional) — alert on everything except these
+                  </label>
+                  <div className="grid grid-cols-3 gap-3 mt-1">
+                    <input
+                      value={form.appid_app_not}
+                      onChange={(e) => setForm({ ...form, appid_app_not: e.target.value })}
+                      placeholder="Not application (e.g. Windows-Update)"
+                      className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                    />
+                    <input
+                      value={form.appid_protocol_not}
+                      onChange={(e) => setForm({ ...form, appid_protocol_not: e.target.value })}
+                      placeholder="Not protocol (TCP/UDP)"
+                      className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                    />
+                    <input
+                      value={form.appid_port_not}
+                      onChange={(e) => setForm({ ...form, appid_port_not: e.target.value })}
+                      placeholder="Not dest port (e.g. 445)"
+                      inputMode="numeric"
+                      className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                    />
+                  </div>
                   <p className="text-[10px] text-muted-foreground mt-1">
-                    Filters flow.application.name / l4.proto.name / flow.server.l4.port.id. Exact match (case-insensitive protocol).
+                    Filters flow.application.name / l4.proto.name / flow.server.l4.port.id. Exact match (case-insensitive protocol). Exclude wins over include.
                   </p>
                 </div>
               )}

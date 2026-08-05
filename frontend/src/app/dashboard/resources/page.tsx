@@ -73,6 +73,16 @@ export default function ResourcesPage() {
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);
   const [tabIndex, setTabIndex] = useState<TabIndex>(0);
+  // Pre-select the site AND tab when navigated from Overview with ?site=…&tab=… (e.g. Site
+  // Availability → tab=availability, Interface/WAN Bandwidth → tab=bandwidth). Read on the
+  // client after mount; a useState initializer reading the URL would hydration-mismatch SSR.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const s = p.get("site");
+    if (s && SITES.includes(s)) setSiteName(s);
+    const ti = TAB_VALUES.indexOf(p.get("tab") as typeof TAB_VALUES[number]);
+    if (ti >= 0) setTabIndex(ti as TabIndex);
+  }, []);
   const [availWindow, setAvailWindow] = useState<string>("24h");
   // Drag-to-zoom on the availability charts narrows the query to a sub-range.
   const [availZoom, setAvailZoom] = useState<{ gteMs: number; lteMs: number } | null>(null);

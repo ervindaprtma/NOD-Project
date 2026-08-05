@@ -14,7 +14,7 @@ from opensearchpy import AsyncOpenSearch
 from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _multi_wildcard, _bytes_sum, _service_filter, BYTES_DESC,
     service_terms_agg, collapse_service_buckets, resolve_service,
-    resolve_top_services, service_histogram_aggs, collapse_chart_bucket,
+    resolve_top_services, service_histogram_aggs, collapse_chart_bucket, _bool_query,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
 from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
@@ -47,7 +47,14 @@ def _base_filters(
     server_ip: str = "", protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
-) -> list[dict]:
+    app_filter_not: str = "", client_ip_not: str = "", server_ip_not: str = "",
+    protocol_not: str = "", dst_port_not: int | list[int] | None = None, src_as_org_not: str = "",
+    ingress_interface_not: str = "",
+    egress_interface_not: str = "",
+    **_ignore,  # tolerate any unknown *_not param (stale bookmark / URL edit) → never crash the query
+) -> tuple[list[dict], list[dict]]:
+    """Returns (filter, must_not) — see traffic_flow._base_filters. Exclude reuses the same
+    per-field helper (incl. _service_filter's name-OR-port block) routed to must_not."""
     filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
     if path_filter and path_filter != "all":
         filters.append({"term": {"flow.traffic.path": path_filter}})
@@ -57,24 +64,29 @@ def _base_filters(
     elif direction == "download":
         filters.append({"term": {"flow.in.netif.sec.zone.name": "internal"}})
         filters.append({"term": {"flow.out.netif.sec.zone.name": "internet"}})
-    f = _service_filter(app_filter)  # app-name-first, port fallback (decision 3)
-    if f: filters.append(f)
-    f = _multi_term("flow.client.ip.addr", client_ip)
-    if f: filters.append(f)
-    f = _multi_term("flow.server.ip.addr", server_ip)
-    if f: filters.append(f)
-    f = _multi_term("l4.proto.name", protocol.upper())  # proto names are uppercase (TCP/UDP/ICMP); accept any-case input
-    if f: filters.append(f)
+    excl: list[dict] = []
+    for inc, exc in (
+        (_service_filter(app_filter), _service_filter(app_filter_not)),  # app-name-first, port fallback (decision 3)
+        (_multi_term("flow.client.ip.addr", client_ip), _multi_term("flow.client.ip.addr", client_ip_not)),
+        (_multi_term("flow.server.ip.addr", server_ip), _multi_term("flow.server.ip.addr", server_ip_not)),
+        # proto names are uppercase (TCP/UDP/ICMP); accept any-case input
+        (_multi_term("l4.proto.name", protocol.upper()), _multi_term("l4.proto.name", protocol_not.upper())),
+        (_multi_wildcard("flow.client.as.org", src_as_org), _multi_wildcard("flow.client.as.org", src_as_org_not)),
+        (_multi_term_any(['flow.in.netif.name', 'flow.in.netif.alias'], ingress_interface),
+         _multi_term_any(['flow.in.netif.name', 'flow.in.netif.alias'], ingress_interface_not)),
+        (_multi_term_any(['flow.out.netif.name', 'flow.out.netif.alias'], egress_interface),
+         _multi_term_any(['flow.out.netif.name', 'flow.out.netif.alias'], egress_interface_not)),
+    ):
+        if inc: filters.append(inc)
+        if exc: excl.append(exc)
     if dst_port is not None:
         # Role-based (stable across both legs) — see traffic_flow._base_filters.
         filters.append({"term": {"flow.server.l4.port.id": dst_port}})
-    f = _multi_wildcard("flow.client.as.org", src_as_org)
-    if f: filters.append(f)
-    f = _multi_term_any(['flow.in.netif.name', 'flow.in.netif.alias'], ingress_interface)
-    if f: filters.append(f)
-    f = _multi_term_any(['flow.out.netif.name', 'flow.out.netif.alias'], egress_interface)
-    if f: filters.append(f)
-    return filters
+    if dst_port_not is not None:
+        # int → term, list (multi-port exclude) → terms
+        excl.append({"terms": {"flow.server.l4.port.id": dst_port_not}} if isinstance(dst_port_not, list)
+                    else {"term": {"flow.server.l4.port.id": dst_port_not}})
+    return filters, excl
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -89,13 +101,14 @@ async def flow_summary(
     protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
+    exclude: dict | None = None,
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface)}},
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, **(exclude or {}))),
         "aggs": {
             "grand_total_upload": {"sum": {"field": "flow.client.bytes", "missing": 0}},
             "grand_total_download": {"sum": {"field": "flow.server.bytes", "missing": 0}},
@@ -225,31 +238,34 @@ async def flow_chart(
     site_name: str = "Site_FGT-DRC", top_n: int = 20, path_filter: str = "inbound-vip",
     bucket_seconds: int = 60, app_filter: str = "", client_ip: str = "",
     server_ip: str = "", protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
+    exclude: dict | None = None,
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
 
     interval_str = f"{bucket_seconds}s"
-    base_filter = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org)
+    # base_filter stays the include list (reused by spread/anomaly on the post-exclude set).
+    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, **(exclude or {}))
 
     # Pass A: global top-N resolved services over the whole range (AppID name first,
     # port fallback for unclassified) → the stable series set for the timeline.
     top_resp = await safe_search(client, FLOW_INDEX, {
         "size": 0,
-        "query": {"bool": {"filter": base_filter}},
+        "query": _bool_query(base_filter, base_excl),
         "aggs": {"top_services": service_terms_agg(size=min(top_n * 2, 50))},
     })
     app_buckets = top_resp["aggregations"].get("top_services", {}).get("buckets", [])
     charted_names, app_top, port_top, unclassified_labels = resolve_top_services(app_buckets, top_n)
     if not charted_names:
         await log_zero_bucket_anomaly(client, base_filter, site_name=site_name,
-            traffic_path=path_filter, gte_ms=gte_ms, lte_ms=lte_ms, bucket_seconds=bucket_seconds)
+            traffic_path=path_filter, gte_ms=gte_ms, lte_ms=lte_ms, bucket_seconds=bucket_seconds,
+            must_not=base_excl)
         return {"chart_data": [], "service_names": [], "bucket_seconds": bucket_seconds}
 
     # Pass B: per-bucket values pinned to that top-N (by_app + unclassified-scoped by_port).
     resp = await safe_search(client, FLOW_INDEX, {
         "size": 0,
-        "query": {"bool": {"filter": base_filter}},
+        "query": _bool_query(base_filter, base_excl),
         "aggs": {"per_minute": service_histogram_aggs(interval_str, app_top, port_top, unclassified_labels)},
     })
 
@@ -264,6 +280,7 @@ async def flow_chart(
         bucket_svc, bucket_seconds, gte_ms, lte_ms,
         name_of=lambda s: resolve_service(s.get("flow.application.name"), s.get("flow.server.l4.port.id")),
         source_fields=["flow.application.name", "flow.server.l4.port.id"],
+        must_not=base_excl,
     )
 
     service_set: set[str] = set()
@@ -290,6 +307,7 @@ async def sankey_data(
     site_name: str = "Site_FGT-DRC", path_filter: str = "inbound-vip",
     direction: str = "", app_filter: str = "", client_ip: str = "",
     server_ip: str = "", protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
+    exclude: dict | None = None,
 ) -> dict:
     """Sankey for inbound VIP traffic.
 
@@ -328,7 +346,7 @@ async def sankey_data(
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org)}},
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, **(exclude or {}))),
         "aggs": {
             "sankey_flow": {
                 "composite": {
@@ -422,6 +440,7 @@ async def flow_table(
     site_name: str = "Site_FGT-DRC", after: Optional[dict] = None, page_size: int = 100,
     path_filter: str = "inbound-vip", app_filter: str = "", client_ip: str = "",
     server_ip: str = "", protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
+    exclude: dict | None = None,
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
@@ -440,7 +459,7 @@ async def flow_table(
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org)}},
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, **(exclude or {}))),
         "aggs": {
             "flow_table": {
                 "composite": composite_body,

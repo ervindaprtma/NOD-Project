@@ -5,7 +5,7 @@ import useSWR from "swr";
 import { swrFetcher, getAccessToken, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TIME_PRESETS, formatBytes, getDefaultTimeRange } from "@/lib/constants";
-import { TagFilterField } from "@/components/TagFilterField";
+import { TagFilterField, splitChips } from "@/components/TagFilterField";
 import type { RawFlowRecord, APIResponse } from "@/types";
 
 // ── Constants ────────────────────────────────────────────────────
@@ -87,15 +87,21 @@ export default function RawDataPage() {
       p.search_after_timestamp = currentCursor[0];
       p.search_after_id = String(currentCursor[1]);
     }
-    if (filters.client_ip.length > 0) p.client_ip = filters.client_ip.join(",");
-    if (filters.server_ip.length > 0) p.server_ip = filters.server_ip.join(",");
-    if (filters.application.length > 0) p.application = filters.application.join(",");
-    if (filters.category.length > 0) p.category = filters.category.join(",");
-    if (filters.protocol.length > 0) p.protocol = filters.protocol.join(",");
-    if (filters.dst_port.length > 0) p.dst_port = filters.dst_port.join(",");
-    if (filters.ingress_interface.length > 0) p.ingress_interface = filters.ingress_interface.join(",");
-    if (filters.egress_interface.length > 0) p.egress_interface = filters.egress_interface.join(",");
-    if (filters.correlation_id.length > 0) p.correlation_id = filters.correlation_id.join(",");
+    // Split each field's chips into include / exclude (leading "-") → <param> / <param>_not.
+    const push = (param: string, vals: string[]) => {
+      const { include, exclude } = splitChips(vals);
+      if (include.length) p[param] = include.join(",");
+      if (exclude.length) p[param + "_not"] = exclude.join(",");
+    };
+    push("client_ip", filters.client_ip);
+    push("server_ip", filters.server_ip);
+    push("application", filters.application);
+    push("category", filters.category);
+    push("protocol", filters.protocol);
+    push("dst_port", filters.dst_port);
+    push("ingress_interface", filters.ingress_interface);
+    push("egress_interface", filters.egress_interface);
+    push("correlation_id", filters.correlation_id);
     return p;
   }, [gteMs, lteMs, pageSize, currentCursor, filters, siteName, pathFilter, direction]);
 

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, matchTextFilter } from "@/lib/utils";
 
 const ACTION_LABELS: Record<string, string> = {
   login: "Login",
@@ -59,7 +59,7 @@ export default function ActivityLogsPage() {
   const total = data?.meta?.total || 0;
 
   const filtered = filter
-    ? logs.filter((l) => l.action.toLowerCase().includes(filter.toLowerCase()))
+    ? logs.filter((l) => matchTextFilter(l.action, filter))
     : logs;
 
   return (

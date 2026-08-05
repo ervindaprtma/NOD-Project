@@ -595,6 +595,8 @@ async def test_alert_rule(
                 gte_ms=gte_ms, lte_ms=lte_ms, site_name=rule.site_name or "Site_FGT-DC",
                 app_filter=af.get("app") or "", protocol=af.get("protocol") or "",
                 dst_port=af.get("port"),
+                app_not=af.get("app_not") or "", protocol_not=af.get("protocol_not") or "",
+                port_not=af.get("port_not"),
             )
             metric_value = _extract_appid_flow(rule.metric_field, flow_summary) if isinstance(flow_summary, dict) else 0.0
         elif rule.data_source == "sdwan_sla":

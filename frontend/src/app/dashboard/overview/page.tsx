@@ -234,7 +234,7 @@ export default function OverviewPage() {
                 const dcData = resDatas[0]?.data?.current || [];
                 if (dcData.length === 0) return null;
                 return (
-                  <ClickCard onClick={() => router.push("/dashboard/resources")}>
+                  <ClickCard onClick={() => router.push("/dashboard/resources?site=Site_FGT-DC")}>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-xs font-semibold text-primary">DC</h3>
                       {overview?.ha_status && (
@@ -258,7 +258,7 @@ export default function OverviewPage() {
                 const drcData = resDatas[1]?.data?.current || [];
                 if (drcData.length === 0) return null;
                 return (
-                  <ClickCard onClick={() => router.push("/dashboard/resources")}>
+                  <ClickCard onClick={() => router.push("/dashboard/resources?site=Site_FGT-DRC")}>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-xs font-semibold text-emerald-600">DRC</h3>
                     </div>
@@ -273,7 +273,7 @@ export default function OverviewPage() {
                 const offData = resDatas[2]?.data?.current || [];
                 if (offData.length === 0) return null;
                 return (
-                  <ClickCard onClick={() => router.push("/dashboard/resources")}>
+                  <ClickCard onClick={() => router.push("/dashboard/resources?site=Site_FGT_Office")}>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-xs font-semibold text-amber-600">Office</h3>
                     </div>
@@ -287,17 +287,21 @@ export default function OverviewPage() {
           )}
         </div>
 
-        {/* SD-WAN Link Status — 1/3 width */}
-        <ClickCard onClick={() => router.push("/dashboard/sdwan")}>
+        {/* SD-WAN Link Status — 1/3 width; each site is clickable → SD-WAN page pre-selected */}
+        <ClickCard>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold">SD-WAN Link Status</h2>
-            <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View details →</span>
           </div>
           {isLoading ? <SkeletonBars count={4} /> : overview?.sdwan_sites?.length ? (
             <div className="space-y-3">
               {overview.sdwan_sites.map((site) => (
-                <div key={site.site}>
-                  <h3 className="text-xs font-medium text-muted-foreground mb-1">{SITE_SHORT[site.site] || site.site}{site.device && <span className="ml-1 text-[10px]">({site.device})</span>}</h3>
+                <div key={site.site}
+                  onClick={() => router.push(`/dashboard/sdwan?site=${site.site}`)}
+                  className="cursor-pointer rounded-md -mx-1 px-1 py-1 hover:bg-muted/40 transition-colors">
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-xs font-medium text-muted-foreground">{SITE_SHORT[site.site] || site.site}{site.device && <span className="ml-1 text-[10px]">({site.device})</span>}</h3>
+                    <span className="text-[10px] text-muted-foreground/70">View →</span>
+                  </div>
                   <div className="grid grid-cols-2 gap-1.5">
                     {site.links?.map((link) => (
                       <div key={link.link} className="flex items-center justify-between p-1.5 bg-muted/50 rounded-md">
@@ -327,19 +331,19 @@ export default function OverviewPage() {
                     availWindow === w ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{w}</button>
               ))}
             </div>
-            <span className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground" onClick={() => router.push("/dashboard/resources")}>View details →</span>
+            <span className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground" onClick={() => router.push("/dashboard/resources?tab=availability")}>View details →</span>
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {SITES.map((site, idx) => (
             <SiteAvailabilityCard key={`avail-${site}`} label={SITE_SHORT[site]} env={availDatas[idx]}
-              onClick={() => router.push("/dashboard/resources")} />
+              onClick={() => router.push(`/dashboard/resources?site=${site}&tab=availability`)} />
           ))}
         </div>
       </div>
 
       {/* ═══ ROW 4 — WAN/MPLS Bandwidth (full width) ═══ */}
-      <ClickCard onClick={() => router.push("/dashboard/resources")}>
+      <ClickCard onClick={() => router.push(`/dashboard/resources?site=${wanSite}&tab=bandwidth`)}>
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h2 className="text-sm font-semibold">WAN/MPLS Bandwidth</h2>
           <div className="flex items-center gap-2">
@@ -388,7 +392,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 5 — Top Client Internet (3 sites) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {SITES.map((site, idx) => (
-          <ClickCard key={`client-${site}`} onClick={() => router.push("/dashboard/traffic")}>
+          <ClickCard key={`client-${site}`} onClick={() => router.push(`/dashboard/traffic?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Top Client Internet — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
@@ -412,7 +416,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 6 — Top Application Internet Usage (3 sites) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {SITES.map((site, idx) => (
-          <ClickCard key={`app-${site}`} onClick={() => router.push("/dashboard/traffic")}>
+          <ClickCard key={`app-${site}`} onClick={() => router.push(`/dashboard/traffic?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Top Application Internet Usage — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
@@ -436,7 +440,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 7 — Top Destination Internet AS Org (3 sites) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {SITES.map((site, idx) => (
-          <ClickCard key={`as-${site}`} onClick={() => router.push("/dashboard/traffic")}>
+          <ClickCard key={`as-${site}`} onClick={() => router.push(`/dashboard/traffic?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Top Destination Internet AS Org — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
@@ -460,7 +464,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 8 — Inbound VIP (DC + DRC) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {inboundSites.map((site, idx) => (
-          <ClickCard key={`inb-${site}`} onClick={() => router.push("/dashboard/traffic-inbound")}>
+          <ClickCard key={`inb-${site}`} onClick={() => router.push(`/dashboard/traffic-inbound?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Inbound VIP — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
@@ -484,7 +488,7 @@ export default function OverviewPage() {
       {/* ═══ ROW 9 — Top Customer AS — Inbound VIP (DC + DRC) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {inboundSites.map((site, idx) => (
-          <ClickCard key={`cas-${site}`} onClick={() => router.push("/dashboard/traffic-inbound")}>
+          <ClickCard key={`cas-${site}`} onClick={() => router.push(`/dashboard/traffic-inbound?site=${site}`)}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold">Top Customer AS — {SITE_SHORT[site]}</h2>
               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">View →</span>

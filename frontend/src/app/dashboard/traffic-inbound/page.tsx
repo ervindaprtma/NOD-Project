@@ -17,7 +17,7 @@ import type {
 } from "@/types";
 import { DegradedBanner } from "@/components/panels/DegradedBanner";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
-import { TagFilterField } from "@/components/TagFilterField";
+import { TagFilterField, splitChips } from "@/components/TagFilterField";
 
 import { AreaChart } from "@/components/charts/AreaChart";
 import { ChartHeader } from "@/components/charts/ChartHeader";
@@ -59,6 +59,13 @@ export default function TrafficInboundPage() {
   const [selectedPreset, setSelectedPreset] = useState("15m");
   const [activePresetSeconds, setActivePresetSeconds] = useState(TIME_PRESETS[0].seconds);
   const [siteName, setSiteName] = useState("Site_FGT-DC");
+  // Pre-select the site when navigated from Overview with ?site=… (client-only; a useState
+  // initializer reading the URL would hydration-mismatch the SSR default). Inbound has DC/DRC
+  // only, so an unknown/Office value harmlessly falls back to the default.
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get("site");
+    if (s && SITES.includes(s)) setSiteName(s);
+  }, []);
   const [refreshInterval, setRefreshInterval] = useState(DEFAULT_REFRESH_MS);
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);
@@ -94,14 +101,19 @@ export default function TrafficInboundPage() {
 
   const filterQS = useMemo(() => {
     const parts: string[] = [];
-    if (filters.application.length > 0) parts.push(`app_filter=${encodeURIComponent(filters.application.join(","))}`);
-    if (filters.client_ip.length > 0) parts.push(`client_ip=${encodeURIComponent(filters.client_ip.join(","))}`);
-    if (filters.server_ip.length > 0) parts.push(`server_ip=${encodeURIComponent(filters.server_ip.join(","))}`);
-    if (filters.protocol.length > 0) parts.push(`protocol=${encodeURIComponent(filters.protocol.join(","))}`);
-    if (filters.dst_port.length > 0) parts.push(`dst_port=${encodeURIComponent(filters.dst_port.join(","))}`);
-    if (filters.src_as_org.length > 0) parts.push(`src_as_org=${encodeURIComponent(filters.src_as_org.join(","))}`);
-    if (filters.ingress_interface.length > 0) parts.push(`ingress_interface=${encodeURIComponent(filters.ingress_interface.join(","))}`);
-    if (filters.egress_interface.length > 0) parts.push(`egress_interface=${encodeURIComponent(filters.egress_interface.join(","))}`);
+    const push = (param: string, vals: string[]) => {
+      const { include, exclude } = splitChips(vals);
+      if (include.length) parts.push(`${param}=${encodeURIComponent(include.join(","))}`);
+      if (exclude.length) parts.push(`${param}_not=${encodeURIComponent(exclude.join(","))}`);
+    };
+    push("app_filter", filters.application);
+    push("client_ip", filters.client_ip);
+    push("server_ip", filters.server_ip);
+    push("protocol", filters.protocol);
+    push("dst_port", filters.dst_port);
+    push("src_as_org", filters.src_as_org);
+    push("ingress_interface", filters.ingress_interface);
+    push("egress_interface", filters.egress_interface);
     return parts.length > 0 ? "&" + parts.join("&") : "";
   }, [filters]);
 
