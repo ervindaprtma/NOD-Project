@@ -17,11 +17,11 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.auth import get_current_user
 from app.opensearch.query import track_degradation
-from app.api._safe import build_meta, safe_query
+from app.api._safe import build_meta, safe_query, pack_excludes
 from app.opensearch import traffic_inbound as ti_qb
 from app.schemas.common import APIResponse
 from app.schemas.traffic_inbound import (
@@ -45,6 +45,7 @@ ALLOWED_SITES = ["Site_FGT-DC", "Site_FGT-DRC"]
 
 @router.get("/summary", response_model=APIResponse[TrafficInboundSummaryResponse])
 async def traffic_inbound_summary(
+    request: Request,
     site_name: str = Query("Site_FGT-DC", description="Site name (Site_FGT-DC or Site_FGT-DRC)"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -66,6 +67,7 @@ async def traffic_inbound_summary(
     data, err = await safe_query(
         ti_qb.flow_summary,
         "traffic_inbound.flow_summary",
+        exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter="inbound-vip",
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
@@ -92,6 +94,7 @@ async def traffic_inbound_summary(
 
 @router.get("/chart", response_model=APIResponse[TrafficInboundChartResponse])
 async def traffic_inbound_chart(
+    request: Request,
     site_name: str = Query("Site_FGT-DC", description="Site name (Site_FGT-DC or Site_FGT-DRC)"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -112,6 +115,7 @@ async def traffic_inbound_chart(
     data, err = await safe_query(
         ti_qb.flow_chart,
         "traffic_inbound.flow_chart",
+        exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         path_filter="inbound-vip", bucket_seconds=bucket_seconds,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
@@ -135,6 +139,7 @@ async def traffic_inbound_chart(
 
 @router.get("/table", response_model=APIResponse[TrafficInboundTableResponse])
 async def traffic_inbound_table(
+    request: Request,
     site_name: str = Query("Site_FGT-DC", description="Site name (Site_FGT-DC or Site_FGT-DRC)"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -161,6 +166,7 @@ async def traffic_inbound_table(
     data, err = await safe_query(
         ti_qb.flow_table,
         "traffic_inbound.flow_table",
+        exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         after=after_key, path_filter="inbound-vip",
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
@@ -184,6 +190,7 @@ async def traffic_inbound_table(
 
 @router.get("/sankey", response_model=APIResponse[SankeyResponse])
 async def traffic_inbound_sankey(
+    request: Request,
     site_name: str = Query("Site_FGT-DC", description="Site name (Site_FGT-DC or Site_FGT-DRC)"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -204,6 +211,7 @@ async def traffic_inbound_sankey(
     data, err = await safe_query(
         ti_qb.sankey_data,
         "traffic_inbound.sankey_data",
+        exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter="inbound-vip",
         direction=direction,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,

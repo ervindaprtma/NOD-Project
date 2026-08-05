@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import useSWR from "swr";
 import { swrFetcher, getAccessToken } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, matchTextFilter } from "@/lib/utils";
 import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, getDefaultTimeRange } from "@/lib/constants";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 
@@ -115,7 +115,7 @@ export default function VPNPage() {
     (h) =>
       (fType === "all" || h.protocol === fType) &&
       (fDevice === "all" || h.device === fDevice) &&
-      (fUser === "" || h.username.toLowerCase().includes(fUser.trim().toLowerCase()))
+      matchTextFilter(h.username, fUser)
   );
 
   function handlePreset(seconds: number, label: string) {

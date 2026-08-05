@@ -8,7 +8,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from app.api.auth import require_role
 from app.api._safe import build_meta
 from app.opensearch import traffic_flow as tf_qb
@@ -32,6 +32,7 @@ def _fmt(n: int) -> str:
 
 @router.get("/raw", response_model=APIResponse[list[RawFlowRecord]])
 async def get_raw_flows(
+    request: Request,
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
     page_size: int = Query(default=25, ge=1, le=500, description="Rows per page (max 500)"),
@@ -89,6 +90,21 @@ async def get_raw_flows(
         filters["egress_interface"] = [l.strip() for l in egress_interface.split(",") if l.strip()]
     if correlation_id:
         filters["correlation_id"] = [c.strip() for c in correlation_id.split(",") if c.strip()]
+
+    # Exclude twins: same comma parsing, stored under <field>_not keys → raw_flows routes them
+    # to must_not (drop rows matching any). Absent params leave the query byte-identical to before.
+    for key in ("client_ip", "server_ip", "application", "category", "protocol",
+                "ingress_interface", "egress_interface", "correlation_id"):
+        raw = request.query_params.get(key + "_not")
+        if raw:
+            vals = [v.strip() for v in raw.split(",") if v.strip()]
+            if vals:
+                filters[key + "_not"] = vals
+    raw_ports = request.query_params.get("dst_port_not")
+    if raw_ports:
+        ports = [int(p.strip()) for p in raw_ports.split(",") if p.strip().isdigit()]
+        if ports:
+            filters["dst_port_not"] = ports
 
     # Build search_after array
     sa = None

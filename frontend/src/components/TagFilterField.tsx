@@ -11,6 +11,27 @@ interface TagFilterFieldProps {
   placeholder?: string;
 }
 
+// Polarity is encoded in the chip string with a leading "-" (exclude). This keeps the
+// values: string[] contract unchanged, so pages that only read the array still compile;
+// page query-builders split on the prefix into <param> / <param>_not. Domain filter values
+// (app names, IPs, ports, AS orgs, interfaces) never start with "-", so no escape is needed.
+export function chipParts(tag: string): { value: string; exclude: boolean } {
+  const exclude = tag.startsWith("-");
+  return { value: exclude ? tag.slice(1) : tag, exclude };
+}
+
+/** Split a field's chips into include + exclude value lists (used by page query-builders). */
+export function splitChips(values: string[]): { include: string[]; exclude: string[] } {
+  const include: string[] = [];
+  const exclude: string[] = [];
+  for (const t of values) {
+    const { value, exclude: neg } = chipParts(t);
+    if (!value) continue;
+    (neg ? exclude : include).push(value);
+  }
+  return { include, exclude };
+}
+
 export function TagFilterField({ label, values, onChange, mono, placeholder = "Type and press Enter" }: TagFilterFieldProps) {
   const [input, setInput] = useState("");
 
@@ -24,6 +45,17 @@ export function TagFilterField({ label, values, onChange, mono, placeholder = "T
 
   function removeTag(index: number) {
     onChange(values.filter((_, i) => i !== index));
+  }
+
+  // Click a chip to flip include ↔ exclude (add/remove the leading "-").
+  function toggleTag(index: number) {
+    onChange(
+      values.map((t, i) => {
+        if (i !== index) return t;
+        const { value, exclude } = chipParts(t);
+        return exclude ? value : `-${value}`;
+      })
+    );
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -48,24 +80,38 @@ export function TagFilterField({ label, values, onChange, mono, placeholder = "T
           el?.focus();
         }}
       >
-        {values.map((tag, i) => (
-          <span
-            key={i}
-            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px] whitespace-nowrap"
-          >
-            {tag}
-            <button
-              type="button"
+        {values.map((tag, i) => {
+          const { value, exclude } = chipParts(tag);
+          return (
+            <span
+              key={i}
               onClick={(e) => {
                 e.stopPropagation();
-                removeTag(i);
+                toggleTag(i);
               }}
-              className="text-primary/60 hover:text-primary ml-0.5"
+              title={exclude ? "Excluded — click to include" : "Included — click to exclude"}
+              className={cn(
+                "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] whitespace-nowrap cursor-pointer select-none",
+                exclude
+                  ? "bg-destructive/10 text-destructive line-through decoration-destructive/50"
+                  : "bg-primary/10 text-primary"
+              )}
             >
-              ×
-            </button>
-          </span>
-        ))}
+              {exclude && <span className="no-underline">−</span>}
+              {value}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeTag(i);
+                }}
+                className={cn("ml-0.5", exclude ? "text-destructive/60 hover:text-destructive" : "text-primary/60 hover:text-primary")}
+              >
+                ×
+              </button>
+            </span>
+          );
+        })}
         <input
           id={`tag-input-${label}`}
           type="text"

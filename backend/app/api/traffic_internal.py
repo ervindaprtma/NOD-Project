@@ -12,11 +12,11 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.auth import get_current_user
 from app.opensearch.query import track_degradation
-from app.api._safe import build_meta, safe_query
+from app.api._safe import build_meta, safe_query, pack_excludes
 from app.opensearch import traffic_internal as ti_qb
 from app.schemas.common import APIResponse
 from app.schemas.traffic_internal import (
@@ -29,11 +29,16 @@ from app.schemas.traffic_internal import (
 logger = logging.getLogger("nod.api.traffic_internal")
 router = APIRouter(prefix="/api/v1/traffic-internal", tags=["Traffic Internal"])
 
+# The page's "Service Name" filter is app_filter on the wire; the internal builder calls it
+# service_filter. Map the exclude twin accordingly.
+_EXCLUDE_RENAME = {"app_filter_not": "service_filter_not"}
+
 ALL_SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"]
 
 
 @router.get("/summary", response_model=APIResponse[TrafficInternalSummaryResponse])
 async def traffic_internal_summary(
+    request: Request,
     site_name: str = Query("Site_FGT-DC", description="Site name"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -54,6 +59,7 @@ async def traffic_internal_summary(
     data, err = await safe_query(
         ti_qb.flow_summary,
         "traffic_internal.flow_summary",
+        exclude=pack_excludes(request, _EXCLUDE_RENAME),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
@@ -74,6 +80,7 @@ async def traffic_internal_summary(
 
 @router.get("/chart", response_model=APIResponse[TrafficInternalChartResponse])
 async def traffic_internal_chart(
+    request: Request,
     site_name: str = Query("Site_FGT-DC", description="Site name"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -93,6 +100,7 @@ async def traffic_internal_chart(
     data, err = await safe_query(
         ti_qb.flow_chart,
         "traffic_internal.flow_chart",
+        exclude=pack_excludes(request, _EXCLUDE_RENAME),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, bucket_seconds=bucket_seconds,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
@@ -110,6 +118,7 @@ async def traffic_internal_chart(
 
 @router.get("/table", response_model=APIResponse[TrafficInternalTableResponse])
 async def traffic_internal_table(
+    request: Request,
     site_name: str = Query("Site_FGT-DC", description="Site name"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -133,6 +142,7 @@ async def traffic_internal_table(
     data, err = await safe_query(
         ti_qb.flow_table,
         "traffic_internal.flow_table",
+        exclude=pack_excludes(request, _EXCLUDE_RENAME),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, after=after_key,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
@@ -150,6 +160,7 @@ async def traffic_internal_table(
 
 @router.get("/sankey", response_model=APIResponse[SankeyResponse])
 async def traffic_internal_sankey(
+    request: Request,
     site_name: str = Query("Site_FGT-DC", description="Site name"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -169,6 +180,7 @@ async def traffic_internal_sankey(
     data, err = await safe_query(
         ti_qb.sankey_data,
         "traffic_internal.sankey_data",
+        exclude=pack_excludes(request, _EXCLUDE_RENAME),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,

@@ -10,9 +10,30 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional, Sequence, Tuple
 
+from fastapi import Request
+
 from app.schemas.common import Meta
 
 logger = logging.getLogger("nod.api")
+
+
+def pack_excludes(request: Request, rename: Optional[dict] = None) -> dict:
+    """Collect the `*_not` exclude-filter query params into a dict the query builders take as
+    `exclude=` (forwarded to _base_filters as `**exclude`). Empty values are dropped so an
+    exclude-free request yields {} → a query byte-identical to before. `dst_port_not` is
+    coerced to int; `rename` maps a wire name to a builder param (internal: app_filter_not →
+    service_filter_not). Keys are otherwise the builder's own `_not` param names, so new
+    filters need no change here."""
+    ex = {k: v for k, v in request.query_params.items() if k.endswith("_not") and v}
+    if "dst_port_not" in ex:
+        try:
+            ex["dst_port_not"] = int(ex["dst_port_not"])
+        except (ValueError, TypeError):
+            ex.pop("dst_port_not")
+    for src, dst in (rename or {}).items():
+        if src in ex:
+            ex[dst] = ex.pop(src)
+    return ex
 
 
 def build_meta(

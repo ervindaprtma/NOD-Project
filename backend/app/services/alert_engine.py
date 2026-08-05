@@ -137,7 +137,8 @@ def sample_render_ctx(
         # friendly target + appid scope (samples so target/appid templates render richly)
         "target_name": "WAN LDP", "target_key": "16",
         "filter_app": "YouTube", "filter_proto": "TCP", "filter_port": 443,
-        "filter_label": "app=YouTube, port=443",
+        "filter_app_not": "Teams", "filter_proto_not": "UDP", "filter_port_not": 445,
+        "filter_label": "app=YouTube, port=443, not app=Teams",
         # VPN capacity (metric_mb/threshold_mb only meaningful for a byte-volume metric)
         "vpn_active_users": 7, "vpn_total_mb": 5500.0, "vpn_top_user_mb": 2100.0,
         "vpn_top_user": "someone",
@@ -228,6 +229,8 @@ async def _run_group_query(
                     gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC",
                     app_filter=af.get("app") or "", protocol=af.get("protocol") or "",
                     dst_port=af.get("port"),
+                    app_not=af.get("app_not") or "", protocol_not=af.get("protocol_not") or "",
+                    port_not=af.get("port_not"),
                 )
 
             elif data_source == "sdwan_sla":
@@ -574,7 +577,8 @@ def _appid_sig(filt: dict | None) -> tuple | None:
 
 
 def _appid_filter_label(filt: dict | None) -> str | None:
-    """Human label for a notification, e.g. "app=YouTube, port=443". None when unfiltered."""
+    """Human label for a notification, e.g. "app=YouTube, port=443, not app=Teams". None when
+    unfiltered. Exclude twins render as "not app=…" so an operator reads the rule's real scope."""
     if not filt:
         return None
     parts = []
@@ -584,6 +588,12 @@ def _appid_filter_label(filt: dict | None) -> str | None:
         parts.append(f"proto={filt['protocol']}")
     if filt.get("port") is not None:
         parts.append(f"port={filt['port']}")
+    if filt.get("app_not"):
+        parts.append(f"not app={filt['app_not']}")
+    if filt.get("protocol_not"):
+        parts.append(f"not proto={filt['protocol_not']}")
+    if filt.get("port_not") is not None:
+        parts.append(f"not port={filt['port_not']}")
     return ", ".join(parts) or None
 
 
@@ -1073,6 +1083,9 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         filter_app = appid_f.get("app")
         filter_proto = appid_f.get("protocol")
         filter_port = appid_f.get("port")
+        filter_app_not = appid_f.get("app_not")
+        filter_proto_not = appid_f.get("protocol_not")
+        filter_port_not = appid_f.get("port_not")
         filter_label = _appid_filter_label(appid_f or None)
         # VPN capacity extras — count + consumed volume in MB, so a template can show the whole
         # picture regardless of which metric (count / total / top-user) the rule fired on.
@@ -1148,6 +1161,10 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "filter_app": filter_app,
                 "filter_proto": filter_proto,
                 "filter_port": filter_port,
+                # appid exclude scope (None when the rule has no exclude twin):
+                "filter_app_not": filter_app_not,
+                "filter_proto_not": filter_proto_not,
+                "filter_port_not": filter_port_not,
                 "filter_label": filter_label,
                 # VPN capacity (None for non-VPN rules):
                 "vpn_active_users": vpn_active_users,

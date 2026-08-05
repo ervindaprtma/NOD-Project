@@ -13,9 +13,9 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
-from app.api._safe import build_meta, safe_query
+from app.api._safe import build_meta, safe_query, pack_excludes
 from app.api.auth import get_current_user
 from app.opensearch.query import track_degradation
 from app.opensearch import traffic_flow as tf_qb
@@ -31,6 +31,7 @@ router = APIRouter(prefix="/api/v1/traffic-flow", tags=["Traffic Flow"])
 
 @router.get("/summary", response_model=APIResponse[TrafficSummaryResponse])
 async def traffic_flow_summary(
+    request: Request,
     site_name: str = Query(..., description="Site name"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -50,6 +51,7 @@ async def traffic_flow_summary(
     degraded = track_degradation()
     data, err = await safe_query(
         tf_qb.flow_summary,
+        exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
@@ -73,6 +75,7 @@ async def traffic_flow_summary(
 
 @router.get("/chart", response_model=APIResponse[TrafficChartResponse])
 async def traffic_flow_chart(
+    request: Request,
     site_name: str = Query(..., description="Site name"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -91,6 +94,7 @@ async def traffic_flow_chart(
     degraded = track_degradation()
     data, err = await safe_query(
         tf_qb.flow_chart,
+        exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         bucket_seconds=bucket_seconds,
         app_filter=app_filter, category_filter=category_filter,
@@ -109,6 +113,7 @@ async def traffic_flow_chart(
 
 @router.get("/table", response_model=APIResponse[TrafficTableResponse])
 async def traffic_flow_table(
+    request: Request,
     site_name: str = Query(..., description="Site name"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -131,6 +136,7 @@ async def traffic_flow_table(
         except json.JSONDecodeError: return APIResponse.fail("INVALID_AFTER", "after must be valid JSON")
     data, err = await safe_query(
         tf_qb.flow_table,
+        exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, after=after_key, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
@@ -148,6 +154,7 @@ async def traffic_flow_table(
 
 @router.get("/sankey", response_model=APIResponse[SankeyResponse])
 async def traffic_flow_sankey(
+    request: Request,
     site_name: str = Query(..., description="Site name"),
     gte_ms: int = Query(..., description="Start timestamp (epoch ms)"),
     lte_ms: int = Query(..., description="End timestamp (epoch ms)"),
@@ -166,6 +173,7 @@ async def traffic_flow_sankey(
     degraded = track_degradation()
     data, err = await safe_query(
         tf_qb.sankey_data,
+        exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         direction=direction,
         app_filter=app_filter, category_filter=category_filter,

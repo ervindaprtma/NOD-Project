@@ -13,6 +13,7 @@ from opensearchpy import AsyncOpenSearch
 
 from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _multi_wildcard, _bytes_sum, BYTES_DESC,
+    _bool_query,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
 from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
@@ -44,7 +45,15 @@ def _base_filters(
     dst_port: int | None = None, dst_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
-) -> list[dict]:
+    app_filter_not: str = "", category_filter_not: str = "",
+    client_ip_not: str = "", server_ip_not: str = "", protocol_not: str = "",
+    dst_port_not: int | None = None, dst_as_org_not: str = "",
+    ingress_interface_not: str = "",
+    egress_interface_not: str = "",
+) -> tuple[list[dict], list[dict]]:
+    """Returns (filter, must_not). Scope (time/site/path/direction) is include-only; every
+    narrowing field has an optional `_not` twin built with the SAME helper but routed to the
+    must_not list — a row is dropped if it matches any exclude clause. See _bool_query."""
     filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
     if path_filter and path_filter != "all":
         filters.append({"term": {"flow.traffic.path": path_filter}})
@@ -54,29 +63,38 @@ def _base_filters(
     elif direction == "download":
         filters.append({"term": {"flow.in.netif.sec.zone.name": "internet"}})
         filters.append({"term": {"flow.out.netif.sec.zone.name": "internal"}})
-    f = _multi_wildcard("flow.application.name", app_filter)
-    if f: filters.append(f)
-    f = _multi_wildcard("flow.application.category", category_filter)
-    if f: filters.append(f)
-    f = _multi_term("flow.client.ip.addr", client_ip)
-    if f: filters.append(f)
-    f = _multi_term("flow.server.ip.addr", server_ip)
-    if f: filters.append(f)
-    f = _multi_term("l4.proto.name", protocol.upper())  # proto names are uppercase (TCP/UDP/ICMP); accept any-case input
-    if f: filters.append(f)
+    excl: list[dict] = []
+    # (include-clause, exclude-clause) per field — same helper, two destinations.
+    for inc, exc in (
+        (_multi_wildcard("flow.application.name", app_filter),
+         _multi_wildcard("flow.application.name", app_filter_not)),
+        (_multi_wildcard("flow.application.category", category_filter),
+         _multi_wildcard("flow.application.category", category_filter_not)),
+        (_multi_term("flow.client.ip.addr", client_ip),
+         _multi_term("flow.client.ip.addr", client_ip_not)),
+        (_multi_term("flow.server.ip.addr", server_ip),
+         _multi_term("flow.server.ip.addr", server_ip_not)),
+        # proto names are uppercase (TCP/UDP/ICMP); accept any-case input
+        (_multi_term("l4.proto.name", protocol.upper()),
+         _multi_term("l4.proto.name", protocol_not.upper())),
+        (_multi_wildcard("flow.server.as.org", dst_as_org),
+         _multi_wildcard("flow.server.as.org", dst_as_org_not)),
+        (_multi_term_any(['flow.in.netif.name', 'flow.in.netif.alias'], ingress_interface),
+         _multi_term_any(['flow.in.netif.name', 'flow.in.netif.alias'], ingress_interface_not)),
+        (_multi_term_any(['flow.out.netif.name', 'flow.out.netif.alias'], egress_interface),
+         _multi_term_any(['flow.out.netif.name', 'flow.out.netif.alias'], egress_interface_not)),
+    ):
+        if inc: filters.append(inc)
+        if exc: excl.append(exc)
     if dst_port is not None:
         # Role-based, not direction-based: flow.dst.l4.port.id is the destination of
         # each leg, so it only matches the request leg and drops the (much larger)
         # response leg. flow.server.l4.port.id is stable across both legs and matches
         # what the top_services agg buckets on.
         filters.append({"term": {"flow.server.l4.port.id": dst_port}})
-    f = _multi_wildcard("flow.server.as.org", dst_as_org)
-    if f: filters.append(f)
-    f = _multi_term_any(['flow.in.netif.name', 'flow.in.netif.alias'], ingress_interface)
-    if f: filters.append(f)
-    f = _multi_term_any(['flow.out.netif.name', 'flow.out.netif.alias'], egress_interface)
-    if f: filters.append(f)
-    return filters
+    if dst_port_not is not None:
+        excl.append({"term": {"flow.server.l4.port.id": dst_port_not}})
+    return filters, excl
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -92,13 +110,14 @@ async def flow_summary(
     dst_port: int | None = None, dst_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
+    exclude: dict | None = None,
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface)}},
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, **(exclude or {}))),
         "aggs": {
             "grand_total_upload": {"sum": {"field": "flow.client.bytes", "missing": 0}},
             "grand_total_download": {"sum": {"field": "flow.server.bytes", "missing": 0}},
@@ -246,15 +265,18 @@ async def flow_chart(
     bucket_seconds: int = 60, app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    exclude: dict | None = None,
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
 
     interval_str = f"{bucket_seconds}s"
-    base_filter = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)
+    # base_filter stays the include list (reused by spread_long_sessions / anomaly logging,
+    # which already operate on the post-exclude charted app set); excludes apply to the main query.
+    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, **(exclude or {}))
     body = {
         "size": 0,
-        "query": {"bool": {"filter": base_filter}},
+        "query": _bool_query(base_filter, base_excl),
         "aggs": {
             "per_minute": {
                 "date_histogram": {"field": "@timestamp", "fixed_interval": interval_str, "min_doc_count": 1},
@@ -319,6 +341,7 @@ async def sankey_data(
     direction: str = "", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    exclude: dict | None = None,
 ) -> dict:
     """Sankey for Internet traffic flow.
 
@@ -354,7 +377,7 @@ async def sankey_data(
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, **(exclude or {}))),
         "aggs": {
             "sankey_flow": {
                 "composite": {
@@ -452,6 +475,7 @@ async def flow_table(
     path_filter: str = "internet", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    exclude: dict | None = None,
 ) -> dict:
     if client is None:
         client = _get_client(site_name)
@@ -469,7 +493,7 @@ async def flow_table(
 
     body = {
         "size": 0,
-        "query": {"bool": {"filter": _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org)}},
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, **(exclude or {}))),
         "aggs": {
             "flow_table": {
                 "composite": composite_body,
@@ -616,6 +640,9 @@ async def appid_flow_alert_summary(
     app_filter: str = "",
     protocol: str = "",
     dst_port: int | None = None,
+    app_not: str = "",
+    protocol_not: str = "",
+    port_not: int | None = None,
 ) -> dict[str, dict[str, float | int]]:
     """One query → per-`flow.traffic.path` throughput for alerting.
 
@@ -633,17 +660,26 @@ async def appid_flow_alert_summary(
     # Optional app/protocol/port scoping — same fields the flow pages filter on
     # (flow.application.name / l4.proto.name / flow.server.l4.port.id).
     scope: list[dict] = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
+    scope_not: list[dict] = []
     f = _multi_wildcard("flow.application.name", app_filter)
     if f:
         scope.append(f)
+    f = _multi_wildcard("flow.application.name", app_not)   # exclude twin → must_not
+    if f:
+        scope_not.append(f)
     f = _multi_term("l4.proto.name", protocol.upper())  # proto names are uppercase
     if f:
         scope.append(f)
+    f = _multi_term("l4.proto.name", protocol_not.upper())
+    if f:
+        scope_not.append(f)
     if dst_port is not None:
         scope.append({"term": {"flow.server.l4.port.id": dst_port}})
+    if port_not is not None:
+        scope_not.append({"term": {"flow.server.l4.port.id": port_not}})
     body = {
         "size": 0,
-        "query": {"bool": {"filter": scope}},
+        "query": _bool_query(scope, scope_not),
         "aggs": {
             "by_path": {
                 "terms": {"field": "flow.traffic.path", "size": 12},
@@ -737,39 +773,41 @@ async def raw_flows(
         must_filters.append({"term": {"flow.in.netif.sec.zone.name": "internet"}})
         must_filters.append({"term": {"flow.out.netif.sec.zone.name": "internal"}})
 
+    def _raw_clause(key: str, values) -> dict | None:
+        """One filter key → its OS clause. Shared by include (key) and exclude (key_not) so
+        the two stay symmetric. dst_port uses the role-based flow.server.l4.port.id (stable
+        across both legs — matches the summary panels); interface matches name OR alias (the
+        table shows the alias, the breakdown panels the name, both feed one filter bar)."""
+        if not values:
+            return None
+        vals = values if isinstance(values, list) else [values]
+        field = {
+            "client_ip": "flow.client.ip.addr", "server_ip": "flow.server.ip.addr",
+            "application": "flow.application.name", "category": "flow.application.category",
+            "protocol": "l4.proto.name", "dst_port": "flow.server.l4.port.id",
+            "correlation_id": "flow.correlation_id",
+        }.get(key)
+        if field:
+            return {"terms": {field: vals}}
+        if key == "ingress_interface":
+            return {"bool": {"should": [{"terms": {"flow.in.netif.name": vals}},
+                                        {"terms": {"flow.in.netif.alias": vals}}], "minimum_should_match": 1}}
+        if key == "egress_interface":
+            return {"bool": {"should": [{"terms": {"flow.out.netif.name": vals}},
+                                        {"terms": {"flow.out.netif.alias": vals}}], "minimum_should_match": 1}}
+        return None
+
+    _RAW_FILTER_KEYS = ("client_ip", "server_ip", "application", "category", "protocol",
+                        "dst_port", "ingress_interface", "egress_interface", "correlation_id")
+    must_not_filters: list[dict] = []
     if filters:
-        if filters.get("client_ip"):
-            vals = filters["client_ip"] if isinstance(filters["client_ip"], list) else [filters["client_ip"]]
-            must_filters.append({"terms": {"flow.client.ip.addr": vals}})
-        if filters.get("server_ip"):
-            vals = filters["server_ip"] if isinstance(filters["server_ip"], list) else [filters["server_ip"]]
-            must_filters.append({"terms": {"flow.server.ip.addr": vals}})
-        if filters.get("application"):
-            must_filters.append({"terms": {"flow.application.name": filters["application"]}})
-        if filters.get("category"):
-            must_filters.append({"terms": {"flow.application.category": filters["category"]}})
-        if filters.get("protocol"):
-            must_filters.append({"terms": {"l4.proto.name": filters["protocol"]}})
-        if filters.get("dst_port"):
-            vals = filters["dst_port"] if isinstance(filters["dst_port"], list) else [filters["dst_port"]]
-            # Match the summary panels, which filter/bucket on the role-based service
-            # port. flow.dst.l4.port.id would return only the request leg, so the same
-            # filter value would disagree between this table and the charts above it.
-            must_filters.append({"terms": {"flow.server.l4.port.id": vals}})
-        # Accept either the interface name or its alias — the table displays the alias
-        # while the breakdown panels show the name, and both feed the same filter bar.
-        if filters.get("ingress_interface"):
-            must_filters.append({"bool": {"should": [
-                {"terms": {"flow.in.netif.name": filters["ingress_interface"]}},
-                {"terms": {"flow.in.netif.alias": filters["ingress_interface"]}},
-            ], "minimum_should_match": 1}})
-        if filters.get("egress_interface"):
-            must_filters.append({"bool": {"should": [
-                {"terms": {"flow.out.netif.name": filters["egress_interface"]}},
-                {"terms": {"flow.out.netif.alias": filters["egress_interface"]}},
-            ], "minimum_should_match": 1}})
-        if filters.get("correlation_id"):
-            must_filters.append({"terms": {"flow.correlation_id": filters["correlation_id"]}})
+        for k in _RAW_FILTER_KEYS:
+            c = _raw_clause(k, filters.get(k))
+            if c:
+                must_filters.append(c)
+            c = _raw_clause(k, filters.get(k + "_not"))   # exclude twin → must_not
+            if c:
+                must_not_filters.append(c)
 
     sort_field = sort_by if sort_by else "@timestamp"
     sort_order = "desc" if sort_dir == "desc" else "asc"
@@ -780,7 +818,7 @@ async def raw_flows(
 
     body: dict = {
         "size": page_size,
-        "query": {"bool": {"filter": must_filters}},
+        "query": _bool_query(must_filters, must_not_filters),
         "sort": sort_clause,
         "_source": {"includes": source_fields},
         # Accurate total, not the default 10k cap — otherwise "records" (capped) would

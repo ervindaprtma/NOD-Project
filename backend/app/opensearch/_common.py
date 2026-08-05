@@ -44,6 +44,13 @@ def _time_range(gte_ms: int, lte_ms: int) -> dict:
     return {"range": {"@timestamp": {"gte": gte_ms, "lte": lte_ms, "format": "epoch_millis"}}}
 
 
+def _bool_query(filt: list[dict], excl: list[dict] | None = None) -> dict:
+    """Assemble the bool query. Excludes go to `must_not` (drop a row if it matches ANY).
+    `must_not` is OMITTED when empty so exclude-free queries stay byte-identical to before —
+    call as `_bool_query(*_base_filters(...))` where _base_filters returns (filter, must_not)."""
+    return {"bool": {"filter": filt, **({"must_not": excl} if excl else {})}}
+
+
 def _split_multi(value: str) -> list[str]:
     """Split comma-separated filter string to list of stripped non-empty values."""
     return [v.strip() for v in value.split(",") if v.strip()]
