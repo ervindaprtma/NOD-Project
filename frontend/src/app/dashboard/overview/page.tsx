@@ -331,19 +331,19 @@ export default function OverviewPage() {
                     availWindow === w ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{w}</button>
               ))}
             </div>
-            <span className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground" onClick={() => router.push("/dashboard/resources")}>View details →</span>
+            <span className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground" onClick={() => router.push("/dashboard/resources?tab=availability")}>View details →</span>
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {SITES.map((site, idx) => (
             <SiteAvailabilityCard key={`avail-${site}`} label={SITE_SHORT[site]} env={availDatas[idx]}
-              onClick={() => router.push(`/dashboard/resources?site=${site}`)} />
+              onClick={() => router.push(`/dashboard/resources?site=${site}&tab=availability`)} />
           ))}
         </div>
       </div>
 
       {/* ═══ ROW 4 — WAN/MPLS Bandwidth (full width) ═══ */}
-      <ClickCard onClick={() => router.push(`/dashboard/resources?site=${wanSite}`)}>
+      <ClickCard onClick={() => router.push(`/dashboard/resources?site=${wanSite}&tab=bandwidth`)}>
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h2 className="text-sm font-semibold">WAN/MPLS Bandwidth</h2>
           <div className="flex items-center gap-2">
