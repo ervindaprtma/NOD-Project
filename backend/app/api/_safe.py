@@ -24,11 +24,15 @@ def pack_excludes(request: Request, rename: Optional[dict] = None) -> dict:
     coerced to int; `rename` maps a wire name to a builder param (internal: app_filter_not →
     service_filter_not). Keys are otherwise the builder's own `_not` param names, so new
     filters need no change here."""
-    ex = {k: v for k, v in request.query_params.items() if k.endswith("_not") and v}
+    ex: dict = {k: v for k, v in request.query_params.items() if k.endswith("_not") and v}
     if "dst_port_not" in ex:
-        try:
-            ex["dst_port_not"] = int(ex["dst_port_not"])
-        except (ValueError, TypeError):
+        # Accept one or several ports ("445" or "445,3389") — parse to a list of ints so a
+        # multi-port exclude isn't silently dropped (int("445,3389") would raise). Drop only
+        # the non-numeric tokens; keep the key out entirely if nothing valid remains.
+        ports = [int(p) for p in str(ex["dst_port_not"]).split(",") if p.strip().isdigit()]
+        if ports:
+            ex["dst_port_not"] = ports
+        else:
             ex.pop("dst_port_not")
     for src, dst in (rename or {}).items():
         if src in ex:

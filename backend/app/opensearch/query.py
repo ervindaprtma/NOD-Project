@@ -190,6 +190,7 @@ async def spread_long_sessions(
     key_filter_values: list | None = None,
     name_of: Callable[[dict], str] | None = None,
     source_fields: list[str] | None = None,
+    must_not: list[dict] | None = None,
 ) -> None:
     """Re-distribute long sessions' bytes across their active window, in place.
 
@@ -208,6 +209,8 @@ async def spread_long_sessions(
     series. `key_filter_values` is ignored in that mode (charted_names still gates).
     """
     from app.opensearch._common import FLOW_INDEX
+
+    from app.opensearch._common import _bool_query
 
     if bucket_seconds > _SPREAD_MAX_BUCKET_SECONDS:
         return  # wide buckets already smooth spikes — skip the costly fetch (stability)
@@ -241,7 +244,7 @@ async def spread_long_sessions(
     resp = await safe_search(client, FLOW_INDEX, {
         "size": _SPREAD_CAP,
         "timeout": "115s",
-        "query": {"bool": {"filter": fetch_filter}},
+        "query": _bool_query(fetch_filter, must_not),
         "sort": [{"flow.bytes": "desc"}],
         "_source": ["flow.client.bytes", "flow.server.bytes", "flow.start.ms", "flow.end.ms", *src],
         "docvalue_fields": [{"field": "@timestamp", "format": "epoch_millis"}],
@@ -292,6 +295,7 @@ async def log_zero_bucket_anomaly(
     gte_ms: int,
     lte_ms: int,
     bucket_seconds: int,
+    must_not: list[dict] | None = None,
 ) -> None:
     """Diagnostic-only: a chart came back with no non-zero buckets. Run a cheap
     activity-overlap count and log ONLY when data actually exists (hits > 0) and the
@@ -302,7 +306,7 @@ async def log_zero_bucket_anomaly(
     The probe runs in its own degradation_scope so that if THIS query fails it can never
     flip the user's response to degraded. Cheap: size:0 count, and only on empty charts.
     """
-    from app.opensearch._common import FLOW_INDEX
+    from app.opensearch._common import FLOW_INDEX, _bool_query
 
     if _degraded_sink.get():
         return  # chart already degraded — the zero is explained; nothing to diagnose
@@ -320,7 +324,7 @@ async def log_zero_bucket_anomaly(
     with degradation_scope() as diag_sink:
         resp = await safe_search(
             client, FLOW_INDEX,
-            {"size": 0, "track_total_hits": True, "query": {"bool": {"filter": overlap}}},
+            {"size": 0, "track_total_hits": True, "query": _bool_query(overlap, must_not)},
         )
     if diag_sink or resp.get("_timed_out") or resp.get("_error"):
         return  # the probe itself was unreliable — inconclusive, don't cry wolf

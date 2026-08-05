@@ -78,10 +78,45 @@ def test_pack_excludes_parses_coerces_and_renames():
         "app_filter=Zoom&app_filter_not=Teams&dst_port_not=445&protocol_not=&client_ip_not=10.0.0.5"))
     ex = pack_excludes(req, rename={"app_filter_not": "service_filter_not"})
     assert ex["service_filter_not"] == "Teams"       # renamed
-    assert ex["dst_port_not"] == 445                 # coerced to int
+    assert ex["dst_port_not"] == [445]               # parsed to a list of ints
     assert ex["client_ip_not"] == "10.0.0.5"
     assert "app_filter" not in ex                     # positive param ignored
     assert "protocol_not" not in ex                   # empty dropped
+
+
+def test_pack_excludes_multi_port_not_dropped():
+    """Regression: multiple excluded ports (dst_port_not=445,3389) used to hit int() and get
+    silently dropped. Now parsed to a list; non-numeric tokens are discarded, not fatal."""
+    req = SimpleNamespace(query_params=QueryParams("dst_port_not=445,3389,foo"))
+    assert pack_excludes(req)["dst_port_not"] == [445, 3389]
+    # nothing numeric → key omitted entirely (no empty terms clause)
+    assert "dst_port_not" not in pack_excludes(SimpleNamespace(query_params=QueryParams("dst_port_not=abc")))
+
+
+def test_base_filters_multi_port_exclude_uses_terms():
+    """A list dst_port_not (multi-port exclude) becomes a `terms` clause; a bare int stays `term`."""
+    _, excl_list = tf._base_filters(0, 1, "Site_FGT-DC", dst_port_not=[445, 3389])
+    assert {"terms": {"flow.server.l4.port.id": [445, 3389]}} in excl_list
+    _, excl_int = tf._base_filters(0, 1, "Site_FGT-DC", dst_port_not=445)
+    assert {"term": {"flow.server.l4.port.id": 445}} in excl_int
+
+
+def test_spread_long_sessions_applies_must_not():
+    """Regression (chart leak): spread_long_sessions must route the chart's excludes into its
+    own re-fetch, else long-session bytes for excluded IPs/ports leak back into the chart."""
+    from app.opensearch.query import spread_long_sessions
+    captured = {}
+
+    class FakeClient:
+        async def search(self, index, body, **kw):
+            captured["body"] = body
+            return {"hits": {"hits": []}}
+
+    excl = [{"term": {"flow.client.ip.addr": "10.0.0.5"}}]
+    asyncio.run(spread_long_sessions(
+        FakeClient(), [{"range": {"@timestamp": {"gte": 0, "lte": 1}}}], "flow.application.name",
+        lambda x: x, {"Zoom"}, {}, 60, 0, 60_000, key_filter_values=["Zoom"], must_not=excl))
+    assert captured["body"]["query"]["bool"]["must_not"] == excl
 
 
 def test_pack_excludes_empty_is_identity():

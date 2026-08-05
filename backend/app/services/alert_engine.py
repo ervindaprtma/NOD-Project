@@ -801,10 +801,14 @@ async def _advance_state_machine(
             resolved_value = metric_value
             fired_driver = (alert_log.rule_snapshot or {}).get("driver") if alert_log else None
             if fired_driver:
-                rule._fired_clause = fired_driver
                 for c in getattr(rule, "_clauses_detail", None) or []:
                     if (c.get("metric_field") == fired_driver.get("metric_field")
                             and c.get("target_key") == fired_driver.get("target_key")):
+                        # Adopt the fired clause's identity AND its current value TOGETHER, so the
+                        # message's label/limit and value always describe the same clause. If no
+                        # clause matches (rule edited since firing), leave _fired_clause as this
+                        # cycle's driver and resolved_value as its value — still self-consistent.
+                        rule._fired_clause = fired_driver
                         resolved_value = c["value"]
                         break
 

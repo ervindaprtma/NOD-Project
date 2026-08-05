@@ -48,7 +48,7 @@ def _base_filters(
     ingress_interface: str = "",
     egress_interface: str = "",
     app_filter_not: str = "", client_ip_not: str = "", server_ip_not: str = "",
-    protocol_not: str = "", dst_port_not: int | None = None, src_as_org_not: str = "",
+    protocol_not: str = "", dst_port_not: int | list[int] | None = None, src_as_org_not: str = "",
     ingress_interface_not: str = "",
     egress_interface_not: str = "",
     **_ignore,  # tolerate any unknown *_not param (stale bookmark / URL edit) → never crash the query
@@ -83,7 +83,9 @@ def _base_filters(
         # Role-based (stable across both legs) — see traffic_flow._base_filters.
         filters.append({"term": {"flow.server.l4.port.id": dst_port}})
     if dst_port_not is not None:
-        excl.append({"term": {"flow.server.l4.port.id": dst_port_not}})
+        # int → term, list (multi-port exclude) → terms
+        excl.append({"terms": {"flow.server.l4.port.id": dst_port_not}} if isinstance(dst_port_not, list)
+                    else {"term": {"flow.server.l4.port.id": dst_port_not}})
     return filters, excl
 
 
@@ -256,7 +258,8 @@ async def flow_chart(
     charted_names, app_top, port_top, unclassified_labels = resolve_top_services(app_buckets, top_n)
     if not charted_names:
         await log_zero_bucket_anomaly(client, base_filter, site_name=site_name,
-            traffic_path=path_filter, gte_ms=gte_ms, lte_ms=lte_ms, bucket_seconds=bucket_seconds)
+            traffic_path=path_filter, gte_ms=gte_ms, lte_ms=lte_ms, bucket_seconds=bucket_seconds,
+            must_not=base_excl)
         return {"chart_data": [], "service_names": [], "bucket_seconds": bucket_seconds}
 
     # Pass B: per-bucket values pinned to that top-N (by_app + unclassified-scoped by_port).
@@ -277,6 +280,7 @@ async def flow_chart(
         bucket_svc, bucket_seconds, gte_ms, lte_ms,
         name_of=lambda s: resolve_service(s.get("flow.application.name"), s.get("flow.server.l4.port.id")),
         source_fields=["flow.application.name", "flow.server.l4.port.id"],
+        must_not=base_excl,
     )
 
     service_set: set[str] = set()

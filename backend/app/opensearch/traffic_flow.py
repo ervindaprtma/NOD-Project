@@ -47,7 +47,7 @@ def _base_filters(
     egress_interface: str = "",
     app_filter_not: str = "", category_filter_not: str = "",
     client_ip_not: str = "", server_ip_not: str = "", protocol_not: str = "",
-    dst_port_not: int | None = None, dst_as_org_not: str = "",
+    dst_port_not: int | list[int] | None = None, dst_as_org_not: str = "",
     ingress_interface_not: str = "",
     egress_interface_not: str = "",
     **_ignore,  # tolerate any unknown *_not param (stale bookmark / URL edit) → never crash the query
@@ -94,7 +94,9 @@ def _base_filters(
         # what the top_services agg buckets on.
         filters.append({"term": {"flow.server.l4.port.id": dst_port}})
     if dst_port_not is not None:
-        excl.append({"term": {"flow.server.l4.port.id": dst_port_not}})
+        # int → term, list (multi-port exclude) → terms
+        excl.append({"terms": {"flow.server.l4.port.id": dst_port_not}} if isinstance(dst_port_not, list)
+                    else {"term": {"flow.server.l4.port.id": dst_port_not}})
     return filters, excl
 
 
@@ -310,6 +312,7 @@ async def flow_chart(
     await spread_long_sessions(
         client, base_filter, "flow.application.name", lambda x: x, charted,
         bucket_app, bucket_seconds, gte_ms, lte_ms, key_filter_values=list(charted),
+        must_not=base_excl,
     )
 
     app_totals: dict[str, float] = {}
@@ -327,7 +330,8 @@ async def flow_chart(
     sorted_apps = [name for name, _ in sorted(app_totals.items(), key=lambda x: -x[1])]
     if not app_totals:
         await log_zero_bucket_anomaly(client, base_filter, site_name=site_name,
-            traffic_path=path_filter, gte_ms=gte_ms, lte_ms=lte_ms, bucket_seconds=bucket_seconds)
+            traffic_path=path_filter, gte_ms=gte_ms, lte_ms=lte_ms, bucket_seconds=bucket_seconds,
+            must_not=base_excl)
     return {"chart_data": chart_data, "app_names": sorted_apps, "bucket_seconds": bucket_seconds}
 
 
