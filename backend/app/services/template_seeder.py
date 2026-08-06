@@ -284,7 +284,8 @@ def _grafana_body(icon: str, title: str, service: str, metric_fire: str,
     """
     # Per-service noun for the target line (interface / SD-WAN link / device); the line is
     # hidden when the rule has no target (SSL VPN, IPsec count, throughput) via target_name.
-    tlabel = {"SD-WAN": "Link", "Interface Stats": "Interface", "Device Uptime": "Device"}.get(service, "Target")
+    tlabel = {"SD-WAN": "Link", "Interface Stats": "Interface", "Device Uptime": "Device",
+              "AppID Scan": "Application"}.get(service, "Target")
     tline = "{% if target_name is defined and target_name %}🎯 <b>" + tlabel + ":</b> {{ target_name|e }}\n{% endif %}"
     return (
         "{% if event == 'resolved' %}✅ <b>" + title + " RECOVERED</b>\n"
@@ -406,6 +407,21 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "<b>Peak Throughput:</b> {{ metric_value|round(1) }} Mbps (limit " + _L + " Mbps)"
         "{% if utilization_pct is defined and utilization_pct %} — {{ utilization_pct }}% of {{ link_max_mbps }} Mbps{% endif %}",
         "⚠️ Check link capacity / top talkers", "🎉 Throughput back to normal."),
+    _grafana_tpl("Application Traffic Scan", "🚦", "APPLICATION TRAFFIC", "AppID Scan",
+        # Scan mode (metric_field "app.<path>.<metric>"): target_name = the offending app; the
+        # scan_* lines carry WHO (source IPs) / WHERE OUT (egress) / TO WHOM (dest AS org) and the
+        # per-app volume. Each is {% if %}-guarded — enrichment can degrade to None without
+        # breaking the render — and |e-escaped (app/org names are OpenSearch data, not trusted HTML).
+        "<b>{{ metric_label }}:</b> <b>{{ metric_value|round(1) }} Mbps</b> (limit {{ rule.condition|e }} {{ rule.threshold_value }} Mbps)"
+        "{% if scan_volume_text %}\n📦 <b>Volume:</b> {{ scan_volume_text|e }}{% endif %}"
+        "{% if scan_apps_text %}\n🏆 <b>Top apps:</b> {{ scan_apps_text|e }}{% endif %}"
+        "{% if scan_src_ips_text %}\n👥 <b>From:</b> {{ scan_src_ips_text|e }}{% endif %}"
+        "{% if scan_egress_text %}\n🚪 <b>Out via:</b> {{ scan_egress_text|e }}{% endif %}"
+        "{% if scan_dst_orgs_text %}\n🌍 <b>To:</b> {{ scan_dst_orgs_text|e }}{% endif %}",
+        # Resolve: the app that FIRED and the value it fired at (snapshot-rehydrated) — value-clean.
+        "<b>{{ metric_label }}</b> was {{ metric_value|round(1) }} Mbps (limit {{ rule.condition|e }} {{ rule.threshold_value }} Mbps)"
+        "{% if scan_apps_text %}\n🏆 <b>Offender was:</b> {{ scan_apps_text|e }}{% endif %}",
+        "⚠️ Check the app's top consumers / QoS / policy", "🎉 Application traffic back to normal."),
     # VPN Session Monitor (kind="session"): one message per connect/disconnect event, branching
     # on `event` (connected/disconnected). Uses the per-event vars (vpn_user, remote_ip, …).
     {
