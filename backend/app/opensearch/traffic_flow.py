@@ -165,11 +165,11 @@ async def flow_summary(
                 "aggs": _bytes_sum(),
             },
             "egress_breakdown": {
-                "terms": {"field": "flow.out.netif.name", "size": 10, "order": BYTES_DESC},
+                "terms": {"field": "flow.out.netif.alias", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "ingress_breakdown": {
-                "terms": {"field": "flow.in.netif.name", "size": 10, "order": BYTES_DESC},
+                "terms": {"field": "flow.in.netif.alias", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             # Unique session count for the timeframe: cardinality of correlation_id (one
@@ -365,17 +365,17 @@ async def sankey_data(
         # Download: AS Org → Ingress → Apps → Egress
         sources = [
             {"as_org": {"terms": {"field": "flow.server.as.org"}}},
-            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
             {"app": {"terms": {"field": "flow.application.name"}}},
-            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
         ]
         level_names = ["as_org", "ingress", "app", "egress"]
     else:
         # Upload (and empty): Ingress → Apps → Egress → AS Org
         sources = [
-            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
             {"app": {"terms": {"field": "flow.application.name"}}},
-            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
             {"as_org": {"terms": {"field": "flow.server.as.org"}}},
         ]
         level_names = ["ingress", "app", "egress", "as_org"]

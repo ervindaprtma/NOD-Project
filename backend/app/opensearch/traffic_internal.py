@@ -129,11 +129,11 @@ async def flow_summary(
                 "aggs": _bytes_sum(),
             },
             "ingress_breakdown": {
-                "terms": {"field": "flow.in.netif.name", "size": 10, "order": BYTES_DESC},
+                "terms": {"field": "flow.in.netif.alias", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "egress_breakdown": {
-                "terms": {"field": "flow.out.netif.name", "size": 10, "order": BYTES_DESC},
+                "terms": {"field": "flow.out.netif.alias", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "protocol_dist": {
@@ -305,10 +305,10 @@ async def sankey_data(
 
     filters, filters_excl = _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path, **(exclude or {}))
     composite_sources = [
-        {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+        {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
         {"service_app": {"terms": {"field": "flow.application.name", "missing_bucket": True}}},
         {"service_port": {"terms": {"field": "flow.server.l4.port.id", "missing_bucket": True}}},
-        {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+        {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
     ]
 
     # Paginate composite to get all unique (ingress, service, egress) combinations.
