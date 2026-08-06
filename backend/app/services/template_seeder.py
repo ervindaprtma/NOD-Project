@@ -64,6 +64,47 @@ SEED_TEMPLATES: list[dict] = [
         "sort_order": 4,
     },
     {
+        "name": "Application Traffic Scan",
+        "category": "capacity",
+        "icon": "🚦",
+        # Scan mode: monitor EVERY app on the path (no app name configured) and fire when any one
+        # app's speed exceeds the Mbps threshold, naming the offender + who used it (source IPs),
+        # where it egressed (WAN interface) and to whom (dest AS org) + the app's traffic volume.
+        # metric_field "app.<path>.<metric>" routes to appid_flow_app_scan; top_n/min_mbps in
+        # appid_filter guard against tiny-app churn. Enrichment vars are populated by _flush_batch_notify.
+        "description": "Monitor all applications on a path and alert when any single app's speed "
+                       "exceeds the threshold — with the source IPs, egress interface, dest AS org and volume.",
+        "body_template": (
+            "{% if event == 'resolved' %}✅ [RESOLVED] Application traffic normal: {{ target_name }} @ {{ site_name }}\n"
+            "{{ metric_label }} was {{ metric_value|round(1) }} {{ metric_unit }} "
+            "(limit {{ condition }} {{ threshold_value }} {{ metric_unit }})."
+            "{% else %}🚦 High application traffic: {{ target_name }} @ {{ site_name }}\n"
+            "{{ metric_label }}: {{ metric_value|round(1) }} {{ metric_unit }} "
+            "(limit {{ condition }} {{ threshold_value }} {{ metric_unit }})"
+            "{% if scan_volume_text %}\nVolume: {{ scan_volume_text }}{% endif %}"
+            "{% if scan_apps_text %}\nTop apps: {{ scan_apps_text }}{% endif %}"
+            "{% if scan_src_ips_text %}\nFrom: {{ scan_src_ips_text }}{% endif %}"
+            "{% if scan_egress_text %}\nOut via: {{ scan_egress_text }}{% endif %}"
+            "{% if scan_dst_orgs_text %}\nTo: {{ scan_dst_orgs_text }}{% endif %}"
+            "\nFired: {{ fired_at }}{% endif %}"
+        ),
+        "underlying_kind": "single",
+        "locked_fields": {
+            "data_source": "appid_flow",
+            "metric_field": "app.internet.download_mbps",
+            "aggregation": "avg",
+            "condition": ">",
+            "threshold_value": 50.0,
+            "evaluation_window_minutes": 5,
+            "sustained_for_minutes": 3,
+            "severity": "WARNING",
+            "appid_filter": {"top_n": 10, "min_mbps": 1.0},
+        },
+        "exposed_fields": ["name", "site_name", "threshold_value", "notify_channels"],
+        "is_default": True,
+        "sort_order": 6,
+    },
+    {
         "name": "SSL VPN Capacity",
         "category": "capacity",
         "icon": "🔑",
@@ -774,6 +815,64 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_aggregations": ["avg", "max"],
         "valid_conditions": [">", ">="],
         "example_threshold": 1200.0,
+    },
+    # Scan mode ("app.<path>.<metric>"): monitor ALL apps on a path and fire when any one app's
+    # speed exceeds the threshold — routed to appid_flow_app_scan + enriched with who/where/whom.
+    # No app name configured; top_n/min_mbps live in appid_filter. These are the picker options.
+    {
+        "data_source": "appid_flow",
+        "field_key": "app.internet.download_mbps",
+        "display_name": "App Scan — Internet Download (per-app)",
+        "description": "Fire when ANY application's internet download speed exceeds the threshold.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 50.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "app.internet.upload_mbps",
+        "display_name": "App Scan — Internet Upload (per-app)",
+        "description": "Fire when ANY application's internet upload speed exceeds the threshold.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 30.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "app.internet.total_mbps",
+        "display_name": "App Scan — Internet Total (per-app)",
+        "description": "Fire when ANY application's internet total speed (up+down) exceeds the threshold.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 60.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "app.inter_site.total_mbps",
+        "display_name": "App Scan — Inter-site Total (per-app)",
+        "description": "Fire when ANY application's inter-site total speed exceeds the threshold.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 40.0,
+    },
+    {
+        "data_source": "appid_flow",
+        "field_key": "app.intra_lan.total_mbps",
+        "display_name": "App Scan — Intra-LAN Total (per-app)",
+        "description": "Fire when ANY application's intra-LAN total speed exceeds the threshold.",
+        "unit": "Mbps",
+        "category": "traffic",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 40.0,
     },
     # Phase E Part 2: Interface Bandwidth (interface_stats). The builder pairs these with
     # an interface picker (→ target_key). Window must be ≥ 2 min (derivative needs 2 buckets).

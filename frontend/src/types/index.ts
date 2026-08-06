@@ -357,7 +357,7 @@ export interface AlertRule {
   metric_field: string;
   target_key?: string | null; // interface_stats ifIndex
   link_max_mbps?: number | null; // interface throughput: % of link max mode
-  appid_filter?: { app?: string | null; protocol?: string | null; port?: number | null; app_not?: string | null; protocol_not?: string | null; port_not?: number | null } | null;
+  appid_filter?: { app?: string | null; protocol?: string | null; port?: number | null; app_not?: string | null; protocol_not?: string | null; port_not?: number | null; top_n?: number | null; min_mbps?: number | null } | null;
   aggregation: string;
   condition: string;
   threshold_value: number;

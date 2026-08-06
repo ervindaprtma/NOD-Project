@@ -130,6 +130,9 @@ interface RuleForm {
   appid_app_not: string;
   appid_protocol_not: string;
   appid_port_not: string;
+  // Scan mode (metric_field "app.*"): monitor all apps, fire on any over threshold.
+  appid_top_n: string;
+  appid_min_mbps: string;
   volume_unit: "MB" | "GB";   // vpn_ssl/vpn_ipsec byte metrics: display unit for the threshold
   aggregation: string;
   condition: string;
@@ -159,6 +162,8 @@ const emptyForm: RuleForm = {
   appid_app_not: "",
   appid_protocol_not: "",
   appid_port_not: "",
+  appid_top_n: "",
+  appid_min_mbps: "",
   volume_unit: "GB",
   aggregation: "avg",
   condition: ">",
@@ -356,6 +361,8 @@ export default function AlertsPage() {
   const isIface = form.data_source === "interface_stats";
   // appid_flow single rules can scope the path metric to an app / protocol / dest port.
   const isAppid = form.data_source === "appid_flow" && !isComposite;
+  // Scan mode: monitor ALL apps (no app name), fire when any single app exceeds the threshold.
+  const isScan = isAppid && form.metric_field.startsWith("app.");
   // vpn byte-volume metrics take a threshold in MB/GB (stored as bytes).
   const isVpnVolume =
     (form.data_source === "vpn_ssl" || form.data_source === "vpn_ipsec") &&
@@ -547,6 +554,8 @@ export default function AlertsPage() {
       appid_app_not: rule.appid_filter?.app_not ?? "",
       appid_protocol_not: rule.appid_filter?.protocol_not ?? "",
       appid_port_not: rule.appid_filter?.port_not != null ? String(rule.appid_filter.port_not) : "",
+      appid_top_n: rule.appid_filter?.top_n != null ? String(rule.appid_filter.top_n) : "",
+      appid_min_mbps: rule.appid_filter?.min_mbps != null ? String(rule.appid_filter.min_mbps) : "",
       // volume metrics store bytes; infer MB/GB for display (≥1 GB → GB).
       volume_unit: (rule.metric_field === "total_bytes" || rule.metric_field === "top_user_bytes")
         && rule.threshold_value >= 1e9 ? "GB" : "MB",
@@ -591,15 +600,24 @@ export default function AlertsPage() {
       : {};
 
     // appid_flow scoping — only for a single appid rule; drop empty fields, all-empty → null.
-    let appid_filter: { app?: string; protocol?: string; port?: number; app_not?: string; protocol_not?: string; port_not?: number } | null = null;
+    // Scan mode ("app.*"): app/protocol/port INCLUDE inputs are hidden (monitor all apps); only
+    // the excludes + top_n/min_mbps apply.
+    const scanMode = form.metric_field.startsWith("app.");
+    let appid_filter: { app?: string; protocol?: string; port?: number; app_not?: string; protocol_not?: string; port_not?: number; top_n?: number; min_mbps?: number } | null = null;
     if (form.kind === "single" && form.data_source === "appid_flow") {
-      const af: { app?: string; protocol?: string; port?: number; app_not?: string; protocol_not?: string; port_not?: number } = {};
-      if (form.appid_app.trim()) af.app = form.appid_app.trim();
-      if (form.appid_protocol.trim()) af.protocol = form.appid_protocol.trim().toUpperCase();
-      if (form.appid_port.trim() && !Number.isNaN(Number(form.appid_port))) af.port = Number(form.appid_port);
+      const af: { app?: string; protocol?: string; port?: number; app_not?: string; protocol_not?: string; port_not?: number; top_n?: number; min_mbps?: number } = {};
+      if (!scanMode) {
+        if (form.appid_app.trim()) af.app = form.appid_app.trim();
+        if (form.appid_protocol.trim()) af.protocol = form.appid_protocol.trim().toUpperCase();
+        if (form.appid_port.trim() && !Number.isNaN(Number(form.appid_port))) af.port = Number(form.appid_port);
+      }
       if (form.appid_app_not.trim()) af.app_not = form.appid_app_not.trim();
       if (form.appid_protocol_not.trim()) af.protocol_not = form.appid_protocol_not.trim().toUpperCase();
       if (form.appid_port_not.trim() && !Number.isNaN(Number(form.appid_port_not))) af.port_not = Number(form.appid_port_not);
+      if (scanMode) {
+        if (form.appid_top_n.trim() && !Number.isNaN(Number(form.appid_top_n))) af.top_n = Number(form.appid_top_n);
+        if (form.appid_min_mbps.trim() && !Number.isNaN(Number(form.appid_min_mbps))) af.min_mbps = Number(form.appid_min_mbps);
+      }
       appid_filter = Object.keys(af).length ? af : null;
     }
 
@@ -1528,6 +1546,30 @@ export default function AlertsPage() {
               {/* appid_flow scoping — narrow the path metric to an app / protocol / dest port */}
               {isAppid && (
                 <div>
+                  {isScan ? (
+                    <>
+                      <label className="text-xs font-medium">
+                        Scan all applications — fires when <b>any single app</b> exceeds the threshold (no app name needed)
+                      </label>
+                      <div className="grid grid-cols-2 gap-3 mt-1">
+                        <input
+                          value={form.appid_top_n}
+                          onChange={(e) => setForm({ ...form, appid_top_n: e.target.value })}
+                          placeholder="Top N apps to rank (default 10)"
+                          inputMode="numeric"
+                          className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                        />
+                        <input
+                          value={form.appid_min_mbps}
+                          onChange={(e) => setForm({ ...form, appid_min_mbps: e.target.value })}
+                          placeholder="Min Mbps floor (default 1.0)"
+                          inputMode="decimal"
+                          className="px-3 py-1.5 text-sm rounded-md border bg-background"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
                   <label className="text-xs font-medium">
                     Scope to (optional) — leave blank for the whole path
                   </label>
@@ -1552,6 +1594,8 @@ export default function AlertsPage() {
                       className="px-3 py-1.5 text-sm rounded-md border bg-background"
                     />
                   </div>
+                    </>
+                  )}
                   <label className="text-xs font-medium text-destructive mt-2 block">
                     Exclude (optional) — alert on everything except these
                   </label>
@@ -1577,7 +1621,9 @@ export default function AlertsPage() {
                     />
                   </div>
                   <p className="text-[10px] text-muted-foreground mt-1">
-                    Filters flow.application.name / l4.proto.name / flow.server.l4.port.id. Exact match (case-insensitive protocol). Exclude wins over include.
+                    {isScan
+                      ? "Scan mode monitors every application on the path. The notification names the offending app with its source IPs, egress interface, dest AS org and traffic volume. Excludes suppress known-noisy apps (e.g. Windows-Update)."
+                      : "Filters flow.application.name / l4.proto.name / flow.server.l4.port.id. Exact match (case-insensitive protocol). Exclude wins over include."}
                   </p>
                 </div>
               )}

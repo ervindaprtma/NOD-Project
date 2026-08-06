@@ -126,6 +126,9 @@ def sample_render_ctx(
           "metric_field": metric_field, "condition": condition, "threshold_value": threshold_value}
     is_vol = metric_field in ("total_bytes", "top_user_bytes")
     metric_label, metric_unit = _metric_label_unit(metric_field)
+    if (metric_field or "").startswith("app."):   # scan mode → direction label, matches fire-time
+        _pt, _pv, _mk, _dir = _scan_metric_parse(metric_field)
+        metric_label, metric_unit = _dir, "Mbps"
     return {
         "rule": rc, **rc, "threshold": threshold_value,
         "metric_label": metric_label, "metric_unit": metric_unit,
@@ -139,6 +142,13 @@ def sample_render_ctx(
         "filter_app": "YouTube", "filter_proto": "TCP", "filter_port": 443,
         "filter_app_not": "Teams", "filter_proto_not": "UDP", "filter_port_not": 445,
         "filter_label": "app=YouTube, port=443, not app=Teams",
+        # Scan mode (metric_field "app.<path>.<metric>"): offending app(s) + who/where/whom + volume
+        "scan_apps": [{"app": "YouTube", "download_mbps": 87.3}, {"app": "Zoom", "download_mbps": 61.0}],
+        "scan_apps_text": "YouTube (87.3 Mbps), Zoom (61.0 Mbps)",
+        "scan_volume_text": "11.2 GB",
+        "scan_src_ips_text": "192.168.1.200 (8.1 GB), 192.168.1.87 (2.4 GB)",
+        "scan_egress_text": "WAN-LinkNet",
+        "scan_dst_orgs_text": "Google LLC, Fastly, Inc.",
         # VPN capacity (metric_mb/threshold_mb only meaningful for a byte-volume metric)
         "vpn_active_users": 7, "vpn_total_mb": 5500.0, "vpn_top_user_mb": 2100.0,
         "vpn_top_user": "someone",
@@ -190,6 +200,7 @@ async def _run_group_query(
     site_name: str | None,
     window_minutes: int,
     appid_filter: dict | None = None,
+    scan: dict | None = None,
 ) -> float | list | dict | None:
     """Execute ONE OpenSearch query for a rule group.
 
@@ -221,17 +232,27 @@ async def _run_group_query(
             elif data_source == "appid_flow":
                 from app.opensearch import traffic_flow as tf_qb
 
-                # Per-path dict: {internet, inbound-vip, inter-site, intra-lan, _wan}
-                # each with *_mbps / *_bytes. Extractor selects node + metric. An optional
-                # appid_filter narrows every path to one app/protocol/port.
-                af = appid_filter or {}
-                result = await tf_qb.appid_flow_alert_summary(
-                    gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC",
-                    app_filter=af.get("app") or "", protocol=af.get("protocol") or "",
-                    dst_port=af.get("port"),
-                    app_not=af.get("app_not") or "", protocol_not=af.get("protocol_not") or "",
-                    port_not=af.get("port_not"),
-                )
+                if scan is not None:
+                    # Scan mode: per-APP throughput list (top-N by bytes), for "monitor all apps".
+                    ex = scan.get("excludes") or {}
+                    result = await tf_qb.appid_flow_app_scan(
+                        gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC",
+                        path=scan.get("path") or "", top_n=scan.get("top_n") or 10,
+                        app_not=ex.get("app_not") or "", protocol_not=ex.get("protocol_not") or "",
+                        port_not=ex.get("port_not"),
+                    )
+                else:
+                    # Per-path dict: {internet, inbound-vip, inter-site, intra-lan, _wan}
+                    # each with *_mbps / *_bytes. Extractor selects node + metric. An optional
+                    # appid_filter narrows every path to one app/protocol/port.
+                    af = appid_filter or {}
+                    result = await tf_qb.appid_flow_alert_summary(
+                        gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name or "Site_FGT-DC",
+                        app_filter=af.get("app") or "", protocol=af.get("protocol") or "",
+                        dst_port=af.get("port"),
+                        app_not=af.get("app_not") or "", protocol_not=af.get("protocol_not") or "",
+                        port_not=af.get("port_not"),
+                    )
 
             elif data_source == "sdwan_sla":
                 from app.opensearch import sdwan as sdwan_qb
@@ -322,6 +343,55 @@ def _extract_appid_flow(metric_field: str, group_result: dict[Any, Any]) -> floa
         return 0.0
     # legacy → site-wide total bytes (unchanged behavior)
     return float(group_result.get("_wan", {}).get("total_bytes", 0.0) or 0.0)
+
+
+# ── appid_flow "scan all apps" mode (metric_field prefixed "app.") ──
+# Monitor EVERY application on a path and fire when ANY single app's speed exceeds the
+# threshold, naming the offender. metric_field = "app.<path>.<metric>", e.g.
+# "app.internet.download_mbps". Knobs (top_n, min_mbps, exclude twins) live in appid_filter.
+
+def _scan_metric_parse(metric_field: str) -> tuple[str, str | None, str, str]:
+    """'app.internet.download_mbps' → (path_token, path_value|None, metric_key, direction_label).
+
+    path_value is the flow.traffic.path term to filter on, or None for all-paths ("wan").
+    metric_key indexes appid_flow_app_scan's per-app dict; direction_label is the friendly
+    metric name for the notification ("Download"/"Upload"/"Total")."""
+    parts = (metric_field or "").split(".")
+    path_token = parts[1] if len(parts) > 1 else "internet"
+    metric_key = parts[2] if len(parts) > 2 else "download_mbps"
+    path_value = _APPID_PATH_KEYS.get(path_token)
+    if path_value == "_wan":
+        path_value = None  # the _wan node is the all-paths aggregate → no path filter
+    direction = metric_key.split("_")[0].title() or "Download"
+    return path_token, path_value, metric_key, direction
+
+
+def _extract_app_scan(rule: AlertRule, group_result: Any) -> float:
+    """Reduce appid_flow_app_scan's per-app list to ONE scalar for the shared state machine.
+
+    Returns the driver app's Mbps (worst offender for ">", best for "<"), so the loop's own
+    _check_condition(value, ...) yields "ANY app breaches". Stamps rule._scan_apps = the top 1–2
+    breaching apps for the notification. min_mbps floors out tiny apps so churn can't flap the rule."""
+    _pt, _pv, metric_key, _dir = _scan_metric_parse(rule.metric_field)
+    if not isinstance(group_result, list):
+        rule._scan_apps = []
+        return 0.0
+    af = getattr(rule, "appid_filter", None) or {}
+    try:
+        min_mbps = float(af.get("min_mbps") or 0.0)
+    except (TypeError, ValueError):
+        min_mbps = 0.0
+    val = lambda a: float(a.get(metric_key) or 0.0)  # noqa: E731
+    apps = [a for a in group_result if val(a) >= min_mbps]
+    if not apps:
+        rule._scan_apps = []
+        return 0.0
+    low = rule.condition in ("<", "<=")
+    driver = min(apps, key=val) if low else max(apps, key=val)
+    breaching = [a for a in apps if _check_condition(val(a), rule.condition, rule.threshold_value)]
+    breaching.sort(key=val, reverse=not low)
+    rule._scan_apps = breaching[:2]
+    return val(driver)
 
 
 def _extract_interface_stats(
@@ -416,6 +486,8 @@ def _extract_per_rule_value(
             return 0.0
 
         if rule.data_source == "appid_flow":
+            if (rule.metric_field or "").startswith("app."):   # scan-all-apps mode
+                return _extract_app_scan(rule, group_result)
             if isinstance(group_result, dict):
                 return _extract_appid_flow(rule.metric_field, group_result)
             return 0.0
@@ -576,6 +648,33 @@ def _appid_sig(filt: dict | None) -> tuple | None:
     return tuple(sorted(filt.items()))
 
 
+def _scan_descriptor_for(rule: AlertRule) -> dict | None:
+    """Scan-mode descriptor {path, top_n, excludes} for an appid_flow rule whose metric_field is
+    prefixed "app.", else None. Drives both the group query (which fn to call) and the cache key."""
+    if rule.data_source != "appid_flow" or not (rule.metric_field or "").startswith("app."):
+        return None
+    _pt, path_value, _mk, _dir = _scan_metric_parse(rule.metric_field)
+    af = getattr(rule, "appid_filter", None) or {}
+    try:
+        top_n = int(af.get("top_n") or 10)
+    except (TypeError, ValueError):
+        top_n = 10
+    excludes = {k: af[k] for k in ("app_not", "protocol_not", "port_not") if af.get(k) not in (None, "")}
+    return {"path": path_value, "top_n": max(1, top_n), "excludes": excludes}
+
+
+def _group_key(rule: AlertRule) -> tuple:
+    """Per-cycle group-query cache key. Scan rules get a distinct ("scan", path, top_n, excl-sig)
+    slot so they NEVER collide with an unfiltered per-path appid rule (whose result is a dict, not
+    a per-app list) — two scan rules of the same shape still share one query."""
+    ds, site, window = rule.data_source, rule.site_name, rule.evaluation_window_minutes
+    scan = _scan_descriptor_for(rule)
+    if scan:
+        return (ds, site, window, ("scan", scan["path"], scan["top_n"],
+                                   _appid_sig(scan["excludes"] or None)))
+    return (ds, site, window, _appid_sig(_appid_filter_for(rule)))
+
+
 def _appid_filter_label(filt: dict | None) -> str | None:
     """Human label for a notification, e.g. "app=YouTube, port=443, not app=Teams". None when
     unfiltered. Exclude twins render as "not app=…" so an operator reads the rule's real scope."""
@@ -731,6 +830,10 @@ async def _advance_state_machine(
                             # Composite: the exact clause that fired, so the recovery message
                             # describes the SAME metric instead of re-picking at resolve time.
                             "driver": getattr(rule, "_fired_clause", None),
+                            # Scan (app.* mode): the offending apps + who/where/whom detail, so the
+                            # recovery message can name them even though no app is breaching anymore.
+                            "scan_apps": getattr(rule, "_scan_apps", None) or None,
+                            "scan_detail": getattr(rule, "_scan_detail", None) or None,
                         },
                     ))
                     await db.flush()
@@ -811,6 +914,13 @@ async def _advance_state_machine(
                         rule._fired_clause = fired_driver
                         resolved_value = c["value"]
                         break
+
+            # Scan mode: rehydrate the offending apps + detail from the fire snapshot so the
+            # recovery message names them (no app is breaching now → a fresh query would find none).
+            snap = (alert_log.rule_snapshot or {}) if alert_log else {}
+            if snap.get("scan_apps") is not None:
+                rule._scan_apps = snap.get("scan_apps") or []
+                rule._scan_detail = snap.get("scan_detail") or None
 
             # Recovery notification — same channels that got the alert now get the
             # all-clear. Only for a rule that actually FIRED: a PENDING→RESOLVED rule
@@ -1071,6 +1181,13 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         # Friendly name + unit of the clause that fired, so a template renders "Latency: 142 ms"
         # instead of hardcoding "Packet Loss: 142 %" for whatever clause happened to drive it.
         metric_label, metric_unit = _metric_label_unit(eff_metric_field)
+        # Scan mode (metric_field "app.<path>.<metric>"): the friendly metric is the direction
+        # (Download/Upload/Total) in Mbps — _metric_label_unit's dotted-path title-case is wrong here.
+        _is_scan = rule.data_source == "appid_flow" and (rule.metric_field or "").startswith("app.")
+        _scan_metric_key = "download_mbps"
+        if _is_scan:
+            _pt, _pv, _scan_metric_key, _dir = _scan_metric_parse(rule.metric_field)
+            metric_label, metric_unit = _dir, "Mbps"
         # Interface throughput is Mbps in BOTH threshold modes (absolute, or "% of link max"
         # where threshold_value = link_max × %). So metric_value + threshold_value are Mbps —
         # the seeded template used to print them with a "%" (only right by luck when link
@@ -1107,6 +1224,27 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         _over = [u for u in vpn_top_users if u.get("bytes", 0) > eff_threshold] if is_vol else []
         vpn_over_users = [{"user": u["user"], "mb": round(u["bytes"] / 1_000_000, 1)} for u in _over]
         vpn_over_users_text = ", ".join(f'{u["user"]} ({u["mb"]} MB)' for u in vpn_over_users) or None
+        # Scan mode: name the offending app(s) + who used them (source IPs), where they went out
+        # (egress interface), and to whom (dest AS org), plus the per-APP traffic volume. Detail is
+        # focused on the driver (worst) app; scan_apps_text still lists the top 1–2 by speed. All
+        # vars are always present (None for non-scan) so StrictUndefined never trips a template.
+        _scan_apps = getattr(rule, "_scan_apps", None) or []
+        _scan_detail = getattr(rule, "_scan_detail", None) or {}
+        scan_apps_text = None
+        scan_volume_text = scan_src_ips_text = scan_egress_text = scan_dst_orgs_text = None
+        if _scan_apps:
+            scan_apps_text = ", ".join(
+                f'{a.get("app")} ({round(float(a.get(_scan_metric_key) or 0.0), 1)} Mbps)'
+                for a in _scan_apps) or None
+            _driver = _scan_apps[0].get("app")
+            _d = _scan_detail.get(_driver) if isinstance(_scan_detail, dict) else None
+            if _d:
+                scan_volume_text = _fmt_bytes(_d.get("total_bytes") or 0)
+                scan_src_ips_text = ", ".join(
+                    f'{s.get("ip")} ({_fmt_bytes(s.get("bytes") or 0)})'
+                    for s in (_d.get("src_ips") or [])) or None
+                scan_egress_text = ", ".join(_d.get("egress") or []) or None
+                scan_dst_orgs_text = ", ".join(_d.get("dst_orgs") or []) or None
         metric_mb = round(mv / 1_000_000, 1) if is_vol else None
         threshold_mb = round(eff_threshold / 1_000_000, 1) if is_vol else None
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
@@ -1170,6 +1308,13 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "filter_proto_not": filter_proto_not,
                 "filter_port_not": filter_port_not,
                 "filter_label": filter_label,
+                # Scan mode (None for non-scan rules): offending app(s) + who/where/whom + volume.
+                "scan_apps": _scan_apps or None,
+                "scan_apps_text": scan_apps_text,
+                "scan_volume_text": scan_volume_text,
+                "scan_src_ips_text": scan_src_ips_text,
+                "scan_egress_text": scan_egress_text,
+                "scan_dst_orgs_text": scan_dst_orgs_text,
                 # VPN capacity (None for non-VPN rules):
                 "vpn_active_users": vpn_active_users,
                 "vpn_total_mb": vpn_total_mb,
@@ -1698,11 +1843,12 @@ async def _run_evaluation_cycle() -> None:
             notify_queue: list[tuple[AlertRule, float, str, datetime]] = []
             groups: dict[tuple, list[AlertRule]] = defaultdict(list)
             group_filters: dict[tuple, dict | None] = {}
+            group_scans: dict[tuple, dict | None] = {}
             for rule in single_rules:
-                filt = _appid_filter_for(rule)
-                key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes, _appid_sig(filt))
+                key = _group_key(rule)
                 groups[key].append(rule)
-                group_filters[key] = filt
+                group_filters[key] = _appid_filter_for(rule)
+                group_scans[key] = _scan_descriptor_for(rule)
 
             # §9.4: also pre-fetch for composite clause keys, sharing the
             # cache with singles that happen to share a (ds, site, window) tuple.
@@ -1718,13 +1864,14 @@ async def _run_evaluation_cycle() -> None:
             group_cache: dict[tuple, float | list | dict | None] = {}
             for key in groups:
                 ds, site, window, _sig = key
-                group_cache[key] = await _run_group_query(ds, site, window, group_filters.get(key))
+                group_cache[key] = await _run_group_query(
+                    ds, site, window, group_filters.get(key), group_scans.get(key))
 
             for rule in single_rules:
                 try:
-                    key = (rule.data_source, rule.site_name, rule.evaluation_window_minutes,
-                           _appid_sig(_appid_filter_for(rule)))
+                    key = _group_key(rule)
                     group_result = group_cache.get(key)
+                    scan = _scan_descriptor_for(rule)
                     metric_value = _extract_per_rule_value(rule, group_result)
                     if metric_value is None:
                         await _mark_held(rule, db)
@@ -1734,17 +1881,39 @@ async def _run_evaluation_cycle() -> None:
                     )
                     # Transient: friendly target name for the notification (reuses group_result
                     # for the device hostname — no extra query). appid_flow has no target_key;
-                    # its "target" is the app/protocol/port filter, so surface that instead.
-                    rule._target_name = (
-                        _appid_filter_label(_appid_filter_for(rule))
-                        if rule.data_source == "appid_flow"
-                        else _resolve_target_name(rule.data_source, rule.site_name, rule.target_key, group_result)
-                    )
+                    # its "target" is the app/protocol/port filter (or, in scan mode, the
+                    # offending app), so surface that instead.
+                    if scan is not None:
+                        offenders = getattr(rule, "_scan_apps", None) or []
+                        rule._target_name = offenders[0]["app"] if offenders else \
+                            _appid_filter_label(_appid_filter_for(rule))
+                    elif rule.data_source == "appid_flow":
+                        rule._target_name = _appid_filter_label(_appid_filter_for(rule))
+                    else:
+                        rule._target_name = _resolve_target_name(
+                            rule.data_source, rule.site_name, rule.target_key, group_result)
                     # VPN usage summary {count,total_bytes,top_user_bytes} for the notification.
                     rule._vpn_usage = (
                         group_result if rule.data_source in ("vpn_ssl", "vpn_ipsec")
                         and isinstance(group_result, dict) else None
                     )
+                    # Scan enrichment (WHO/WHERE/TO WHOM + volume) — only while breaching, scoped
+                    # to the ≤2 offenders. Failure degrades the message (details → None), never
+                    # blocks the alert. Stamped so the FIRE message and the snapshot both carry it.
+                    rule._scan_detail = None
+                    if scan is not None and condition_met and getattr(rule, "_scan_apps", None):
+                        try:
+                            from app.opensearch import traffic_flow as tf_qb
+                            _now_ms = int(_time.time() * 1000)
+                            _gte = _now_ms - rule.evaluation_window_minutes * 60 * 1000
+                            rule._scan_detail = await tf_qb.appid_flow_app_detail(
+                                gte_ms=_gte, lte_ms=_now_ms, site_name=rule.site_name,
+                                path=scan.get("path") or "",
+                                apps=[a["app"] for a in rule._scan_apps],
+                                internet_path=(scan.get("path") == "internet"),
+                            )
+                        except Exception as ee:
+                            logger.warning("scan enrichment failed for rule %s: %s", rule.id, ee)
                     await _advance_state_machine(rule, metric_value, condition_met, db, notify_queue)
                 except Exception as e:
                     logger.error("Error evaluating rule %s (%s): %s", rule.id, rule.name, e)

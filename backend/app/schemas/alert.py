@@ -22,6 +22,10 @@ class AppidFilter(BaseModel):
     app_not: Optional[str] = Field(default=None, max_length=128)
     protocol_not: Optional[str] = Field(default=None, max_length=16)
     port_not: Optional[int] = Field(default=None, ge=0, le=65535)
+    # Scan mode (metric_field "app.<path>.<metric>"): monitor ALL apps, fire on any over threshold.
+    # top_n = apps ranked per tick; min_mbps = floor so tiny apps can't trip/flap the rule.
+    top_n: Optional[int] = Field(default=None, ge=1, le=100)
+    min_mbps: Optional[float] = Field(default=None, ge=0)
 
 
 class AlertClause(BaseModel):
