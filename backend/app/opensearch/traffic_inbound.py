@@ -146,11 +146,11 @@ async def flow_summary(
                 "aggs": _bytes_sum(),
             },
             "ingress_breakdown": {
-                "terms": {"field": "flow.in.netif.name", "size": 10, "order": BYTES_DESC},
+                "terms": {"field": "flow.in.netif.alias", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "egress_breakdown": {
-                "terms": {"field": "flow.out.netif.name", "size": 10, "order": BYTES_DESC},
+                "terms": {"field": "flow.out.netif.alias", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
         },
@@ -326,10 +326,10 @@ async def sankey_data(
     if direction == "download":
         # Download (VIP->customer): Ingress -> Service -> Egress -> AS Org
         sources = [
-            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
             {"service_app": {"terms": {"field": "flow.application.name", "missing_bucket": True}}},
             {"service_port": {"terms": {"field": "flow.server.l4.port.id", "missing_bucket": True}}},
-            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
             {"as_org": {"terms": {"field": "flow.client.as.org"}}},
         ]
         level_names = ["ingress", "service", "egress", "as_org"]
@@ -337,10 +337,10 @@ async def sankey_data(
         # Upload (customer->VIP) and empty: AS Org -> Ingress -> Service -> Egress
         sources = [
             {"as_org": {"terms": {"field": "flow.client.as.org"}}},
-            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
             {"service_app": {"terms": {"field": "flow.application.name", "missing_bucket": True}}},
             {"service_port": {"terms": {"field": "flow.server.l4.port.id", "missing_bucket": True}}},
-            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
         ]
         level_names = ["as_org", "ingress", "service", "egress"]
 

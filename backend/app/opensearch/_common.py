@@ -76,11 +76,10 @@ def _wildcard(field: str, val: str) -> dict:
 def _multi_term_any(fields: list[str], value: str) -> dict | None:
     """Match a comma-separated value against ANY of several fields.
 
-    Interface filters are free text, and the two surfaces show different values for
-    the same interface: the breakdown panels aggregate `flow.in.netif.name`
-    ("wan1") while the raw-data table displays `flow.in.netif.alias`
-    ("WAN-LinkNet"). Whichever a user copies into the shared filter bar must work,
-    so match both rather than forcing one convention.
+    Interface filters are free text. Every surface (breakdown panels, sankey,
+    raw-data table) now displays `flow.in.netif.alias` ("WAN-LinkNet"), but a user
+    may still type or copy the underlying `flow.in.netif.name` ("wan1"), so match
+    both rather than forcing one convention.
     """
     vals = _split_multi(value)
     if not vals:

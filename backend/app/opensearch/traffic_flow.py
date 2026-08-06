@@ -13,7 +13,7 @@ from opensearchpy import AsyncOpenSearch
 
 from app.opensearch._common import (
     FLOW_INDEX, _time_range, _multi_term, _multi_term_any, _multi_wildcard, _bytes_sum, BYTES_DESC,
-    _bool_query,
+    _bool_query, _bytes3,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
 from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
@@ -165,11 +165,11 @@ async def flow_summary(
                 "aggs": _bytes_sum(),
             },
             "egress_breakdown": {
-                "terms": {"field": "flow.out.netif.name", "size": 10, "order": BYTES_DESC},
+                "terms": {"field": "flow.out.netif.alias", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             "ingress_breakdown": {
-                "terms": {"field": "flow.in.netif.name", "size": 10, "order": BYTES_DESC},
+                "terms": {"field": "flow.in.netif.alias", "size": 10, "order": BYTES_DESC},
                 "aggs": _bytes_sum(),
             },
             # Unique session count for the timeframe: cardinality of correlation_id (one
@@ -365,17 +365,17 @@ async def sankey_data(
         # Download: AS Org → Ingress → Apps → Egress
         sources = [
             {"as_org": {"terms": {"field": "flow.server.as.org"}}},
-            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
             {"app": {"terms": {"field": "flow.application.name"}}},
-            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
         ]
         level_names = ["as_org", "ingress", "app", "egress"]
     else:
         # Upload (and empty): Ingress → Apps → Egress → AS Org
         sources = [
-            {"ingress": {"terms": {"field": "flow.in.netif.name"}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
             {"app": {"terms": {"field": "flow.application.name"}}},
-            {"egress": {"terms": {"field": "flow.out.netif.name"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
             {"as_org": {"terms": {"field": "flow.server.as.org"}}},
         ]
         level_names = ["ingress", "app", "egress", "as_org"]
@@ -713,6 +713,129 @@ async def appid_flow_alert_summary(
         out[b["key"]] = _node(int(b["up"]["value"] or 0), int(b["down"]["value"] or 0))
     out["_wan"] = _node(int(aggs.get("up_all", {}).get("value") or 0),
                         int(aggs.get("down_all", {}).get("value") or 0))
+    return out
+
+
+async def appid_flow_app_scan(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    site_name: str = "Site_FGT-DC",
+    path: str = "internet",
+    top_n: int = 10,
+    app_not: str = "",
+    protocol_not: str = "",
+    port_not: int | None = None,
+) -> list[dict[str, Any]]:
+    """Phase-1 scan: per-**application** throughput on a path, for the "monitor all apps" alert.
+
+    One flat `terms` on flow.application.name (top-N by bytes) → each app's window-average Mbps.
+    Same rate math as flow_summary.top_apps / appid_flow_alert_summary. `path` = the
+    flow.traffic.path value ("internet"/"inbound-vip"/…) or "" for all paths. The exclude twins
+    (app_not/protocol_not/port_not) reuse the flow-page filter helpers so "scan all EXCEPT X" works.
+    Returns [{app, upload_mbps, download_mbps, total_mbps, upload_bytes, download_bytes, total_bytes}].
+    """
+    if client is None:
+        client = _get_client(site_name)
+    scope: list[dict] = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
+    if path:
+        scope.append({"term": {"flow.traffic.path": path}})
+    scope_not: list[dict] = []
+    f = _multi_wildcard("flow.application.name", app_not)
+    if f:
+        scope_not.append(f)
+    f = _multi_term("l4.proto.name", protocol_not.upper())  # proto names are uppercase
+    if f:
+        scope_not.append(f)
+    if port_not is not None:
+        scope_not.append({"term": {"flow.server.l4.port.id": port_not}})
+    body = {
+        "size": 0,
+        "query": _bool_query(scope, scope_not),
+        "aggs": {
+            "by_app": {
+                "terms": {"field": "flow.application.name", "size": max(1, top_n), "order": BYTES_DESC},
+                "aggs": _bytes_sum(),
+            }
+        },
+    }
+    resp = await safe_search(client, FLOW_INDEX, body)
+    secs = max(1.0, (lte_ms - gte_ms) / 1000.0)
+    to_mbps = lambda b: b * 8 / secs / 1e6  # noqa: E731
+    out: list[dict[str, Any]] = []
+    for b in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+        t, u, d = _bytes3(b)
+        out.append({
+            "app": b["key"],
+            "upload_mbps": to_mbps(u), "download_mbps": to_mbps(d), "total_mbps": to_mbps(t),
+            "upload_bytes": u, "download_bytes": d, "total_bytes": t,
+        })
+    return out
+
+
+async def appid_flow_app_detail(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+    site_name: str = "Site_FGT-DC",
+    path: str = "internet",
+    apps: list[str] | None = None,
+    internet_path: bool = True,
+    top: int = 3,
+) -> dict[str, dict[str, Any]]:
+    """Phase-2 enrichment (only run while a scan rule is breaching, scoped to the ≤2 offenders):
+    per-app WHO (source IPs) / WHERE OUT (egress interface) / TO WHOM (dest AS org) + volume.
+
+    Mirrors the Traffic Internet panels: client IPs = top_clients, dst org = flow.server.as.org
+    (never client.as.org → "Private"), egress = flow.out.netif.alias. On the internet path the
+    egress terms are scoped to out-zone=internet so the WAN link is named, not the LAN VLAN a
+    download leg egresses (byte-ordering would otherwise rank the VLAN first).
+    Returns {app: {total_bytes, src_ips:[{ip,bytes}], egress:[names], dst_orgs:[names]}}.
+    """
+    apps = apps or []
+    if not apps:
+        return {}
+    if client is None:
+        client = _get_client(site_name)
+    scope: list[dict] = [_time_range(gte_ms, lte_ms), _site_filter(site_name),
+                         {"terms": {"flow.application.name": apps}}]
+    if path:
+        scope.append({"term": {"flow.traffic.path": path}})
+    _sort = {"sort_bytes": {"sum": {"field": "flow.bytes", "missing": 0}}}
+    egress_terms = {"terms": {"field": "flow.out.netif.alias", "size": top, "order": BYTES_DESC},
+                    "aggs": _sort}
+    egress_agg = (
+        {"filter": {"term": {"flow.out.netif.sec.zone.name": "internet"}},
+         "aggs": {"ifaces": egress_terms}}
+        if internet_path else egress_terms
+    )
+    body = {
+        "size": 0,
+        "query": _bool_query(scope),
+        "aggs": {
+            "by_app": {
+                "terms": {"field": "flow.application.name", "include": apps, "size": len(apps)},
+                "aggs": {
+                    **_bytes_sum(),
+                    "src_ips": {"terms": {"field": "flow.client.ip.addr", "size": top, "order": BYTES_DESC},
+                                "aggs": _bytes_sum()},
+                    "dst_orgs": {"terms": {"field": "flow.server.as.org", "size": top, "order": BYTES_DESC},
+                                 "aggs": _sort},
+                    "egress": egress_agg,
+                },
+            }
+        },
+    }
+    resp = await safe_search(client, FLOW_INDEX, body)
+    out: dict[str, dict[str, Any]] = {}
+    for ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+        t, _u, _d = _bytes3(ab)
+        src_ips = [{"ip": x["key"], "bytes": _bytes3(x)[0]} for x in ab.get("src_ips", {}).get("buckets", [])]
+        dst_orgs = [x["key"] for x in ab.get("dst_orgs", {}).get("buckets", [])]
+        eg = ab.get("egress", {})
+        eg_buckets = eg.get("ifaces", {}).get("buckets", []) if internet_path else eg.get("buckets", [])
+        egress = [x["key"] for x in eg_buckets]
+        out[ab["key"]] = {"total_bytes": t, "src_ips": src_ips, "dst_orgs": dst_orgs, "egress": egress}
     return out
 
 
