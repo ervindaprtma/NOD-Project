@@ -149,6 +149,7 @@ def sample_render_ctx(
         "scan_src_ips_text": "192.168.1.200 (8.1 GB), 192.168.1.87 (2.4 GB)",
         "scan_egress_text": "WAN-LinkNet",
         "scan_dst_orgs_text": "Google LLC, Fastly, Inc.",
+        "scan_recovered_mbps": 6.2, "scan_drop_mbps": 27.4, "scan_recovered_known": True,
         # VPN capacity (metric_mb/threshold_mb only meaningful for a byte-volume metric)
         "vpn_active_users": 7, "vpn_total_mb": 5500.0, "vpn_top_user_mb": 2100.0,
         "vpn_top_user": "someone",
@@ -928,7 +929,11 @@ async def _advance_state_machine(
                 if rule._scan_apps:
                     _pt, _pv, _mk, _dir = _scan_metric_parse(rule.metric_field)
                     resolved_value = float(rule._scan_apps[0].get(_mk) or resolved_value)
-                    rule._target_name = rule._scan_apps[0].get("app") or getattr(rule, "_target_name", None)
+                    _fired_app = rule._scan_apps[0].get("app")
+                    rule._target_name = _fired_app or getattr(rule, "_target_name", None)
+                    # The fired app's CURRENT speed this tick (was → now). None when it has fallen
+                    # out of the top-N entirely (no reliable current number → the message says so).
+                    rule._scan_recovered = (getattr(rule, "_scan_now", None) or {}).get(_fired_app)
 
             # Recovery notification — same channels that got the alert now get the
             # all-clear. Only for a rule that actually FIRED: a PENDING→RESOLVED rule
@@ -1253,6 +1258,17 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                     for s in (_d.get("src_ips") or [])) or None
                 scan_egress_text = ", ".join(_d.get("egress") or []) or None
                 scan_dst_orgs_text = ", ".join(_d.get("dst_orgs") or []) or None
+        # Recovery was→now: on a scan resolve, mv is the fire value ("was"); _scan_recovered is the
+        # fired app's current speed ("now"), None if it fell out of the top-N. Drop = was − now.
+        # Always present (StrictUndefined-safe): known=False for fire / non-scan / app-gone.
+        scan_recovered_mbps = scan_drop_mbps = None
+        scan_recovered_known = False
+        if resolved and _scan_apps:
+            _rv = getattr(rule, "_scan_recovered", None)
+            if _rv is not None:
+                scan_recovered_mbps = round(float(_rv), 1)
+                scan_drop_mbps = round(max(0.0, float(mv) - float(_rv)), 1)
+                scan_recovered_known = True
         metric_mb = round(mv / 1_000_000, 1) if is_vol else None
         threshold_mb = round(eff_threshold / 1_000_000, 1) if is_vol else None
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
@@ -1323,6 +1339,10 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "scan_src_ips_text": scan_src_ips_text,
                 "scan_egress_text": scan_egress_text,
                 "scan_dst_orgs_text": scan_dst_orgs_text,
+                # Scan recovery was→now (resolve only; known=False on fire / app fell out of top-N):
+                "scan_recovered_mbps": scan_recovered_mbps,
+                "scan_drop_mbps": scan_drop_mbps,
+                "scan_recovered_known": scan_recovered_known,
                 # VPN capacity (None for non-VPN rules):
                 "vpn_active_users": vpn_active_users,
                 "vpn_total_mb": vpn_total_mb,
@@ -1905,6 +1925,13 @@ async def _run_evaluation_cycle() -> None:
                         group_result if rule.data_source in ("vpn_ssl", "vpn_ipsec")
                         and isinstance(group_result, dict) else None
                     )
+                    # Scan: snapshot every app's CURRENT speed this tick, so a later resolve can
+                    # report the fired app's recovered value (was → now compare). Built from the
+                    # raw top-N list (pre-floor), so a fired app that dropped below min_mbps but is
+                    # still ranked keeps a real number; only a fall out of the top-N reads unknown.
+                    if scan is not None and isinstance(group_result, list):
+                        _pt, _pv, _mk, _dir = _scan_metric_parse(rule.metric_field)
+                        rule._scan_now = {a.get("app"): float(a.get(_mk) or 0.0) for a in group_result}
                     # Scan enrichment (WHO/WHERE/TO WHOM + volume) — only while breaching, scoped
                     # to the ≤2 offenders. Failure degrades the message (details → None), never
                     # blocks the alert. Stamped so the FIRE message and the snapshot both carry it.

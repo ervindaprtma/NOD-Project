@@ -145,8 +145,25 @@ def test_app_detail_empty_apps_no_query():
 def test_scan_ctx_keys_in_sample_render_ctx():
     ctx = ae.sample_render_ctx()
     for k in ("scan_apps_text", "scan_volume_text", "scan_src_ips_text",
-              "scan_egress_text", "scan_dst_orgs_text", "scan_apps"):
+              "scan_egress_text", "scan_dst_orgs_text", "scan_apps",
+              "scan_recovered_mbps", "scan_drop_mbps", "scan_recovered_known"):
         assert k in ctx
+
+
+def test_scan_recovery_was_now_lookup_and_drop():
+    """Resolve was→now: the fired app's current speed is looked up from the tick's per-app stash;
+    drop = was − now; a fall out of the top-N reads unknown (no fake 0)."""
+    rule = _rule(metric_field="app.internet.download_mbps", threshold=30.0)
+    rule._scan_apps = [{"app": "ISAKMP", "download_mbps": 33.6}]   # fired at 33.6
+    fired = rule._scan_apps[0]["app"]
+
+    rule._scan_now = {"DNS": 8.0, "ISAKMP": 6.2}                    # still ranked
+    now = (getattr(rule, "_scan_now", None) or {}).get(fired)
+    assert now == 6.2
+    assert round(max(0.0, 33.6 - now), 1) == 27.4                   # drop
+
+    rule._scan_now = {"DNS": 8.0}                                   # fell out of the top-N
+    assert (rule._scan_now or {}).get(fired) is None
 
 
 def test_sample_ctx_scan_metric_label_matches_fire():

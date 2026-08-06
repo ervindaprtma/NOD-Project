@@ -418,8 +418,13 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "{% if scan_src_ips_text %}\n👥 <b>From:</b> {{ scan_src_ips_text|e }}{% endif %}"
         "{% if scan_egress_text %}\n🚪 <b>Out via:</b> {{ scan_egress_text|e }}{% endif %}"
         "{% if scan_dst_orgs_text %}\n🌍 <b>To:</b> {{ scan_dst_orgs_text|e }}{% endif %}",
-        # Resolve: the app that FIRED and the value it fired at (snapshot-rehydrated) — value-clean.
-        "<b>{{ metric_label }}</b> was {{ metric_value|round(1) }} Mbps (limit {{ rule.condition|e }} {{ rule.threshold_value }} Mbps)"
+        # Resolve: NOW as the headline, WAS in parentheses with the drop — the fired app's current
+        # speed this tick vs the value it fired at. When the app has fallen out of the top-N there
+        # is no reliable current number, so the line says so instead of printing a fake 0.
+        "{% if scan_recovered_known %}<b>{{ metric_label }} now:</b> <b>{{ scan_recovered_mbps }} Mbps</b>"
+        " (was {{ metric_value|round(1) }} Mbps, ↓ {{ scan_drop_mbps }}) — limit {{ rule.condition|e }} {{ rule.threshold_value }} Mbps"
+        "{% else %}<b>{{ metric_label }}</b> no longer in the top talkers (was {{ metric_value|round(1) }} Mbps,"
+        " limit {{ rule.condition|e }} {{ rule.threshold_value }} Mbps){% endif %}"
         "{% if scan_apps_text %}\n🏆 <b>Offender was:</b> {{ scan_apps_text|e }}{% endif %}",
         "⚠️ Check the app's top consumers / QoS / policy", "🎉 Application traffic back to normal."),
     # VPN Session Monitor (kind="session"): one message per connect/disconnect event, branching
