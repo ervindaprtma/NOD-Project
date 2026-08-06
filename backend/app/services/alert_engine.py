@@ -921,6 +921,14 @@ async def _advance_state_machine(
             if snap.get("scan_apps") is not None:
                 rule._scan_apps = snap.get("scan_apps") or []
                 rule._scan_detail = snap.get("scan_detail") or None
+                # Clean-value parity: this cycle's driver is some unrelated top app (nothing is
+                # breaching now). Name the app that FIRED and report the value it fired at, so
+                # target_name / metric_value / scan_apps_text all describe the SAME app ("YouTube
+                # was 87.3 Mbps"), never a mismatched current number or a filter-label target.
+                if rule._scan_apps:
+                    _pt, _pv, _mk, _dir = _scan_metric_parse(rule.metric_field)
+                    resolved_value = float(rule._scan_apps[0].get(_mk) or resolved_value)
+                    rule._target_name = rule._scan_apps[0].get("app") or getattr(rule, "_target_name", None)
 
             # Recovery notification — same channels that got the alert now get the
             # all-clear. Only for a rule that actually FIRED: a PENDING→RESOLVED rule

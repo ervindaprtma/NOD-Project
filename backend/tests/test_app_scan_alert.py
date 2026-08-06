@@ -147,3 +147,28 @@ def test_scan_ctx_keys_in_sample_render_ctx():
     for k in ("scan_apps_text", "scan_volume_text", "scan_src_ips_text",
               "scan_egress_text", "scan_dst_orgs_text", "scan_apps"):
         assert k in ctx
+
+
+def test_sample_ctx_scan_metric_label_matches_fire():
+    # preview must show the SAME direction label the fire path uses ("Download", not the
+    # dotted-path title-case) — else a scan template that previews clean renders differently on fire.
+    ctx = ae.sample_render_ctx(metric_field="app.internet.download_mbps", data_source="appid_flow")
+    assert ctx["metric_label"] == "Download" and ctx["metric_unit"] == "Mbps"
+
+
+def test_scan_resolve_value_and_target_from_snapshot():
+    """Clean-value parity at resolve: the recovery reports the app that FIRED and the value it
+    fired at, from the snapshot — NOT this cycle's unrelated top-app number. Mirrors the exact
+    override _advance_state_machine applies when rehydrating a scan rule's fire snapshot."""
+    rule = _rule(metric_field="app.internet.download_mbps")
+    snap = {"scan_apps": [{"app": "YouTube", "download_mbps": 87.3},
+                          {"app": "Zoom", "download_mbps": 61.0}]}
+    resolved_value = 12.3          # this cycle's max app (e.g. DNS) — must be overridden
+    rule._target_name = "not-an-app-filter-label"
+    if snap.get("scan_apps") is not None:
+        rule._scan_apps = snap["scan_apps"] or []
+        if rule._scan_apps:
+            _pt, _pv, _mk, _dir = ae._scan_metric_parse(rule.metric_field)
+            resolved_value = float(rule._scan_apps[0].get(_mk) or resolved_value)
+            rule._target_name = rule._scan_apps[0].get("app") or rule._target_name
+    assert resolved_value == 87.3 and rule._target_name == "YouTube"

@@ -12,6 +12,10 @@ const LIST_KEY = "/api/v1/config/notification-templates";
 const VARIABLES = [
   "rule.name", "rule.severity", "rule.site_name", "rule.metric_field",
   "rule.condition", "rule.threshold_value", "metric_value", "fired_at",
+  "target_name", "metric_label", "metric_unit", "event",
+  // Application Traffic Scan (metric_field "app.*"): offending app + who/where/whom + volume.
+  // Wrap in {% if %} so they no-op on non-scan rules. Use {% if event == 'resolved' %} for recovery.
+  "scan_apps_text", "scan_volume_text", "scan_src_ips_text", "scan_egress_text", "scan_dst_orgs_text",
 ];
 
 interface EditorForm {
