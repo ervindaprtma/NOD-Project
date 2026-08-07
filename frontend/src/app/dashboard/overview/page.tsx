@@ -214,7 +214,7 @@ export default function OverviewPage() {
         <KpiCard title="HA Status" value={overview?.ha_status?.overall_health || "—"} subtitle={overview?.ha_status ? `${overview.ha_status.member_count} members` : "DC Only"} loading={isLoading}
           onClick={() => router.push("/dashboard/resources")} color={overview?.ha_status?.overall_health === "healthy" ? "emerald" : "red"} />
         <KpiCard title="Alerts" value={overview?.active_alert_count ?? 0} subtitle="Firing now" loading={isLoading}
-          onClick={() => router.push("/dashboard/alerts")} color={overview?.active_alert_count ? "red" : "slate"} />
+          onClick={() => router.push("/dashboard/alerts?tab=history")} color={overview?.active_alert_count ? "red" : "slate"} />
       </div>
 
       {/* ═══ ROW 2 — Device Health + SD-WAN ═══ */}

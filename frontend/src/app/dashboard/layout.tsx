@@ -257,10 +257,10 @@ export default function DashboardLayout({
                   <div className="flex items-center justify-between p-3 border-b">
                     <h3 className="text-sm font-semibold">Active Alerts</h3>
                     <button
-                      onClick={() => { setNotifOpen(false); router.push("/dashboard/alerts"); }}
+                      onClick={() => { setNotifOpen(false); router.push("/dashboard/alerts?tab=history"); }}
                       className="text-xs text-primary hover:underline"
                     >
-                      View all
+                      View history
                     </button>
                   </div>
                   <div className="max-h-80 overflow-y-auto">
@@ -270,7 +270,7 @@ export default function DashboardLayout({
                       activeAlerts.map((a) => (
                         <button
                           key={a.rule_id}
-                          onClick={() => { setNotifOpen(false); router.push("/dashboard/alerts"); }}
+                          onClick={() => { setNotifOpen(false); router.push(`/dashboard/alerts?tab=history&rule_id=${a.rule_id}`); }}
                           className="w-full text-left p-3 border-b text-sm hover:bg-muted/50 transition-colors"
                         >
                           <div className="flex items-center gap-2">

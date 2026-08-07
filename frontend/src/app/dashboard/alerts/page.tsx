@@ -221,6 +221,17 @@ export default function AlertsPage() {
   const [testing, setTesting] = useState(false);
   // Tab (like Resources): admin lands on Rules; viewer/operator get History only.
   const [tab, setTab] = useState<"rules" | "history">(canManageAlerts ? "rules" : "history");
+  // Deep link from Overview (KPI card / bell): ?tab=history[&rule_id=…] opens History
+  // directly (and pre-filters to a rule when a bell item was clicked).
+  const [initialRuleId, setInitialRuleId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const rid = p.get("rule_id");
+    if (rid) { setInitialRuleId(rid); setTab("history"); return; }
+    const t = p.get("tab");
+    if (t === "history") setTab("history");
+    else if (t === "rules" && canManageAlerts) setTab("rules");
+  }, [canManageAlerts]);
 
   const { data: rulesData, error, isLoading } = useSWR<{ data: AlertRule[] }>(
     canManageAlerts ? "/api/v1/alerts/rules" : null,
@@ -760,7 +771,7 @@ export default function AlertsPage() {
       </div>
 
       {/* ── TAB: Alert History (readable by every role) ── */}
-      {tab === "history" && <AlertHistory />}
+      {tab === "history" && <AlertHistory ruleId={initialRuleId} />}
 
       {error && canManageAlerts && tab === "rules" && (
         <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-sm">
