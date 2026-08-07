@@ -198,6 +198,18 @@ async def upsert_config(
         await db.commit()
         await db.refresh(cfg)
 
+        # ALERT audit — record WHO changed the channel + enabled/severity, never the
+        # secret (bot token / chat id are redacted by the logger regardless).
+        try:
+            from app.services.system_logger import log_event
+            log_event(level="ALERT", category="alert", event="channel.updated",
+                      message=f"Notification channel '{cfg.channel}' updated (enabled={cfg.enabled})",
+                      source="frontend", username=getattr(current_user, "username", None),
+                      user_id=getattr(current_user, "id", None),
+                      details={"channel": cfg.channel, "enabled": cfg.enabled, "min_severity": cfg.min_severity})
+        except Exception:
+            pass
+
         data = NotificationConfigRead(
             channel=cfg.channel,
             enabled=cfg.enabled,

@@ -106,6 +106,16 @@ class Settings(BaseSettings):
     SYSLOG_HOST: str = ""
     SYSLOG_PORT: int = 514
 
+    # ── System Logs (queryable DB sink — LOGGING_SYSTEM_DESIGN) ─
+    SYSTEM_LOG_ENABLED: bool = True
+    SYSTEM_LOG_QUEUE_MAX: int = 10_000          # bounded ring; drops oldest on overflow
+    SYSTEM_LOG_FLUSH_SECONDS: float = 2.0       # batch-write cadence
+    SYSTEM_LOG_FLUSH_MAX_ROWS: int = 500        # or flush early at this many queued
+    SYSTEM_LOG_INFO_RETENTION_DAYS: int = 7     # chatty success logs — shortest
+    SYSTEM_LOG_RETENTION_DAYS: int = 30         # WARNING
+    SYSTEM_LOG_AUDIT_RETENTION_DAYS: int = 90   # ALERT + ERROR — audit/failure trail lives longest
+    SYSTEM_LOG_CAPTURE_INFO_REQUESTS: bool = True  # persist every successful API call
+
     # ── Timeframe defaults ─────────────────────────────────────
     DEFAULT_REFRESH_INTERVAL_SECONDS: int = 60
 

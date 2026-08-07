@@ -39,6 +39,55 @@ def _create_rotating_handler(path: Path) -> RotatingFileHandler:
     return handler
 
 
+# Message-prefix → (category, event) mapping so auto-captured logs get a useful
+# code instead of a generic one. Best-effort; explicit log_event() calls at the
+# high-value sites still override these with structured fields.
+_EVENT_HINTS = [
+    ("batch notify failed", ("notify", "notify.flush_failed")),
+    ("send failed", ("notify", "notify.send_failed")),
+    ("template render failed", ("alert", "template.render_failed")),
+    ("session fetch failed", ("query", "query.failed")),
+    ("opensearch", ("query", "query.failed")),
+    ("query", ("query", "query.failed")),
+    ("decrypt", ("notify", "notify.decrypt_failed")),
+    ("login", ("auth", "auth.login_failed")),
+]
+
+
+class SystemLogDBHandler(logging.Handler):
+    """Mirror WARNING+ log records into the queryable `system_logs` sink.
+
+    Enqueue-only (the batch writer persists) so it never blocks or touches the DB
+    inside a logging call. Records from the system_logger module are skipped to
+    prevent a write-failure → log → write feedback loop.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if record.name.startswith("app.services.system_logger"):
+                return
+            from app.services.system_logger import log_event
+
+            level = "ERROR" if record.levelno >= logging.ERROR else "WARNING"
+            msg = record.getMessage()
+            low = msg.lower()
+            category, event = "system", "log.captured"
+            for needle, (cat, ev) in _EVENT_HINTS:
+                if needle in low:
+                    category, event = cat, ev
+                    break
+            log_event(
+                level=level,
+                category=category,
+                event=event,
+                message=msg,
+                trace_id=getattr(record, "trace_id", None),
+                details={"logger": record.name},
+            )
+        except Exception:
+            pass  # a logging handler must never raise
+
+
 def setup_logging() -> None:
     """Configure the application root logger."""
     root = logging.getLogger()
@@ -54,6 +103,13 @@ def setup_logging() -> None:
     error_handler = _create_rotating_handler(LOG_DIR / "error.log")
     error_handler.setLevel(logging.WARNING)
     root.addHandler(error_handler)
+
+    # Queryable DB sink for WARNING+ (System Logs page). Enqueue-only; the batch
+    # writer (started in lifespan) drains it. Safe even before the writer starts.
+    if settings.SYSTEM_LOG_ENABLED:
+        db_handler = SystemLogDBHandler()
+        db_handler.setLevel(logging.WARNING)
+        root.addHandler(db_handler)
 
     # Console (for Docker log driver)
     console_handler = logging.StreamHandler(sys.stdout)

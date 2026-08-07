@@ -428,6 +428,43 @@ class UserActivityLog(Base):
     )
 
 
+class SystemLog(Base):
+    """Queryable operational log (LOGGING_SYSTEM_DESIGN §2).
+
+    Beside the file/stdout pipeline — the DB copy is what the admin System Logs
+    page reads. Four buckets via `level` (INFO|ALERT|ERROR|WARNING); `category`
+    sub-filters. Credentials are NEVER stored (redacted on write); `username` is
+    always kept so every row answers "who".
+    """
+    __tablename__ = "system_logs"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False, index=True
+    )
+    level: Mapped[str] = mapped_column(String(10), nullable=False, index=True)  # INFO|ALERT|ERROR|WARNING
+    category: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(10), nullable=False, index=True)  # backend|frontend
+    event: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    username: Mapped[Optional[str]] = mapped_column(String(150), nullable=True, index=True)
+    # No FK cascade: the audit trail must survive user deletion (username is denormalized).
+    user_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
+    source_ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    trace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    rule_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
+    method: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
 class Notification(Base):
     __tablename__ = "notifications"
 

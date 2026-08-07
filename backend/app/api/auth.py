@@ -106,6 +106,21 @@ async def login(
             detail = "Too many failed attempts. Account locked for 15 minutes."
         elif remaining <= 2:
             detail = f"Invalid username or password. {remaining} attempt(s) remaining."
+        # WARNING audit — the attempted username + IP, NEVER the password.
+        try:
+            from app.services.system_logger import log_event
+            log_event(
+                level="WARNING", category="auth",
+                event="auth.account_locked" if is_locked else "auth.login_failed",
+                message=(f"Account '{body.username}' locked after too many failed logins"
+                         if is_locked else f"Failed login for '{body.username}'"),
+                source="frontend", username=body.username,
+                source_ip=get_real_client_ip(request),
+                trace_id=getattr(request.state, "trace_id", None),
+                details={"remaining_attempts": remaining},
+            )
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=detail,
@@ -147,6 +162,17 @@ async def login(
             source_ip=get_real_client_ip(request),
         )
     )
+    # INFO audit — login success carries no JWT yet, so the middleware can't name
+    # the user; log it explicitly with the username.
+    try:
+        from app.services.system_logger import log_event
+        log_event(level="INFO", category="auth", event="auth.login_ok",
+                  message=f"User '{user.username}' logged in", source="frontend",
+                  username=user.username, user_id=user.id,
+                  source_ip=get_real_client_ip(request),
+                  trace_id=getattr(request.state, "trace_id", None))
+    except Exception:
+        pass
 
     # Issue tokens
     access_token = create_access_token(

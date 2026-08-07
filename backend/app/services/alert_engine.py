@@ -40,6 +40,9 @@ _WIB = timezone(timedelta(hours=7))
 # each evaluate_all_rules() tick. Process-local (matches the in-process scheduler).
 _last_run_at: datetime | None = None
 _last_run_ms: int | None = None
+# System Logs heartbeat throttle: prove the loop ran without 1440 INFO rows/day.
+# ponytail: 5-min heartbeat, not per-tick — engine-health already shows the live tick.
+_last_tick_log_at: datetime | None = None
 
 # Phase D: Postgres session-level advisory lock key. If the backend is ever scaled to
 # >1 replica, only the holder evaluates — the rest skip the tick, so notifications fire
@@ -966,6 +969,22 @@ async def _advance_state_machine(
 
     if state.state != prev_state:
         state.last_state_change_at = now
+        # ALERT audit trail: one row per state transition (fired / resolved /
+        # pending). username="system" — the engine, not a person, drove it.
+        _ALERT_EVENT = {"FIRING": "alert.fired", "RESOLVED": "alert.resolved", "PENDING": "alert.pending"}
+        _ev = _ALERT_EVENT.get(state.state)
+        if _ev:
+            try:
+                from app.services.system_logger import log_event
+                log_event(
+                    level="ALERT", category="alert", event=_ev,
+                    message=f"{rule.name} @ {rule.site_name or '—'}: {prev_state} → {state.state} (value {metric_value})",
+                    username="system", rule_id=rule.id,
+                    details={"from": prev_state, "to": state.state, "value": metric_value,
+                             "severity": rule.severity},
+                )
+            except Exception:
+                pass
 
     await db.commit()
 
@@ -983,9 +1002,21 @@ async def _mark_held(rule: AlertRule, db: AsyncSession) -> None:
     if not state:
         state = AlertState(rule_id=rule.id, state="INACTIVE")
         db.add(state)
+    was_degraded = bool(state.last_read_degraded)
     state.last_evaluated_at = datetime.now(timezone.utc)
     state.last_read_degraded = True
     await db.commit()
+    # Log only the transition INTO degraded — not every held tick — so a long
+    # outage is one WARNING, not one per minute.
+    if not was_degraded:
+        try:
+            from app.services.system_logger import log_event
+            log_event(level="WARNING", category="health", event="health.opensearch_degraded",
+                      message=f"Rule '{rule.name}' held: a data read returned no data (degraded/held)",
+                      username="system", rule_id=rule.id,
+                      details={"site": rule.site_name, "data_source": rule.data_source})
+        except Exception:
+            pass
 
 
 async def _evaluate_composite_rule(
@@ -1449,14 +1480,35 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         # the DB — still ENCRYPTED — so Telegram received a garbage token, rejected every send,
         # and the error was swallowed: alerts fired but no message ever arrived.
         db_configs = await load_channel_configs()
+        # System Logs: record every send outcome so "was the resolve message
+        # actually delivered?" is answerable from the UI (the question that
+        # motivated this feature). Never let logging break the send.
+        from app.services.system_logger import log_event
+        _rule_names = [r.name for r, _, _, _ in notify_queue]
+        _primary_rule_id = notify_queue[0][0].id if len(notify_queue) == 1 else None
+        _send_meta = {"firing": n_fire, "resolved": n_res, "rules": _rule_names[:8], "subject": title}
         for channel in fired_channels:
             cfg = db_configs.get(channel)
             if not cfg:
+                log_event(level="WARNING", category="notify", event="notify.channel_unconfigured",
+                          message=f"Channel '{channel}' wanted by a firing rule is not enabled/configured",
+                          username="system", rule_id=_primary_rule_id, details=_send_meta)
                 continue  # channel not enabled/configured in Settings → nothing to send to
             try:
-                await send_alert(channel, cfg, subject=title, body=body, parse_mode=parse_mode)
+                ok = await send_alert(channel, cfg, subject=title, body=body, parse_mode=parse_mode)
+                if ok:
+                    log_event(level="INFO", category="notify", event=f"{channel}.sent",
+                              message=f"{title} → {channel} ({n_fire} firing, {n_res} resolved)",
+                              username="system", rule_id=_primary_rule_id, details=_send_meta)
+                else:
+                    log_event(level="ERROR", category="notify", event=f"{channel}.send_failed",
+                              message=f"{channel} rejected the batch ({n_fire} firing, {n_res} resolved)",
+                              username="system", rule_id=_primary_rule_id, details=_send_meta)
             except Exception as e:
                 logger.error("Batch notify failed for %s: %s", channel, e)
+                log_event(level="ERROR", category="notify", event=f"{channel}.send_failed",
+                          message=f"{channel} send raised: {e}",
+                          username="system", rule_id=_primary_rule_id, details=_send_meta)
     except Exception as e:
         logger.error("Batch notify flush error: %s", e)
 
@@ -2091,6 +2143,19 @@ async def evaluate_all_rules():
     _last_run_at = datetime.now(timezone.utc)
     _last_run_ms = int((_time.monotonic() - _t_start) * 1000)
     logger.debug("Alert evaluation cycle completed in %dms", _last_run_ms)
+
+    # Heartbeat into System Logs (throttled to ~5 min) so the loop's health is
+    # provable historically, not only from the live engine-health endpoint.
+    global _last_tick_log_at
+    if _last_tick_log_at is None or (_last_run_at - _last_tick_log_at).total_seconds() >= 300:
+        _last_tick_log_at = _last_run_at
+        try:
+            from app.services.system_logger import log_event
+            log_event(level="INFO", category="system", event="engine.tick_ok",
+                      message=f"Alert evaluation cycle completed in {_last_run_ms}ms",
+                      username="system", duration_ms=_last_run_ms)
+        except Exception:
+            pass
 
 
 def start_alert_scheduler():

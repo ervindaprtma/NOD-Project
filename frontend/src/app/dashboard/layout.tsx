@@ -21,6 +21,7 @@ import {
   FileText,
   Users,
   ClipboardList,
+  FileClock,
   Settings,
   Bell,
   Menu,
@@ -40,6 +41,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/reports", label: "Reports", Icon: FileText, minRole: "operator" },
   { href: "/dashboard/users", label: "Users", Icon: Users, minRole: "superadmin" },
   { href: "/dashboard/activity-logs", label: "Activity Logs", Icon: ClipboardList, minRole: "superadmin" },
+  { href: "/dashboard/system-logs", label: "System Logs", Icon: FileClock, minRole: "admin" },
   { href: "/dashboard/settings", label: "Settings", Icon: Settings },
 ];
 

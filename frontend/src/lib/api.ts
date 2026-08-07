@@ -241,6 +241,12 @@ export async function apiFetch<T = unknown>(
       message = loc ? `${loc}: ${first.msg}` : first.msg || message;
       code = first.type?.toUpperCase() || code;
     }
+    // Ship server failures (5xx) to the System Logs sink so backend errors are
+    // visible from the UI. Skip the log endpoints themselves (no feedback loop).
+    if (resp.status >= 500 && !path.startsWith("/api/v1/logs")) {
+      logClient("ERROR", "frontend.api_failed", `${path} → ${resp.status}: ${message}`,
+        { status: resp.status, code }, path);
+    }
     throw new ApiError(resp.status, code, message);
   }
 
@@ -283,4 +289,31 @@ export function hasMinRole(minRole: string): boolean {
   if (!role) return false;
   const levels: Record<string, number> = { viewer: 0, operator: 1, admin: 2, superadmin: 3 };
   return (levels[role] || 0) >= (levels[minRole] || 0);
+}
+
+/**
+ * Ship a frontend log event to the backend System Logs sink (LOGGING_SYSTEM_DESIGN §3e).
+ * Fire-and-forget: uses a RAW fetch (never apiFetch) so a failure can't recurse, and
+ * swallows everything. Only sends when authenticated. `level` is clamped server-side.
+ */
+export function logClient(
+  level: "INFO" | "WARNING" | "ERROR",
+  event: string,
+  message: string,
+  details?: Record<string, unknown>,
+  path?: string,
+): void {
+  try {
+    if (typeof window === "undefined") return;
+    const token = getAccessToken();
+    if (!token) return;
+    void fetch(`${API_BASE}/api/v1/logs/client`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      credentials: "include",
+      body: JSON.stringify({ events: [{ level, event, message: message.slice(0, 2000), path, details }] }),
+    }).catch(() => {});
+  } catch {
+    /* logging must never break the UI */
+  }
 }
