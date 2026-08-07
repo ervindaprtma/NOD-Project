@@ -5,6 +5,7 @@ import useSWR, { mutate } from "swr";
 import { swrFetcher, apiFetch, hasMinRole } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { AlertRule, AlertFieldCatalog, AlertEngineHealth, NotificationTemplate } from "@/types";
+import { AlertHistory } from "./AlertHistory";
 
 // Compact relative time: "12s ago", "4m ago", "2h ago". Empty for null.
 function timeAgo(iso: string | null | undefined): string {
@@ -218,11 +219,11 @@ export default function AlertsPage() {
   } | null>(null);
   const canManageAlerts = hasMinRole("admin");
   const [testing, setTesting] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  const [historyTab, setHistoryTab] = useState<string | null>(null);
+  // Tab (like Resources): admin lands on Rules; viewer/operator get History only.
+  const [tab, setTab] = useState<"rules" | "history">(canManageAlerts ? "rules" : "history");
 
   const { data: rulesData, error, isLoading } = useSWR<{ data: AlertRule[] }>(
-    "/api/v1/alerts/rules",
+    canManageAlerts ? "/api/v1/alerts/rules" : null,
     swrFetcher,
     { refreshInterval: 30000 }
   );
@@ -463,12 +464,6 @@ export default function AlertsPage() {
   const isThroughput = isIface && form.metric_field === "iface.throughput_mbps";
   const thrIsPct = form.link_max_mbps != null;
   const thrPct = thrIsPct && form.link_max_mbps ? Math.round((form.threshold_value / form.link_max_mbps) * 100) : 90;
-
-  const { data: logsData } = useSWR<{ data: { id: string; rule_name: string; severity: string; metric_value_at_firing: number; fired_at: string; resolved_at: string | null }[] }>(
-    showHistory ? "/api/v1/alerts/logs?limit=50" : null,
-    swrFetcher
-  );
-  const alertLogs = logsData?.data || [];
 
   // §9.8: SSE live push. EventSource cannot set custom headers, so we
   // request a short-lived stream token (POST /stream-token) and pass it
@@ -711,7 +706,7 @@ export default function AlertsPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">Alert Rules</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Alerts</h1>
           {/* §9.8: live indicator driven by EventSource.readyState */}
           <span
             className={cn(
@@ -737,13 +732,7 @@ export default function AlertsPage() {
           </span>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => setShowHistory(!showHistory)}
-            className="px-3 py-1.5 text-xs rounded-md border bg-background hover:bg-muted transition-colors"
-          >
-            {showHistory ? "Hide History" : "Alert History"}
-          </button>
-          {canManageAlerts && (
+          {canManageAlerts && tab === "rules" && (
           <button
             onClick={openCreate}
             className="px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
@@ -754,54 +743,34 @@ export default function AlertsPage() {
         </div>
       </div>
 
-      {error && (
+      {/* Tabs (like Resources): Alert Rules (admin) / Alert History (all roles) */}
+      <div className="flex items-center gap-2 border-b">
+        {canManageAlerts && (
+          <button onClick={() => setTab("rules")}
+            className={cn("px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+              tab === "rules" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>
+            Alert Rules
+          </button>
+        )}
+        <button onClick={() => setTab("history")}
+          className={cn("px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+            tab === "history" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>
+          Alert History
+        </button>
+      </div>
+
+      {/* ── TAB: Alert History (readable by every role) ── */}
+      {tab === "history" && <AlertHistory />}
+
+      {error && canManageAlerts && tab === "rules" && (
         <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-sm">
           Failed to load alert rules.{" "}
           <button onClick={() => mutate("/api/v1/alerts/rules")} className="underline">Retry</button>
         </div>
       )}
 
-      {/* Alert History Panel */}
-      {showHistory && (
-        <div className="bg-card border rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-3">Alert Firing History</h3>
-          {alertLogs.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-6">No alert history</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b text-muted-foreground">
-                    <th className="text-left py-2 px-2">Rule</th>
-                    <th className="text-left py-2 px-2">Severity</th>
-                    <th className="text-right py-2 px-2">Value at Fire</th>
-                    <th className="text-left py-2 px-2">Fired At</th>
-                    <th className="text-left py-2 px-2">Resolved At</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {alertLogs.map((log) => (
-                    <tr key={log.id} className="border-b last:border-0">
-                      <td className="py-2 px-2 font-medium">{log.rule_name}</td>
-                      <td className="py-2 px-2">
-                        <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium border", SEVERITY_COLORS[log.severity] || "")}>
-                          {log.severity}
-                        </span>
-                      </td>
-                      <td className="py-2 px-2 text-right font-mono">{log.metric_value_at_firing.toFixed(2)}</td>
-                      <td className="py-2 px-2 text-[10px]">{new Date(log.fired_at).toLocaleString()}</td>
-                      <td className="py-2 px-2 text-[10px] text-muted-foreground">
-                        {log.resolved_at ? new Date(log.resolved_at).toLocaleString() : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
+      {/* ── TAB: Alert Rules (admin + superadmin only) ── */}
+      {tab === "rules" && canManageAlerts && (<>
       {/* Template Gallery (v3 §3.12) */}
       <div className="bg-card border rounded-lg p-3">
         <div className="flex items-center justify-between mb-2">
@@ -1091,6 +1060,7 @@ export default function AlertsPage() {
           </p>
         </div>
       )}
+      </>)}
 
       {/* Create/Edit Modal */}
       {showModal && (
