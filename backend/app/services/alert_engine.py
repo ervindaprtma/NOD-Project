@@ -150,6 +150,21 @@ def sample_render_ctx(
         "scan_egress_text": "WAN-LinkNet",
         "scan_dst_orgs_text": "Google LLC, Fastly, Inc.",
         "scan_recovered_mbps": 6.2, "scan_drop_mbps": 27.4, "scan_recovered_known": True,
+        # SD-WAN composite full per-link report (2 links, mixed breached/ok, incl. a DOWN state)
+        "sdwan_links": [
+            {"label": "WAN LDP", "metrics": [
+                {"name": "Latency", "value": 28.0, "unit": "ms", "limit": 100.0, "breached": False, "is_status": False, "up": True},
+                {"name": "Jitter", "value": 1.5, "unit": "ms", "limit": 50.0, "breached": False, "is_status": False, "up": True},
+                {"name": "Packet Loss", "value": 8.2, "unit": "%", "limit": 5.0, "breached": True, "is_status": False, "up": True},
+                {"name": "State", "value": 0, "unit": "", "limit": 1.0, "breached": False, "is_status": True, "up": True},
+            ]},
+            {"label": "WAN iForte", "metrics": [
+                {"name": "Latency", "value": 142.6, "unit": "ms", "limit": 100.0, "breached": True, "is_status": False, "up": True},
+                {"name": "Jitter", "value": 12.0, "unit": "ms", "limit": 50.0, "breached": False, "is_status": False, "up": True},
+                {"name": "Packet Loss", "value": 1.0, "unit": "%", "limit": 5.0, "breached": False, "is_status": False, "up": True},
+                {"name": "State", "value": 1, "unit": "", "limit": 1.0, "breached": True, "is_status": True, "up": False},
+            ]},
+        ],
         # VPN capacity (metric_mb/threshold_mb only meaningful for a byte-volume metric)
         "vpn_active_users": 7, "vpn_total_mb": 5500.0, "vpn_top_user_mb": 2100.0,
         "vpn_top_user": "someone",
@@ -1269,6 +1284,34 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 scan_recovered_mbps = round(float(_rv), 1)
                 scan_drop_mbps = round(max(0.0, float(mv) - float(_rv)), 1)
                 scan_recovered_known = True
+        # SD-WAN composite: the FULL per-link, per-metric breakdown (EVERY clause, not just the
+        # driver) so one message lists Latency / Jitter / Packet Loss / State for every link,
+        # marked breached vs ok — same shape on firing and resolved. Empty for non-sdwan rules.
+        # Built from this cycle's _clauses_detail, so the resolve message shows the healthy values.
+        sdwan_links: list[dict] = []
+        _sd = [c for c in (getattr(rule, "_clauses_detail", None) or [])
+               if c.get("data_source") == "sdwan_sla"]
+        if _sd:
+            from app.schemas.sdwan_resource_vpn import SITE_LINK_LABELS
+            _labels = SITE_LINK_LABELS.get(rule.site_name, {})
+            _by_link: dict[str, dict] = {}
+            for c in _sd:
+                tk = str(c.get("target_key") or "")
+                slot = _by_link.setdefault(tk, {
+                    "label": _labels.get(f"link{tk}", f"Link {tk}") if tk else "—", "metrics": []})
+                mf = c.get("metric_field") or ""
+                is_status = "status" in mf
+                mlabel, munit = _metric_label_unit(mf)
+                v = float(c.get("value") or 0.0)
+                slot["metrics"].append({
+                    "name": "State" if is_status else mlabel,
+                    "value": round(v, 2), "unit": munit,
+                    "limit": c.get("threshold_value"),
+                    "breached": bool(c.get("breached")),
+                    "is_status": is_status, "up": v < 1,
+                })
+            sdwan_links = [_by_link[k] for k in
+                           sorted(_by_link, key=lambda x: int(x) if x.isdigit() else 99)]
         metric_mb = round(mv / 1_000_000, 1) if is_vol else None
         threshold_mb = round(eff_threshold / 1_000_000, 1) if is_vol else None
         # Original first-trigger time (stable across 30-min reminders); sent_at is this
@@ -1343,6 +1386,8 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "scan_recovered_mbps": scan_recovered_mbps,
                 "scan_drop_mbps": scan_drop_mbps,
                 "scan_recovered_known": scan_recovered_known,
+                # SD-WAN composite full per-link/per-metric report (empty list for non-sdwan rules):
+                "sdwan_links": sdwan_links,
                 # VPN capacity (None for non-VPN rules):
                 "vpn_active_users": vpn_active_users,
                 "vpn_total_mb": vpn_total_mb,

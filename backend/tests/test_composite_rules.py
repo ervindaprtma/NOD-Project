@@ -124,3 +124,37 @@ def test_schema_accepts_composite_rule():
     assert body.kind == "composite" and body.notify_when == "all"
     assert len(body.clauses) == 2 and body.clauses[0].target_key == "39"
     assert body.clauses[1].aggregation == "avg"  # default applied
+
+
+def test_sdwan_full_link_report_renders_firing_and_resolved():
+    """SD-WAN composite: one message lists EVERY link × metric (Latency/Jitter/Loss/State),
+    marked 🔴 breached / 🟢 ok, on both firing and resolved. The seeded template drives it from
+    the `sdwan_links` ctx var built from the per-clause reads."""
+    from app.services import template_seeder as ts
+    from app.services import alert_engine as ae
+
+    body = next(t for t in ts.SEED_NOTIFICATION_TEMPLATES if t["name"] == "SD-WAN SLA Breach")["body_template"]
+    ctx = ae.sample_render_ctx(metric_field="avg_latency", data_source="sdwan_sla", event="firing")
+
+    fired = ae._render_template(body, ctx)
+    assert "WAN LDP" in fired and "WAN iForte" in fired          # both links
+    assert "Latency" in fired and "Jitter" in fired and "Packet Loss" in fired and "State" in fired
+    assert "🔴" in fired and "🟢" in fired                        # mixed breached/ok
+    assert "DOWN" in fired                                        # a link State=DOWN renders DOWN
+
+    ctx["event"] = "resolved"
+    for lk in ctx["sdwan_links"]:
+        for m in lk["metrics"]:
+            m["breached"] = False
+            if m["is_status"]:
+                m["up"] = True
+    resolved = ae._render_template(body, ctx)
+    assert "RECOVERED" in resolved and "🔴" not in resolved       # all healthy on resolve
+    assert "WAN LDP" in resolved and "WAN iForte" in resolved
+
+
+def test_sdwan_links_in_sample_render_ctx():
+    from app.services.alert_engine import sample_render_ctx
+    links = sample_render_ctx()["sdwan_links"]
+    assert len(links) == 2
+    assert [m["name"] for m in links[0]["metrics"]] == ["Latency", "Jitter", "Packet Loss", "State"]

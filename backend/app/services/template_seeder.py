@@ -333,17 +333,45 @@ def _grafana_tpl(name: str, icon: str, title: str, service: str, metric_fire: st
 _L = "{{ rule.condition|e }} {{ rule.threshold_value }}"
 
 
-def _sdwan_metric_line(bold: bool) -> str:
-    """Metric-aware SD-WAN value line. metric_label/metric_unit name the clause that fired
-    (Packet Loss %/Latency ms/Jitter ms), supplied by the engine from the driver's field —
-    so this no longer switches on metric_field and can't miss an aggregation variant
-    (the old switch matched only avg_latency, so max_latency fell through to "Packet Loss").
-    `bold` wraps the value in <b> for the fire line."""
-    b0, b1 = ("<b>", "</b>") if bold else ("", "")
-    u = "{% if metric_unit %} {{ metric_unit }}{% endif %}"
+def _sdwan_body() -> str:
+    """SD-WAN SLA composite — the FULL per-link report: every link, every metric
+    (Latency / Jitter / Packet Loss / State), each marked 🔴 breached / 🟢 ok, in ONE message
+    for firing AND resolved (the resolve shows all-🟢 healthy values). `sdwan_links` is supplied
+    by _flush_batch_notify from the rule's per-clause reads; empty for a non-composite sdwan rule,
+    where it falls back to the single driver line."""
+    breakdown = (
+        "{% if sdwan_links %}{% for lk in sdwan_links %}🔗 <b>{{ lk.label|e }}</b>\n"
+        "{% for m in lk.metrics %}{% if m.breached %}🔴{% else %}🟢{% endif %} {{ m.name }}: "
+        "{% if m.is_status %}<b>{% if m.up %}UP{% else %}DOWN{% endif %}</b>"
+        "{% else %}<b>{{ m.value }}{% if m.unit %} {{ m.unit }}{% endif %}</b>"
+        " (limit {{ m.limit }}{% if m.unit %} {{ m.unit }}{% endif %}){% endif %}\n"
+        "{% endfor %}{% endfor %}"
+        # Fallback: a single-metric (non-composite) sdwan rule keeps the driver line.
+        "{% else %}{% if metric_field == 'status' %}🔴 <b>Link Status:</b> "
+        "<b>{% if metric_value >= 1 %}DOWN{% else %}UP{% endif %}</b>\n"
+        "{% else %}<b>{{ metric_label }}:</b> <b>{{ metric_value|round(2) }}"
+        "{% if metric_unit %} {{ metric_unit }}{% endif %}</b> (limit {{ condition|e }} {{ threshold_value }}"
+        "{% if metric_unit %} {{ metric_unit }}{% endif %})\n{% endif %}{% endif %}"
+    )
+    tline = "{% if target_name is defined and target_name %}🎯 <b>Link:</b> {{ target_name|e }}\n{% endif %}"
     return (
-        "{% if metric_field == 'status' %}<b>Link Status:</b> " + b0 + "{% if metric_value >= 1 %}DOWN{% else %}UP{% endif %}" + b1 +
-        "{% else %}<b>{{ metric_label }}:</b> " + b0 + "{{ metric_value|round(2) }}" + u + b1 + " (limit " + _L + u + "){% endif %}"
+        "{% if event == 'resolved' %}✅ <b>SD-WAN SLA RECOVERED</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🏢 <b>Site:</b> {{ rule.site_name|e }}\n"
+        "📌 <b>Alert:</b> {{ rule.name|e }}\n" + tline +
+        "📅 <b>Resolved:</b> {{ sent_at }}\n"
+        "⏱️ <b>Was firing since:</b> {{ fired_at }}\n"
+        "━━━━━━━━━━━━━━━━━━\n" + breakdown +
+        "━━━━━━━━━━━━━━━━━━\n🎉 All monitored links back within SLA."
+        "{% else %}📶 <b>SD-WAN SLA DEGRADED</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🏢 <b>Site:</b> {{ rule.site_name|e }}\n"
+        "📌 <b>Alert:</b> {{ rule.name|e }}\n" + tline +
+        "⚠️ <b>Severity:</b> {{ rule.severity|e }}\n"
+        "📅 <b>Firing since:</b> {{ fired_at }}\n"
+        "🔔 <b>Notified:</b> {{ sent_at }}\n"
+        "━━━━━━━━━━━━━━━━━━\n" + breakdown +
+        "━━━━━━━━━━━━━━━━━━\n⚠️ Check ISP / Tunnel / Routing Path{% endif %}"
     )
 
 
@@ -380,9 +408,17 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "is_default": True,
         "is_user_created": False,
     },
-    _grafana_tpl("SD-WAN SLA Breach", "📶", "SD-WAN", "SD-WAN",
-        _sdwan_metric_line(True), _sdwan_metric_line(False),
-        "⚠️ Check ISP / Tunnel / Routing Path", "🎉 All monitored paths back to normal."),
+    {
+        "name": "SD-WAN SLA Breach",
+        "description": "SD-WAN SLA composite — full per-link Latency/Jitter/Packet Loss/State "
+                       "report in one message (fire + resolve, WIB, Telegram).",
+        "subject_template": "{% if event == 'resolved' %}✅ SD-WAN SLA Recovered"
+                            "{% else %}📶 SD-WAN SLA Degraded{% endif %} — {{ rule.site_name|e }}",
+        "body_template": _sdwan_body(),
+        "line_template": _sdwan_body(),
+        "is_default": False,
+        "is_user_created": False,
+    },
     _grafana_tpl("Application Throughput Spike", "📈", "THROUGHPUT", "AppID Flow",
         # metric_value is Mbps (traffic.*.total_mbps), NOT bytes — was dividing by 1e6 and
         # showing "0.0 MB" for a real Mbps spike. threshold_value is Mbps too.
