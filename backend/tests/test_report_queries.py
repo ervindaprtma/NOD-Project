@@ -18,12 +18,12 @@ from app.services.report_generator import (
 )
 
 
-def test_interface_timeline_returns_triple():
-    """R-09 unpacks (points, in_bytes, out_bytes); a bare list breaks it."""
+def test_interface_timeline_returns_quad():
+    """R-09 unpacks (points, in_bytes, out_bytes, gaps); a bare list or wrong arity breaks it."""
     src = inspect.getsource(_compute_throughput_timeline)
-    assert "tuple[list[InterfaceTimelinePoint], float, float]" in src
+    assert "list[\"TimelineGap\"]" in src or "list[TimelineGap]" in src
 
-    points, in_bytes, out_bytes = _compute_throughput_timeline(
+    points, in_bytes, out_bytes, gaps = _compute_throughput_timeline(
         [
             {"key": 0, "max_in_octets": {"value": 0}, "max_out_octets": {"value": 0}},
             {"key": 60_000, "max_in_octets": {"value": 7_500_000}, "max_out_octets": {"value": 750_000}},
@@ -32,6 +32,7 @@ def test_interface_timeline_returns_triple():
     )
     assert [p.in_mbps for p in points] == [1.0]  # 7.5 MB × 8 / 60s / 1e6
     assert (in_bytes, out_bytes) == (7_500_000, 750_000)
+    assert gaps == []  # contiguous → no data-loss gaps
 
 
 def test_vpn_histograms_accept_report_intervals():

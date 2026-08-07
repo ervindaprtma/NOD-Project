@@ -1082,14 +1082,23 @@ function InterfaceBandwidthCard({ iface, onRangeSelect }: { iface: InterfaceStat
     const ms = pt.timestamp ? new Date(pt.timestamp).getTime() : 0;
     return {
       timestamp: ms ? formatBucketLabelWIB(ms, idx > 0 ? new Date(iface.timeline![idx - 1].timestamp).getTime() : null) : pt.timestamp,
-      In: pt.in_mbps ?? 0,
-      Out: pt.out_mbps ?? 0,
+      // Keep null on a data-loss gap boundary so the line BREAKS (no fake 0/spike); a real 0 stays 0.
+      In: pt.in_mbps ?? null,
+      Out: pt.out_mbps ?? null,
       tsMs: ms,
     };
   });
 
   const hasTimeline = chartData.length > 1;
   const bucketMs = chartData.length > 1 ? (chartData[1].tsMs - chartData[0].tsMs) || 60_000 : 60_000;
+
+  // Data-loss windows → shaded "no data" bands. Map each gap's epoch bounds to the x-axis
+  // category (the formatted label) of the buckets that bracket it.
+  const gapBands = (iface.gaps || []).flatMap((g) => {
+    const x1 = chartData.find((d) => d.tsMs === g.start_ms)?.timestamp;
+    const x2 = chartData.find((d) => d.tsMs === g.end_ms)?.timestamp;
+    return x1 != null && x2 != null ? [{ x1, x2, label: "no data" }] : [];
+  });
 
   return (
     <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-5 space-y-4">
@@ -1192,6 +1201,7 @@ function InterfaceBandwidthCard({ iface, onRangeSelect }: { iface: InterfaceStat
             yAxisWidth={60}
             onRangeSelect={onRangeSelect}
             bucketMs={bucketMs}
+            bands={gapBands}
           />
         </div>
       ) : (
