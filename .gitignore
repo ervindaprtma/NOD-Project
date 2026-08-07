@@ -54,6 +54,12 @@ htmlcov/
 playwright-report/
 test-results/
 
+# Backend test suite kept local — NEW test files here are not tracked. The tests already
+# committed stay tracked (git ignore never untracks), which the CI code-quality lane relies
+# on: it runs backend/tests/test_secret_roundtrip.py + test_severity_gating.py. To retire a
+# tracked test, `git rm` it explicitly.
+backend/tests/
+
 # Alembic
 backend/alembic/versions/*.pyc
 
