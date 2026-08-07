@@ -312,12 +312,16 @@ async def get_overview(
                 bytes_human=_format_bytes(s["total_bytes"]),
             ))
 
-    # Active alert count
+    # Active alert count — follows the engine state machine: rules currently FIRING
+    # (the state the notifier fired on). The old query hit a non-existent
+    # `alert_logs.acknowledged` column, silently failed, and always returned 0 so the
+    # card never lit up. FIRING == actively-alerting now; PENDING is still debouncing
+    # and RESOLVED/INACTIVE are clear, so neither counts.
     active_alert_count = 0
     try:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
-                text("SELECT COUNT(*) FROM alert_logs WHERE acknowledged = false")
+                text("SELECT COUNT(*) FROM alert_states WHERE state = 'FIRING'")
             )
             active_alert_count = result.scalar() or 0
     except Exception:

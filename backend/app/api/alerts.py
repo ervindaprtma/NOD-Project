@@ -29,6 +29,18 @@ from app.schemas.template import AlertFromTemplateRequest, AlertTemplateRead
 router = APIRouter(prefix="/api/v1/alerts", tags=["Alerts"])
 
 
+def _log_alert_audit(event: str, message: str, user: User,
+                     rule_id: str | None = None, details: dict | None = None) -> None:
+    """ALERT-bucket audit row for an admin action on the alert engine. Never raises."""
+    try:
+        from app.services.system_logger import log_event
+        log_event(level="ALERT", category="alert", event=event, message=message,
+                  source="frontend", username=getattr(user, "username", None),
+                  user_id=getattr(user, "id", None), rule_id=rule_id, details=details)
+    except Exception:
+        pass
+
+
 # ── SSE Stream (v3 §3.10) ──────────────────────────────────────
 
 
@@ -305,6 +317,36 @@ async def engine_health(
     return APIResponse.ok(data=health)
 
 
+@router.get("/active")
+async def get_active_alerts(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("viewer")),
+    limit: int = 20,
+) -> APIResponse[list[dict]]:
+    """Currently-FIRING alerts — the live engine state the Overview KPI card and the
+    header bell both reflect. Viewer-accessible (read-only awareness). Auto-clears as
+    rules resolve, since it reads AlertState directly (no stored notification rows)."""
+    rows = (await db.execute(
+        select(
+            AlertRule.id, AlertRule.name, AlertRule.severity, AlertRule.site_name,
+            AlertState.last_state_change_at, AlertState.last_value, AlertState.last_read_degraded,
+        )
+        .join(AlertState, AlertState.rule_id == AlertRule.id)
+        .where(AlertState.state == "FIRING")
+        .order_by(AlertState.last_state_change_at.desc().nullslast())
+        .limit(limit)
+    )).all()
+    data = [
+        {
+            "rule_id": r[0], "rule_name": r[1], "severity": r[2], "site_name": r[3],
+            "since": r[4].isoformat() if r[4] else None,
+            "value": r[5], "degraded": bool(r[6]),
+        }
+        for r in rows
+    ]
+    return APIResponse.ok(data=data)
+
+
 @router.post("/rules", response_model=APIResponse[AlertRuleRead], status_code=status.HTTP_201_CREATED)
 async def create_alert_rule(
     body: AlertRuleCreate,
@@ -346,6 +388,9 @@ async def create_alert_rule(
     db.add(AlertState(rule_id=rule.id, state="INACTIVE"))
     await db.flush()
 
+    _log_alert_audit("rule.created", f"Rule '{rule.name}' created", current_user, rule_id=rule.id,
+                     details={"severity": rule.severity, "kind": rule.kind, "enabled": rule.enabled})
+
     return APIResponse.ok(data=AlertRuleRead.model_validate(rule))
 
 
@@ -374,6 +419,7 @@ async def update_alert_rule(
     if not rule:
         raise HTTPException(status_code=404, detail="Alert rule not found.")
 
+    was_enabled = rule.enabled
     update_data = body.model_dump(exclude_unset=True)
     # Normalize the appid filter: drop empty fields, and an all-empty filter clears it (None).
     if "appid_filter" in update_data:
@@ -391,6 +437,16 @@ async def update_alert_rule(
         details={"rule_name": rule.name, "rule_id": rule.id, "changes": update_data},
     ))
 
+    # ALERT audit: a toggle of `enabled` is its own event; otherwise a field update
+    # with the changed fields (so "who changed the sustain timer" is answerable).
+    if "enabled" in update_data and update_data["enabled"] != was_enabled:
+        _ev = "rule.enabled" if rule.enabled else "rule.disabled"
+        _log_alert_audit(_ev, f"Rule '{rule.name}' {'enabled' if rule.enabled else 'disabled'}",
+                         current_user, rule_id=rule.id)
+    else:
+        _log_alert_audit("rule.updated", f"Rule '{rule.name}' updated", current_user, rule_id=rule.id,
+                         details={"changes": {k: v for k, v in update_data.items() if k != "appid_filter"}})
+
     return APIResponse.ok(data=AlertRuleRead.model_validate(rule))
 
 
@@ -407,12 +463,14 @@ async def delete_alert_rule(
     await db.delete(rule)
     await db.flush()
 
+    _rule_name = rule.name
     import asyncio
     asyncio.ensure_future(log_activity(
         user_id=current_user.id,
         action="alert_rule_deleted",
         details={"rule_name": rule.name, "rule_id": rule_id},
     ))
+    _log_alert_audit("rule.deleted", f"Rule '{_rule_name}' deleted", current_user, rule_id=rule_id)
 
     return APIResponse.ok(data={"deleted": rule_id})
 
@@ -437,6 +495,8 @@ async def test_alert_rule(
     rule = result.scalar_one_or_none()
     if not rule:
         raise HTTPException(status_code=404, detail="Alert rule not found.")
+
+    _log_alert_audit("rule.tested", f"Rule '{rule.name}' tested (dry-run)", current_user, rule_id=rule.id)
 
     # The engine's last actual read — surfaced so "Test says breached, engine says OK"
     # stops being a contradiction (they are two different reads; the engine holds on a

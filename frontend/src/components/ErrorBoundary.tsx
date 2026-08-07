@@ -1,6 +1,7 @@
 "use client";
 
 import React, { Component, type ErrorInfo, type ReactNode } from "react";
+import { logClient } from "@/lib/api";
 
 type Variant = "page" | "panel";
 
@@ -27,6 +28,11 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("ErrorBoundary caught:", error, errorInfo);
+    // Ship the render exception to the System Logs sink (frontend source).
+    logClient("ERROR", "frontend.exception", error.message, {
+      stack: error.stack?.slice(0, 1500),
+      componentStack: errorInfo.componentStack?.slice(0, 1500),
+    });
   }
 
   handleTryAgain = () => {

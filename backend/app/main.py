@@ -62,9 +62,22 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger(__name__)
     logger.info("NOD Backend starting up")
 
+    # Start the System Logs batch writer (drains the queryable log sink to DB)
+    from app.services.system_logger import start_system_logger
+    start_system_logger()
+
     # Start alert scheduler (FR-08)
     from app.services.alert_engine import start_alert_scheduler
     start_alert_scheduler()
+
+    # Daily prune of the system_logs table (per-level retention). Reuses the
+    # already-running alert scheduler — no extra infra.
+    from app.services.alert_engine import scheduler as _alert_scheduler
+    from app.services.system_logger import prune_system_logs
+    _alert_scheduler.add_job(
+        prune_system_logs, "interval", hours=24,
+        id="system_log_prune", replace_existing=True, misfire_grace_time=3600,
+    )
 
     # Start token cleanup (hourly, deletes expired/revoked tokens older than 24h)
     from app.services.token_cleanup import start_token_cleanup_scheduler
@@ -112,6 +125,8 @@ async def lifespan(app: FastAPI):
     # DB connection pool is lazily initialized by SQLAlchemy
     yield
     # Shutdown
+    from app.services.system_logger import stop_system_logger
+    await stop_system_logger()
     from app.services.alert_engine import scheduler as alert_scheduler
     alert_scheduler.shutdown(wait=False)
     from app.services.report_scheduler import scheduler as report_scheduler
@@ -163,6 +178,13 @@ async def security_headers_middleware(request: Request, call_next: Callable):
 # Middleware: Trace ID + Access Logging
 # ─────────────────────────────────────────────────────────────────
 
+# Paths kept OUT of the queryable DB sink (still written to access.log): health
+# checks, the SSE holds, token refresh, and the log endpoints themselves — a log
+# page that logged its own polling would feed back on itself.
+_LOG_EXCLUDE_PREFIXES = ("/api/v1/logs", "/api/v1/alerts/stream")
+_LOG_EXCLUDE_EXACT = frozenset({"/health", "/auth/refresh", "/api/docs", "/api/openapi.json", "/api/redoc"})
+
+
 @app.middleware("http")
 async def trace_and_log_middleware(request: Request, call_next: Callable):
     import logging
@@ -174,20 +196,75 @@ async def trace_and_log_middleware(request: Request, call_next: Callable):
     response: Response = await call_next(request)
     elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
+    path = request.url.path
+    client_ip = get_real_client_ip(request)
+    status = response.status_code
+
+    # access.log: every request, unchanged (the forensic firehose).
     logger.info(
         "request",
         extra={
             "trace_id": trace_id,
             "method": request.method,
-            "path": request.url.path,
-            "status": response.status_code,
+            "path": path,
+            "status": status,
             "elapsed_ms": elapsed_ms,
-            "client_ip": get_real_client_ip(request),
+            "client_ip": client_ip,
         },
     )
 
+    # Queryable DB sink (System Logs page): a curated subset, not the firehose.
+    _capture_request_log(request, path, status, elapsed_ms, client_ip, trace_id)
+
     response.headers["X-Trace-ID"] = trace_id
     return response
+
+
+def _capture_request_log(request, path, status, elapsed_ms, client_ip, trace_id) -> None:
+    """Enqueue a system_logs row for a request. Success → INFO; auth-denied →
+    WARNING; 5xx → ERROR. Noisy client 4xx (400/404/422) stay in access.log only."""
+    try:
+        if request.method == "OPTIONS":
+            return
+        if path in _LOG_EXCLUDE_EXACT or any(path.startswith(p) for p in _LOG_EXCLUDE_PREFIXES):
+            return
+
+        if status < 400:
+            if not settings.SYSTEM_LOG_CAPTURE_INFO_REQUESTS:
+                return
+            level, category, event = "INFO", "api", "api.request"
+        elif status == 429:
+            level, category, event = "WARNING", "health", "api.rate_limited"
+        elif status in (401, 403):
+            # /auth/login 401 is logged explicitly (auth.login_failed) with the username.
+            if path == "/auth/login":
+                return
+            level, category, event = "WARNING", "auth", "api.denied"
+        elif status >= 500:
+            level, category, event = "ERROR", "api", "api.request_failed"
+        else:
+            return  # 400/404/422 → access.log only
+
+        from app.core.security import decode_token_optional
+        from app.services.system_logger import log_event
+
+        claims = None
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            claims = decode_token_optional(auth[7:])
+        source = "frontend" if claims else "backend"
+        username = claims.get("username") if claims else None
+        user_id = claims.get("sub") if claims else None
+
+        log_event(
+            level=level, category=category, event=event, source=source,
+            message=f"{request.method} {path} → {status}",
+            username=username, user_id=user_id, source_ip=client_ip,
+            trace_id=trace_id, method=request.method, path=path,
+            status_code=status, duration_ms=elapsed_ms,
+        )
+    except Exception:
+        pass  # never break a request over logging
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -26,6 +26,18 @@ router = APIRouter(
 )
 
 
+def _log_tmpl_audit(event: str, message: str, user, tmpl_id: str, name: str) -> None:
+    """ALERT-bucket audit row for a notification-template change. Never raises."""
+    try:
+        from app.services.system_logger import log_event
+        log_event(level="ALERT", category="alert", event=event, message=message,
+                  source="frontend", username=getattr(user, "username", None),
+                  user_id=getattr(user, "id", None),
+                  details={"template_id": tmpl_id, "template_name": name})
+    except Exception:
+        pass
+
+
 @router.get("")
 async def list_notification_templates(current_user=Depends(require_role("admin"))):
     """GET /api/v1/config/notification-templates — list with used_by_count."""
@@ -66,6 +78,8 @@ async def create_notification_template(
         await db.commit()
         await db.refresh(tmpl)
 
+        _log_tmpl_audit("template.notification.created",
+                        f"Notification template '{tmpl.name}' created", current_user, tmpl.id, tmpl.name)
         return APIResponse.ok(data={"id": tmpl.id})
 
 
@@ -134,6 +148,8 @@ async def update_notification_template(
             tmpl.is_default = body.is_default
 
         await db.commit()
+        _log_tmpl_audit("template.notification.updated",
+                        f"Notification template '{tmpl.name}' updated", current_user, tmpl.id, tmpl.name)
         return APIResponse.ok(data={})
 
 
@@ -165,8 +181,11 @@ async def delete_notification_template(
         if not tmpl:
             raise HTTPException(status_code=404, detail="Template not found")
 
+        _tmpl_name = tmpl.name
         await db.delete(tmpl)
         await db.commit()
+        _log_tmpl_audit("template.notification.deleted",
+                        f"Notification template '{_tmpl_name}' deleted", current_user, template_id, _tmpl_name)
         return APIResponse.ok(data={})
 
 
