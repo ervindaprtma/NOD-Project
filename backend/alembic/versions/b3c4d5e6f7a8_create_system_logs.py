@@ -46,8 +46,10 @@ def upgrade() -> None:
     op.create_index('ix_system_logs_event', 'system_logs', ['event'])
     op.create_index('ix_system_logs_username', 'system_logs', ['username'])
     op.create_index('ix_system_logs_trace_id', 'system_logs', ['trace_id'])
-    # Default tabbed view: filter by level, newest first.
-    op.create_index('ix_system_logs_level_ts', 'system_logs', ['level', sa.text('ts DESC')])
+    # Default tabbed view: filter by level, newest first. Plain (level, ts) — Postgres
+    # scans a b-tree backwards for ORDER BY ts DESC, and a plain-column index compares
+    # cleanly under `alembic check` (an expression/DESC index does not).
+    op.create_index('ix_system_logs_level_ts', 'system_logs', ['level', 'ts'])
 
 
 def downgrade() -> None:

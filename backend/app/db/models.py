@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -437,6 +438,11 @@ class SystemLog(Base):
     always kept so every row answers "who".
     """
     __tablename__ = "system_logs"
+    # Composite index for the default tabbed view (filter by level, newest first).
+    # Declared here so `alembic check` sees it — must match the migration exactly.
+    __table_args__ = (
+        Index("ix_system_logs_level_ts", "level", "ts"),
+    )
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=_new_uuid
