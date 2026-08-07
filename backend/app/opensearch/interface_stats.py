@@ -269,12 +269,23 @@ async def interface_stats_summary(
     for b in resp.get("aggregations", {}).get("by_interface", {}).get("buckets", []):
         speed = b.get("speed", {}).get("value") or 0.0
         rx, tx, util, thr = [], [], [], []
+        prev_present = False   # did the PREVIOUS bucket carry a counter value?
         for tb in b.get("by_time", {}).get("buckets", []):
+            io = tb.get("in_oct", {}).get("value")
+            oo = tb.get("out_oct", {}).get("value")
             di = tb.get("in_d", {}).get("value")
             do = tb.get("out_d", {}).get("value")
+            # A derivative that resumes after empty (no-data) buckets spans the whole gap —
+            # dividing it by one bucket is the 83× spike. min_doc_count=0 keeps the gap buckets
+            # (null counters), so a non-null delta whose previous bucket had NO value is a
+            # gap-resume: skip it (else a long-window bandwidth rule false-fires across an outage).
+            gap_resume = not prev_present and (di is not None or do is not None)
+            prev_present = io is not None or oo is not None
             if di is None or do is None:   # first bucket has no derivative
                 continue
             if di < 0 or do < 0:           # counter reset (reboot) → skip bucket
+                continue
+            if gap_resume:                 # cross-gap delta → not a real per-bucket rate
                 continue
             rx_mbps = di * 8 / secs / 1e6
             tx_mbps = do * 8 / secs / 1e6

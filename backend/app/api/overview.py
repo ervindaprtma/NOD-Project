@@ -274,7 +274,13 @@ async def get_overview(
                     oper_status = "UP" if int(ov) == 1 else "DOWN"
                 if speed_mbps is not None and oper_status is not None:
                     break
-            if len(time_buckets) >= 2:
+            # Guard against a data-loss gap between the last two buckets: min_doc_count=1
+            # drops empty buckets, so if collection just resumed the delta spans the whole
+            # outage — dividing by one interval is the 83× spike. Only compute when the two
+            # buckets are actually adjacent in time.
+            if len(time_buckets) >= 2 and (
+                time_buckets[-1]["key"] - time_buckets[-2]["key"]
+            ) <= interval_seconds * 1000 * 1.5:
                 prev_in = time_buckets[-2].get("max_in_octets", {}).get("value")
                 curr_in = time_buckets[-1].get("max_in_octets", {}).get("value")
                 prev_out = time_buckets[-2].get("max_out_octets", {}).get("value")

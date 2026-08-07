@@ -21,10 +21,18 @@ router = APIRouter(prefix="/api/v1/interface-stats", tags=["Interface Stats"])
 
 class InterfaceTimelinePoint(BaseModel):
     """A single time-series point with throughput in Mbps.
-    in_mbps / out_mbps are nullable — set to None when delta is negative (counter reset)."""
+    in_mbps / out_mbps are nullable — None on a counter reset (negative delta) or a
+    data-loss gap boundary (breaks the line so the chart shows no fake spike)."""
     timestamp: int
     in_mbps: Optional[float] = None
     out_mbps: Optional[float] = None
+
+
+class TimelineGap(BaseModel):
+    """A data-loss window — collection was down, so no bytes were observed between
+    start_ms and end_ms. The chart marks it (shaded band) instead of drawing a rate."""
+    start_ms: int
+    end_ms: int
 
 
 class InterfaceStatsItem(BaseModel):
@@ -43,6 +51,7 @@ class InterfaceStatsItem(BaseModel):
     speed_mbps: Optional[int] = None       # nominal interface speed
     oper_status: Optional[int] = None      # 1=UP, 2=DOWN
     timeline: list[InterfaceTimelinePoint] = []
+    gaps: list[TimelineGap] = []           # data-loss windows to mark on the chart
 
 
 class InterfaceStatsResponse(BaseModel):
@@ -52,11 +61,19 @@ class InterfaceStatsResponse(BaseModel):
 # ── Helper: compute throughput deltas ────────────────────────────
 
 
+# A jump between two consecutive returned buckets larger than this many intervals
+# means buckets were dropped in between — the date_histogram uses min_doc_count=1, so a
+# data-loss window (OpenSearch down / Telegraf not writing) collapses to nothing and the
+# next bucket carries the WHOLE outage's counter delta. Dividing that by one interval was
+# the "83× spike" bug. 1.5 tolerates normal jitter but catches any real gap.
+_GAP_FACTOR = 1.5
+
+
 def _compute_throughput_timeline(
     time_buckets: list[dict],
     interval_seconds: int = 60,
     lte_ms: Optional[int] = None,
-) -> tuple[list[InterfaceTimelinePoint], float, float]:
+) -> tuple[list[InterfaceTimelinePoint], float, float, list["TimelineGap"]]:
     """
     Convert cumulative counter per-bucket into Mbps throughput.
     throughputMbps = (max_current - max_prev) × 8 / interval_seconds / 1_000_000
@@ -73,9 +90,15 @@ def _compute_throughput_timeline(
     end of the chart" artifact. Historical ranges that end on a bucket boundary
     keep all buckets.
 
-    Returns (points, total_in_bytes, total_out_bytes). Volume is the sum of the
-    same per-bucket deltas that feed the Mbps rate (a counter reset drops that
-    bucket, so volume slightly under-counts across a reset — fine for a dashboard).
+    **Data-loss gaps.** When two consecutive buckets are more than _GAP_FACTOR
+    intervals apart, buckets were dropped between them (collection was down). The
+    counter delta across that span is real bytes but spread over the whole gap, so
+    it is NOT a valid per-interval rate — emitting it divided by one interval was
+    the 83× false spike. Such a bucket emits a null point (breaks the line), the
+    baseline is re-seeded from it, its delta is excluded from the volume totals, and
+    the span is recorded in the returned gaps list so the chart can mark it.
+
+    Returns (points, total_in_bytes, total_out_bytes, gaps).
     """
     if lte_ms is not None:
         interval_ms = interval_seconds * 1000
@@ -83,11 +106,14 @@ def _compute_throughput_timeline(
             time_buckets = time_buckets[:-1]
 
     points: list[InterfaceTimelinePoint] = []
+    gaps: list[TimelineGap] = []
     prev_in: Optional[float] = None
     prev_out: Optional[float] = None
+    prev_ts: Optional[int] = None
     started: bool = False
     total_in_bytes: float = 0
     total_out_bytes: float = 0
+    gap_threshold_ms = interval_seconds * 1000 * _GAP_FACTOR
 
     for bucket in time_buckets:
         ts = bucket["key"]
@@ -96,10 +122,18 @@ def _compute_throughput_timeline(
 
         # First bucket with counter values — seed the baseline, skip emitting
         if not started:
-            prev_in = max_in
-            prev_out = max_out
+            prev_in, prev_out, prev_ts = max_in, max_out, ts
             if max_in is not None or max_out is not None:
                 started = True
+            continue
+
+        # Data-loss gap: buckets were dropped between prev_ts and ts. The delta here
+        # spans the whole outage — break the line, re-seed, record the gap, and DON'T
+        # charge it to one interval (the spike) or to the volume totals.
+        if prev_ts is not None and (ts - prev_ts) > gap_threshold_ms:
+            gaps.append(TimelineGap(start_ms=prev_ts, end_ms=ts))
+            points.append(InterfaceTimelinePoint(timestamp=ts, in_mbps=None, out_mbps=None))
+            prev_in, prev_out, prev_ts = max_in, max_out, ts
             continue
 
         in_mbps: Optional[float] = None
@@ -123,10 +157,9 @@ def _compute_throughput_timeline(
             out_mbps=out_mbps,
         ))
 
-        prev_in = max_in
-        prev_out = max_out
+        prev_in, prev_out, prev_ts = max_in, max_out, ts
 
-    return points, total_in_bytes, total_out_bytes
+    return points, total_in_bytes, total_out_bytes, gaps
 
 
 def _summarize(
@@ -209,8 +242,8 @@ async def get_interface_stats(
         # Time buckets
         time_buckets = iface_bucket.get("by_time", {}).get("buckets", [])
 
-        # Compute throughput deltas + cumulative volume
-        timeline, total_in_bytes, total_out_bytes = _compute_throughput_timeline(
+        # Compute throughput deltas + cumulative volume + data-loss gaps
+        timeline, total_in_bytes, total_out_bytes, gaps = _compute_throughput_timeline(
             time_buckets, interval_seconds=interval_seconds, lte_ms=lte_ms
         )
 
@@ -245,6 +278,7 @@ async def get_interface_stats(
             speed_mbps=speed_mbps,
             oper_status=oper_status,
             timeline=timeline,
+            gaps=gaps,
         ))
 
     # Sort by defined order (WAN first, MPLS second; vendor grouping)

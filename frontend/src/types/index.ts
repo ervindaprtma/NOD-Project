@@ -203,7 +203,8 @@ export interface RawFlowRecord {
 // ── Interface Stats v2.0 ─────────────────────────────────────────
 
 export interface InterfaceTimelinePoint { timestamp: number; in_mbps: number | null; out_mbps: number | null; }
-export interface InterfaceStatsItem { if_index: string; if_name: string; label: string; avg_in_mbps: number | null; avg_out_mbps: number | null; peak_in_mbps: number | null; peak_out_mbps: number | null; last_in_mbps: number | null; last_out_mbps: number | null; total_in_bytes: number; total_out_bytes: number; speed_mbps: number | null; oper_status: number | null; timeline: InterfaceTimelinePoint[]; }
+export interface TimelineGap { start_ms: number; end_ms: number; }
+export interface InterfaceStatsItem { if_index: string; if_name: string; label: string; avg_in_mbps: number | null; avg_out_mbps: number | null; peak_in_mbps: number | null; peak_out_mbps: number | null; last_in_mbps: number | null; last_out_mbps: number | null; total_in_bytes: number; total_out_bytes: number; speed_mbps: number | null; oper_status: number | null; timeline: InterfaceTimelinePoint[]; gaps?: TimelineGap[]; }
 export interface InterfaceStatsData { interfaces: InterfaceStatsItem[]; }
 
 // ── Device Availability (device_uptime) ────────────────────────────
