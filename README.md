@@ -73,6 +73,28 @@ docker compose exec backend python scripts/seed_superadmin.py
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Telegram alerts |
 | `DISCORD_WEBHOOK_URL` | Discord alerts |
 
+**Optional (System Logs — admin "System Logs" console):**
+
+All have safe defaults — nothing needs to be set for the feature to work. The
+`system_logs` table is created automatically by the startup migration. Set these
+only to tune retention/volume. Credentials are never stored (redacted on write);
+`username` always is.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SYSTEM_LOG_ENABLED` | `true` | Master switch for the queryable DB log sink. `false` disables it (file/stdout logs keep running). |
+| `SYSTEM_LOG_CAPTURE_INFO_REQUESTS` | `true` | Persist every successful API call as INFO. Set `false` to cut DB volume the most. |
+| `SYSTEM_LOG_INFO_RETENTION_DAYS` | `7` | Days to keep INFO rows (highest volume — lower to save disk). |
+| `SYSTEM_LOG_RETENTION_DAYS` | `30` | Days to keep WARNING rows. |
+| `SYSTEM_LOG_AUDIT_RETENTION_DAYS` | `90` | Days to keep ALERT + ERROR rows (audit/failure trail). |
+| `SYSTEM_LOG_QUEUE_MAX` | `10000` | In-memory ring buffer size; drops oldest on overflow (counted as `dropped_rows`). |
+| `SYSTEM_LOG_FLUSH_SECONDS` | `2.0` | Batch-write cadence to Postgres. |
+| `SYSTEM_LOG_FLUSH_MAX_ROWS` | `500` | Batch-size hint for the writer. |
+
+Retention is pruned daily by a scheduled job. Only INFO grows fast; if disk is a
+concern on a busy site, set `SYSTEM_LOG_INFO_RETENTION_DAYS=3` or
+`SYSTEM_LOG_CAPTURE_INFO_REQUESTS=false`.
+
 ### Access
 
 | URL | Description |
