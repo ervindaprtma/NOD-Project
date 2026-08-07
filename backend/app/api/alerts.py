@@ -317,6 +317,36 @@ async def engine_health(
     return APIResponse.ok(data=health)
 
 
+@router.get("/active")
+async def get_active_alerts(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("viewer")),
+    limit: int = 20,
+) -> APIResponse[list[dict]]:
+    """Currently-FIRING alerts — the live engine state the Overview KPI card and the
+    header bell both reflect. Viewer-accessible (read-only awareness). Auto-clears as
+    rules resolve, since it reads AlertState directly (no stored notification rows)."""
+    rows = (await db.execute(
+        select(
+            AlertRule.id, AlertRule.name, AlertRule.severity, AlertRule.site_name,
+            AlertState.last_state_change_at, AlertState.last_value, AlertState.last_read_degraded,
+        )
+        .join(AlertState, AlertState.rule_id == AlertRule.id)
+        .where(AlertState.state == "FIRING")
+        .order_by(AlertState.last_state_change_at.desc().nullslast())
+        .limit(limit)
+    )).all()
+    data = [
+        {
+            "rule_id": r[0], "rule_name": r[1], "severity": r[2], "site_name": r[3],
+            "since": r[4].isoformat() if r[4] else None,
+            "value": r[5], "degraded": bool(r[6]),
+        }
+        for r in rows
+    ]
+    return APIResponse.ok(data=data)
+
+
 @router.post("/rules", response_model=APIResponse[AlertRuleRead], status_code=status.HTTP_201_CREATED)
 async def create_alert_rule(
     body: AlertRuleCreate,

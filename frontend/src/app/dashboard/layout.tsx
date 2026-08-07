@@ -26,7 +26,15 @@ import {
   Bell,
   Menu,
 } from "lucide-react";
-import type { Notification as NotifType } from "@/types";
+interface ActiveAlert {
+  rule_id: string;
+  rule_name: string;
+  severity: string;
+  site_name: string | null;
+  since: string | null;
+  value: number | null;
+  degraded: boolean;
+}
 
 const NAV_ITEMS = [
   { href: "/dashboard/overview", label: "Overview", Icon: Activity },
@@ -53,7 +61,7 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [notifications, setNotifications] = useState<NotifType[]>([]);
+  const [activeAlerts, setActiveAlerts] = useState<ActiveAlert[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
   const [user, setUser] = useState<{ username: string; role: string; full_name: string } | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -101,10 +109,12 @@ export default function DashboardLayout({
     } catch { /* ignore */ }
   }, []);
 
-  const fetchNotifications = useCallback(async () => {
+  // Header bell follows the live alert-engine state: currently-FIRING rules, which
+  // auto-clear as they resolve (no stored/unread notification rows).
+  const fetchActiveAlerts = useCallback(async () => {
     try {
-      const resp = await apiFetch<{ data: NotifType[] }>("/api/v1/notifications?unread_only=true&limit=10");
-      setNotifications(resp.data || []);
+      const resp = await apiFetch<{ data: ActiveAlert[] }>("/api/v1/alerts/active?limit=20");
+      setActiveAlerts(resp.data || []);
     } catch { /* ignore */ }
   }, []);
 
@@ -131,22 +141,15 @@ export default function DashboardLayout({
   useEffect(() => {
     if (!tokenPresent) return;
     fetchUser();
-    fetchNotifications();
+    fetchActiveAlerts();
 
-    const interval = setInterval(fetchNotifications, 30000);
+    const interval = setInterval(fetchActiveAlerts, 30000);
     return () => {
       clearInterval(interval);
     };
-  }, [fetchUser, fetchNotifications, tokenPresent]);
+  }, [fetchUser, fetchActiveAlerts, tokenPresent]);
 
-  const unreadCount = notifications.filter((n) => !n.is_read).length;
-
-  async function markAllRead() {
-    try {
-      await apiFetch("/api/v1/notifications/mark-all-read", { method: "POST" });
-      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
-    } catch { /* ignore */ }
-  }
+  const unreadCount = activeAlerts.length;
 
   async function handleLogout() {
     await fetch("/auth/logout", { method: "POST", credentials: "include" });
@@ -252,27 +255,38 @@ export default function DashboardLayout({
               {notifOpen && (
                 <div className="absolute right-0 top-8 w-80 bg-card border rounded-lg shadow-lg z-50">
                   <div className="flex items-center justify-between p-3 border-b">
-                    <h3 className="text-sm font-semibold">Notifications</h3>
-                    <button onClick={markAllRead} className="text-xs text-primary hover:underline">
-                      Mark all read
+                    <h3 className="text-sm font-semibold">Active Alerts</h3>
+                    <button
+                      onClick={() => { setNotifOpen(false); router.push("/dashboard/alerts"); }}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      View all
                     </button>
                   </div>
                   <div className="max-h-80 overflow-y-auto">
-                    {notifications.length === 0 ? (
-                      <p className="p-4 text-sm text-muted-foreground text-center">No notifications</p>
+                    {activeAlerts.length === 0 ? (
+                      <p className="p-4 text-sm text-muted-foreground text-center">No active alerts</p>
                     ) : (
-                      notifications.map((n) => (
-                        <div key={n.id} className={cn("p-3 border-b text-sm", !n.is_read && "bg-muted/50")}>
+                      activeAlerts.map((a) => (
+                        <button
+                          key={a.rule_id}
+                          onClick={() => { setNotifOpen(false); router.push("/dashboard/alerts"); }}
+                          className="w-full text-left p-3 border-b text-sm hover:bg-muted/50 transition-colors"
+                        >
                           <div className="flex items-center gap-2">
-                            <span className={cn("w-2 h-2 rounded-full",
-                              n.severity === "CRITICAL" && "bg-destructive",
-                              n.severity === "WARNING" && "bg-warning",
-                              n.severity === "INFO" && "bg-primary"
+                            <span className={cn("w-2 h-2 rounded-full shrink-0",
+                              a.severity === "CRITICAL" && "bg-destructive",
+                              a.severity === "WARNING" && "bg-warning",
+                              a.severity === "INFO" && "bg-primary"
                             )} />
-                            <span className="font-medium">{n.alert_name}</span>
+                            <span className="font-medium truncate">{a.rule_name}</span>
+                            {a.degraded && <span className="text-[10px] text-amber-600 ml-auto shrink-0">data delayed</span>}
                           </div>
-                          <p className="text-xs text-muted-foreground mt-1">{n.message}</p>
-                        </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {a.site_name || "—"}
+                            {a.since && <> · firing since {new Date(a.since).toLocaleString("en-GB", { timeZone: "Asia/Jakarta" })}</>}
+                          </p>
+                        </button>
                       ))
                     )}
                   </div>
