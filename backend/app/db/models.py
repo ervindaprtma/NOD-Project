@@ -270,8 +270,10 @@ class AlertLog(Base):
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=_new_uuid
     )
-    rule_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("alert_rules.id", ondelete="CASCADE"), nullable=False, index=True
+    # SET NULL (not CASCADE): deleting a rule must NOT erase its history — the row
+    # keeps the fire-time rule_name and event_code; rule_id becomes NULL.
+    rule_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("alert_rules.id", ondelete="SET NULL"), nullable=True, index=True
     )
     rule_name: Mapped[str] = mapped_column(String(255), nullable=False)
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -282,6 +284,13 @@ class AlertLog(Base):
         DateTime(timezone=True), nullable=True
     )
     rule_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Stable, human-quotable per-event id: AH-<YYYYMMDD>-<8 hex of sha256(values)>.
+    event_code: Mapped[Optional[str]] = mapped_column(String(24), nullable=True, index=True)
+    # The exact subject/body sent per channel, for firing and resolved, so the
+    # history row shows what the operator actually received. {"firing": {...}, "resolved": {...}}.
+    sent_payloads: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )

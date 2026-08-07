@@ -4,10 +4,10 @@ CRUD for alert rules, test rule endpoint, alert logs.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import require_role
@@ -15,6 +15,7 @@ from app.db.models import AlertFieldCatalog, AlertLog, AlertRule, AlertState, Al
 from app.db.session import get_db
 from app.services.activity_logger import log_activity
 from app.schemas.alert import (
+    AlertLogDetail,
     AlertLogRead,
     AlertRuleCreate,
     AlertRuleRead,
@@ -22,7 +23,7 @@ from app.schemas.alert import (
     AlertTestClauseResult,
     AlertTestResult,
 )
-from app.schemas.common import APIResponse, Meta
+from app.schemas.common import APIResponse
 from app.schemas.field_catalog import AlertFieldCatalogRead
 from app.schemas.template import AlertFromTemplateRequest, AlertTemplateRead
 
@@ -731,26 +732,67 @@ async def test_alert_rule(
 # ── Alert Logs ──────────────────────────────────────────────────
 
 
-@router.get("/logs", response_model=APIResponse[list[AlertLogRead]])
+@router.get("/logs", response_model=APIResponse[dict])
 async def get_alert_logs(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(require_role("viewer")),
     limit: int = 50,
     offset: int = 0,
-) -> APIResponse[list[AlertLogRead]]:
-    """FR-11: Alert firing history."""
-    result = await db.execute(
-        select(AlertLog)
-        .order_by(AlertLog.fired_at.desc())
-        .offset(offset)
-        .limit(limit)
-    )
-    logs = result.scalars().all()
-    total = (await db.execute(select(func.count(AlertLog.id)))).scalar() or 0
-    return APIResponse.ok(
-        data=[AlertLogRead.model_validate(l) for l in logs],
-        meta=Meta(total=total),
-    )
+    q: str | None = None,
+    rule_id: str | None = None,
+    status_: str | None = Query(None, alias="status"),   # firing | resolved | all
+    severity: str | None = None,
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = Query(None, alias="to"),
+) -> APIResponse[dict]:
+    """Alert firing/resolved history — readable by every role (rule config stays admin+).
+
+    Filterable + searchable; the lightweight list omits the heavy JSONB (fetch a single
+    row via /logs/{id} for the full snapshot + sent payloads)."""
+    conds = []
+    if q:
+        like = f"%{q}%"
+        conds.append(or_(AlertLog.rule_name.ilike(like), AlertLog.event_code.ilike(like)))
+    if rule_id:
+        conds.append(AlertLog.rule_id == rule_id)
+    if status_ == "firing":
+        conds.append(AlertLog.resolved_at.is_(None))
+    elif status_ == "resolved":
+        conds.append(AlertLog.resolved_at.is_not(None))
+    if severity:
+        conds.append(AlertLog.severity.in_([s.strip() for s in severity.split(",") if s.strip()]))
+    if from_:
+        conds.append(AlertLog.fired_at >= from_)
+    if to:
+        conds.append(AlertLog.fired_at <= to)
+
+    base = select(AlertLog)
+    count_q = select(func.count(AlertLog.id))
+    if conds:
+        base = base.where(and_(*conds))
+        count_q = count_q.where(and_(*conds))
+    total = (await db.execute(count_q)).scalar() or 0
+    logs = (await db.execute(
+        base.order_by(AlertLog.fired_at.desc()).offset(offset).limit(limit)
+    )).scalars().all()
+    return APIResponse.ok(data={
+        "items": [AlertLogRead.model_validate(log).model_dump(mode="json") for log in logs],
+        "total": total,
+    })
+
+
+@router.get("/logs/{log_id}", response_model=APIResponse[AlertLogDetail])
+async def get_alert_log_detail(
+    log_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("viewer")),
+) -> APIResponse[AlertLogDetail]:
+    """Full history row: metric snapshot (all clauses, was→now) + the exact Telegram
+    subject/body sent for firing and resolved."""
+    row = (await db.execute(select(AlertLog).where(AlertLog.id == log_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Alert history entry not found.")
+    return APIResponse.ok(data=AlertLogDetail.model_validate(row))
 
 
 # ── Field Catalog (§11.2) ───────────────────────────────────────────────

@@ -9,7 +9,9 @@ so one OpenSearch query serves N rules instead of N queries.
 """
 from __future__ import annotations
 
+import hashlib
 import html
+import json
 import logging
 import re
 import time as _time
@@ -787,6 +789,35 @@ async def _notify(rule: AlertRule, metric_value: float):
 # ── Main evaluation entry points ────────────────────────────────
 
 
+def _event_code(rule_id: str, fired_at: datetime, metric_value: float, driver: dict | None) -> str:
+    """Stable, human-quotable per-event id: AH-<YYYYMMDD>-<8 hex of sha256(values)>.
+
+    Deterministic from the event's own values (rule, time, value, fired metric), so it
+    is reproducible/auditable and content-bound — the same event never gets two codes.
+    """
+    s = (driver or {}).get("metric_field") if isinstance(driver, dict) else None
+    basis = json.dumps({"r": rule_id, "t": fired_at.isoformat(), "v": metric_value, "s": s},
+                       sort_keys=True, default=str)
+    h = hashlib.sha256(basis.encode()).hexdigest()[:8]
+    return f"AH-{fired_at:%Y%m%d}-{h}"
+
+
+def _clauses_for(rule: AlertRule, metric_value: float) -> list[dict]:
+    """Full per-metric detail for the history row. Composite → all clauses this cycle;
+    single → the one metric it fired on."""
+    detail = getattr(rule, "_clauses_detail", None)
+    if detail:
+        return list(detail)
+    return [{
+        "metric_field": rule.metric_field,
+        "target_key": rule.target_key,
+        "value": metric_value,
+        "threshold_value": rule.threshold_value,
+        "condition": rule.condition,
+        "breached": True,
+    }]
+
+
 async def _advance_state_machine(
     rule: AlertRule,
     metric_value: float,
@@ -833,6 +864,7 @@ async def _advance_state_machine(
                     state.state = "FIRING"
                     state.last_fired_at = now
                     state.last_notified_at = now
+                    _driver = getattr(rule, "_fired_clause", None)
                     db.add(AlertLog(
                         rule_id=rule.id,
                         rule_name=rule.name,
@@ -840,15 +872,21 @@ async def _advance_state_machine(
                         metric_value_at_firing=metric_value,
                         notified_channels=rule.notify_channels,
                         fired_at=now,
+                        event_code=_event_code(rule.id, now, metric_value, _driver),
                         rule_snapshot={
                             "name": rule.name,
                             "metric_field": rule.metric_field,
                             "aggregation": rule.aggregation,
                             "condition": rule.condition,
                             "threshold_value": rule.threshold_value,
+                            "site_name": rule.site_name,
+                            "target_name": getattr(rule, "_target_name", None),
                             # Composite: the exact clause that fired, so the recovery message
                             # describes the SAME metric instead of re-picking at resolve time.
-                            "driver": getattr(rule, "_fired_clause", None),
+                            "driver": _driver,
+                            # Full per-metric detail for the history row: every clause read this
+                            # cycle (composite = all links × metrics; single = the one metric).
+                            "clauses": _clauses_for(rule, metric_value),
                             # Scan (app.* mode): the offending apps + who/where/whom detail, so the
                             # recovery message can name them even though no app is breaching anymore.
                             "scan_apps": getattr(rule, "_scan_apps", None) or None,
@@ -952,6 +990,16 @@ async def _advance_state_machine(
                     # The fired app's CURRENT speed this tick (was → now). None when it has fallen
                     # out of the top-N entirely (no reliable current number → the message says so).
                     rule._scan_recovered = (getattr(rule, "_scan_now", None) or {}).get(_fired_app)
+
+            # Stamp the recovery reading onto the SAME history row (was → now per
+            # metric), so the resolved entry carries the values it cleared at.
+            if alert_log is not None:
+                alert_log.rule_snapshot = {
+                    **(alert_log.rule_snapshot or {}),
+                    "resolved_clauses": _clauses_for(rule, resolved_value),
+                    "resolved_value": resolved_value,
+                }
+                await db.flush()
 
             # Recovery notification — same channels that got the alert now get the
             # all-clear. Only for a rule that actually FIRED: a PENDING→RESOLVED rule
@@ -1154,6 +1202,35 @@ def _extract_per_rule_value_flat(
         return None
     except (TypeError, ValueError, IndexError):
         return None
+async def _stamp_sent_payloads(
+    notify_queue: list[tuple[AlertRule, float, str, datetime]],
+    subject: str, body: str, sent_results: dict[str, bool], sent_at: str,
+) -> None:
+    """Record the sent subject/body + per-channel ok onto each rule's latest AlertLog,
+    keyed by firing/resolved. Never raises — history stamping must not break sends."""
+    try:
+        payload = {
+            "channels": sorted(sent_results.keys()),
+            "subject": subject,
+            "body": body,
+            "ok": (all(sent_results.values()) if sent_results else False),
+            "results": sent_results,
+            "sent_at": sent_at,
+        }
+        async with AsyncSessionLocal() as db:
+            for rule, _mv, event, _fired in notify_queue:
+                key = "resolved" if event == "resolved" else "firing"
+                row = (await db.execute(
+                    select(AlertLog).where(AlertLog.rule_id == rule.id)
+                    .order_by(AlertLog.fired_at.desc()).limit(1)
+                )).scalar_one_or_none()
+                if row is not None:
+                    row.sent_payloads = {**(row.sent_payloads or {}), key: payload}
+            await db.commit()
+    except Exception as e:
+        logger.warning("sent_payloads stamp failed: %s", e)
+
+
 async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, datetime]]) -> None:
     """Send batched notifications — one grouped message per channel (P7).
 
@@ -1487,6 +1564,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         _rule_names = [r.name for r, _, _, _ in notify_queue]
         _primary_rule_id = notify_queue[0][0].id if len(notify_queue) == 1 else None
         _send_meta = {"firing": n_fire, "resolved": n_res, "rules": _rule_names[:8], "subject": title}
+        sent_results: dict[str, bool] = {}
         for channel in fired_channels:
             cfg = db_configs.get(channel)
             if not cfg:
@@ -1496,6 +1574,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 continue  # channel not enabled/configured in Settings → nothing to send to
             try:
                 ok = await send_alert(channel, cfg, subject=title, body=body, parse_mode=parse_mode)
+                sent_results[channel] = bool(ok)
                 if ok:
                     log_event(level="INFO", category="notify", event=f"{channel}.sent",
                               message=f"{title} → {channel} ({n_fire} firing, {n_res} resolved)",
@@ -1505,10 +1584,16 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                               message=f"{channel} rejected the batch ({n_fire} firing, {n_res} resolved)",
                               username="system", rule_id=_primary_rule_id, details=_send_meta)
             except Exception as e:
+                sent_results[channel] = False
                 logger.error("Batch notify failed for %s: %s", channel, e)
                 log_event(level="ERROR", category="notify", event=f"{channel}.send_failed",
                           message=f"{channel} send raised: {e}",
                           username="system", rule_id=_primary_rule_id, details=_send_meta)
+
+        # Alert History: stamp exactly what was sent (subject + body + per-channel ok)
+        # onto EACH affected rule's latest history row, keyed by firing/resolved. This is
+        # what the operator received for that alert — viewable in the history detail.
+        await _stamp_sent_payloads(notify_queue, title, body, sent_results, now_str)
     except Exception as e:
         logger.error("Batch notify flush error: %s", e)
 

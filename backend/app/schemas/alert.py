@@ -163,12 +163,19 @@ class AlertTestResult(BaseModel):
 
 class AlertLogRead(BaseModel):
     id: str
-    rule_id: str
+    rule_id: Optional[str] = None  # NULL once the rule is deleted (history survives)
     rule_name: str
     severity: str
     metric_value_at_firing: float
     notified_channels: list[str]
     fired_at: datetime
     resolved_at: Optional[datetime] = None
+    event_code: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class AlertLogDetail(AlertLogRead):
+    """Full history row for the detail drawer — heavy JSONB included."""
+    rule_snapshot: dict = {}
+    sent_payloads: dict = {}
