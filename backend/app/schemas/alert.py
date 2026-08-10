@@ -171,6 +171,8 @@ class AlertLogRead(BaseModel):
     fired_at: datetime
     resolved_at: Optional[datetime] = None
     event_code: Optional[str] = None
+    # NULL = threshold rule (use resolved_at); else "connected"/"disconnected"/"rebooted".
+    event_type: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

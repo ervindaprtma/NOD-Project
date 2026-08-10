@@ -286,6 +286,9 @@ class AlertLog(Base):
     rule_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     # Stable, human-quotable per-event id: AH-<YYYYMMDD>-<8 hex of sha256(values)>.
     event_code: Mapped[Optional[str]] = mapped_column(String(24), nullable=True, index=True)
+    # NULL for threshold rules (Firing/Resolved derived from resolved_at). Point events
+    # carry their own name: "connected" | "disconnected" (VPN session) | "rebooted" (device).
+    event_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     # The exact subject/body sent per channel, for firing and resolved, so the
     # history row shows what the operator actually received. {"firing": {...}, "resolved": {...}}.
     sent_payloads: Mapped[dict] = mapped_column(
