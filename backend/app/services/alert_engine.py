@@ -1234,22 +1234,34 @@ def _extract_per_rule_value_flat(
         return None
 async def _stamp_sent_payloads(
     notify_queue: list[tuple[AlertRule, float, str, datetime]],
-    subject: str, body: str, sent_results: dict[str, bool], sent_at: str,
+    subject: str, per_rule_bodies: list[str], sent_results: dict[str, bool], sent_at: str,
 ) -> None:
     """Record the sent subject/body + per-channel ok onto each rule's latest AlertLog,
-    keyed by firing/resolved. Never raises — history stamping must not break sends."""
+    keyed by firing/resolved.
+
+    per_rule_bodies is the batch's per-rule message segments, aligned 1:1 with notify_queue
+    (== the message body's `outputs`). Each event stores ONLY its own segment — otherwise a
+    batch of simultaneous alerts cross-posts every rule's message into every event's history
+    (e.g. an Interface event showing the SSL-VPN message too). Never raises — history stamping
+    must not break sends."""
     try:
-        payload = {
-            "channels": sorted(sent_results.keys()),
-            "subject": subject,
-            "body": body,
-            "ok": (all(sent_results.values()) if sent_results else False),
-            "results": sent_results,
-            "sent_at": sent_at,
-        }
+        # 1:1 alignment is the invariant (one appended line per queue entry). If it ever breaks,
+        # fall back to the combined body so no message text is lost — just not split per event.
+        aligned = len(per_rule_bodies) == len(notify_queue)
+        combined = "\n\n".join(per_rule_bodies)
+        channels = sorted(sent_results.keys())
+        ok = all(sent_results.values()) if sent_results else False
         async with AsyncSessionLocal() as db:
-            for rule, _mv, event, _fired in notify_queue:
+            for i, (rule, _mv, event, _fired) in enumerate(notify_queue):
                 key = "resolved" if event == "resolved" else "firing"
+                payload = {
+                    "channels": channels,
+                    "subject": subject,
+                    "body": per_rule_bodies[i] if aligned else combined,
+                    "ok": ok,
+                    "results": sent_results,
+                    "sent_at": sent_at,
+                }
                 row = (await db.execute(
                     select(AlertLog).where(AlertLog.rule_id == rule.id)
                     .order_by(AlertLog.fired_at.desc()).limit(1)
@@ -1623,7 +1635,9 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         # Alert History: stamp exactly what was sent (subject + body + per-channel ok)
         # onto EACH affected rule's latest history row, keyed by firing/resolved. This is
         # what the operator received for that alert — viewable in the history detail.
-        await _stamp_sent_payloads(notify_queue, title, body, sent_results, now_str)
+        # Pass the per-rule segments (outputs), not the combined body, so each event's history
+        # carries only its own message (no cross-posting across simultaneously-fired alerts).
+        await _stamp_sent_payloads(notify_queue, title, outputs, sent_results, now_str)
     except Exception as e:
         logger.error("Batch notify flush error: %s", e)
 
