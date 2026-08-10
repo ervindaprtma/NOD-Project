@@ -939,14 +939,15 @@ async def _advance_state_machine(
                     )
 
     else:
-        # Resolve hysteresis (anti-flap): a FIRING rule doesn't clear on the first
-        # sub-threshold tick — bursty metrics (per-app scan speed) flap fire↔resolve.
-        # Require the clear to hold ALERT_RESOLVE_HYSTERESIS_MINUTES continuously.
-        # pending_since is dormant while FIRING → reuse it as the clear-timer (None →
-        # clear starts this tick). PENDING never fired → resolve at once (no message sent).
+        # Resolve hysteresis (anti-flap) mirrors the fire debounce: a rule that must breach
+        # for sustained_for_minutes to FIRE must also read clear that same duration to RESOLVE
+        # (symmetric fire-slow/resolve-slow). Bursty metrics (per-app scan speed) would
+        # otherwise flap fire↔resolve on the first clear tick. pending_since is dormant while
+        # FIRING → reuse it as the clear-timer (None → clear starts this tick). sustained_for=0
+        # → resolve at once. PENDING never fired → resolve at once too (no message sent).
         do_resolve = state.state == "PENDING"
         if state.state == "FIRING":
-            hysteresis = settings.ALERT_RESOLVE_HYSTERESIS_MINUTES
+            hysteresis = rule.sustained_for_minutes
             if hysteresis <= 0:
                 do_resolve = True
             elif state.pending_since is None:

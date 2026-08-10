@@ -103,7 +103,12 @@ All optional; defaults are sensible. Tune only to change how fast rules fire/res
 |----------|---------|-------------|
 | `ALERT_POLL_INTERVAL_SECONDS` | `60` | Scheduler tick — how often every rule is evaluated. |
 | `ALERT_RENOTIFY_INTERVAL_MINUTES` | `30` | While FIRING, re-send a reminder this often (per-rule override wins; `0` = notify once). |
-| `ALERT_RESOLVE_HYSTERESIS_MINUTES` | `2` | Anti-flap: a FIRING rule must read clear continuously this long before it RESOLVES. Absorbs bursty metrics (per-app AppID Scan speed) that otherwise flap fire↔resolve every tick. `0` = resolve on the first clear tick (old behavior). |
+
+**Resolve hysteresis (anti-flap)** is not an env var — it mirrors each rule's **Sustain**
+(`sustained_for_minutes`, set per-rule in the Alert Rules menu). A rule that must breach for
+N minutes to FIRE must also read clear for N minutes to RESOLVE (symmetric fire-slow/resolve-slow),
+so bursty metrics (per-app AppID Scan speed) can't flap fire↔resolve. `Sustain = 0` → resolve on
+the first clear tick.
 
 ### Access
 

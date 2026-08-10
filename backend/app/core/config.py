@@ -79,10 +79,6 @@ class Settings(BaseSettings):
     # ── Alert engine ───────────────────────────────────────────
     ALERT_POLL_INTERVAL_SECONDS: int = 60
     ALERT_RENOTIFY_INTERVAL_MINUTES: int = 30
-    # Anti-flap: a FIRING rule must read clear continuously for this many minutes
-    # before it RESOLVES. Absorbs bursty metrics (per-app scan speed) that otherwise
-    # flap fire↔resolve every tick. 0 disables (resolve on the first clear tick).
-    ALERT_RESOLVE_HYSTERESIS_MINUTES: int = 2
 
     # ── Notification: Email ────────────────────────────────────
     SMTP_HOST: str = ""
