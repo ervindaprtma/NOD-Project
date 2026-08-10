@@ -95,6 +95,16 @@ Retention is pruned daily by a scheduled job. Only INFO grows fast; if disk is a
 concern on a busy site, set `SYSTEM_LOG_INFO_RETENTION_DAYS=3` or
 `SYSTEM_LOG_CAPTURE_INFO_REQUESTS=false`.
 
+#### Optional (Alert engine)
+
+All optional; defaults are sensible. Tune only to change how fast rules fire/resolve/re-notify.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ALERT_POLL_INTERVAL_SECONDS` | `60` | Scheduler tick — how often every rule is evaluated. |
+| `ALERT_RENOTIFY_INTERVAL_MINUTES` | `30` | While FIRING, re-send a reminder this often (per-rule override wins; `0` = notify once). |
+| `ALERT_RESOLVE_HYSTERESIS_MINUTES` | `2` | Anti-flap: a FIRING rule must read clear continuously this long before it RESOLVES. Absorbs bursty metrics (per-app AppID Scan speed) that otherwise flap fire↔resolve every tick. `0` = resolve on the first clear tick (old behavior). |
+
 ### Access
 
 | URL | Description |

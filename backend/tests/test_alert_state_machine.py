@@ -119,3 +119,16 @@ def test_resolved_rearms_on_new_breach():
     src = inspect.getsource(alert_engine._advance_state_machine)
     assert 'state.state in ("INACTIVE", "RESOLVED")' in src, \
         "a fresh breach from RESOLVED must restart the sustain timer, like INACTIVE"
+
+
+def test_resolve_hysteresis_debounces_flap():
+    """FIRING must NOT clear on the first sub-threshold tick: the resolve is gated by
+    ALERT_RESOLVE_HYSTERESIS_MINUTES, the clear is timed via pending_since (reused while
+    FIRING), and a fresh breach cancels the in-flight clear-timer. Pins the anti-flap fix
+    for bursty per-app scan alerts (fire→resolve every 2 min on all AppID Scan rules)."""
+    src = inspect.getsource(alert_engine._advance_state_machine)
+    assert "ALERT_RESOLVE_HYSTERESIS_MINUTES" in src, \
+        "resolve must be gated by the hysteresis setting, not fire on the first clear tick"
+    assert "do_resolve" in src, "a FIRING rule needs a sustained-clear gate before RESOLVED"
+    assert "state.pending_since = None  # breached again" in src, \
+        "a re-breach while FIRING must cancel the in-flight clear-timer"

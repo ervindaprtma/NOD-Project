@@ -864,6 +864,7 @@ async def _advance_state_machine(
                     state.state = "FIRING"
                     state.last_fired_at = now
                     state.last_notified_at = now
+                    state.pending_since = None  # free the slot: reused as the clear-timer while FIRING
                     _driver = getattr(rule, "_fired_clause", None)
                     db.add(AlertLog(
                         rule_id=rule.id,
@@ -913,6 +914,7 @@ async def _advance_state_machine(
                     )
 
         elif state.state == "FIRING":
+            state.pending_since = None  # breached again → cancel any in-flight resolve clear-timer
             # Per-rule re-notify cadence: None → global default; 0 → notify once (no reminders).
             interval_min = rule.renotify_interval_minutes
             if interval_min is None:
@@ -937,7 +939,23 @@ async def _advance_state_machine(
                     )
 
     else:
-        if state.state in ("FIRING", "PENDING"):
+        # Resolve hysteresis (anti-flap): a FIRING rule doesn't clear on the first
+        # sub-threshold tick — bursty metrics (per-app scan speed) flap fire↔resolve.
+        # Require the clear to hold ALERT_RESOLVE_HYSTERESIS_MINUTES continuously.
+        # pending_since is dormant while FIRING → reuse it as the clear-timer (None →
+        # clear starts this tick). PENDING never fired → resolve at once (no message sent).
+        do_resolve = state.state == "PENDING"
+        if state.state == "FIRING":
+            hysteresis = settings.ALERT_RESOLVE_HYSTERESIS_MINUTES
+            if hysteresis <= 0:
+                do_resolve = True
+            elif state.pending_since is None:
+                state.pending_since = now  # start clear-timer, stay FIRING this tick
+                await db.flush()
+            elif (now - state.pending_since).total_seconds() / 60 >= hysteresis:
+                do_resolve = True
+
+        if do_resolve:
             was_firing = state.state == "FIRING"
             state.state = "RESOLVED"
             state.pending_since = None
