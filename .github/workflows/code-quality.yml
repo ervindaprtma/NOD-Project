@@ -25,7 +25,7 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
-      - run: pip install ruff mypy pip-audit pytest pytest-asyncio --break-system-packages
+      - run: pip install ruff mypy pip-audit --break-system-packages
       - run: ruff check backend/
       - run: mypy backend/app/api/auth.py backend/app/api/alerts.py backend/app/api/config/notifications.py backend/app/core/security.py backend/app/core/limiter.py backend/app/schemas/common.py backend/app/services/alert_engine.py backend/app/services/notifiers.py backend/app/opensearch/query.py backend/app/opensearch/client.py backend/app/opensearch/traffic_flow.py backend/app/opensearch/ipsec.py backend/app/opensearch/sslvpn.py
       - run: pip-audit -r backend/requirements.txt
@@ -42,15 +42,8 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://nod_user:ci@localhost:5432/nod_db
-      # §9.10: only the pure tests (no DB, no OS) run in this CI lane. The
-      # 4 integration stubs are @pytest.mark.skip'd with TODOs; they
-      # need a test DB + mocked OpenSearch, which the test runner
-      # doesn't have here.
-      # Paths are relative to working-directory: backend — the `backend/` prefix made
-      # this resolve to backend/backend/tests and exit 4. Never caught because the
-      # step sat behind the failing mypy.
-      - run: pytest tests/test_secret_roundtrip.py tests/test_severity_gating.py -v
-        working-directory: backend
+      # NOTE: the backend/tests suite is kept local-only (gitignored, not in the repo),
+      # so no pytest step runs here. Run it locally before pushing.
   frontend:
     runs-on: ubuntu-latest
     steps:

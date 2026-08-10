@@ -288,17 +288,23 @@ docker compose restart nginx
 
 ## Development
 
-CI (`.github/workflows/code-quality.yml`, on every PR) runs exactly these — run them
-before pushing:
+Run these before pushing. Most are enforced by CI (`.github/workflows/code-quality.yml`,
+on every PR) — **except `pytest`, which is NOT.** The `backend/tests` suite is kept
+local-only (gitignored, not in the repo), so CI cannot catch a logic regression that
+lint/types miss (e.g. a `None` flowing through an untyped dict). **Always run the tests
+yourself before pushing** — that's now the only gate on runtime-logic bugs.
 
 ```bash
-# Backend
+# Backend — CI-enforced
 ruff check backend/
+mypy backend/app/...                    # the fixed file list in code-quality.yml
 pip-audit -r backend/requirements.txt
-cd backend && pytest tests/ -q          # pytest.ini puts backend/ on sys.path
 cd backend && alembic check             # schema matches models? See Database Migration
 
-# Frontend
+# Backend tests — LOCAL ONLY (not in CI). Run before EVERY push:
+cd backend && pytest tests/ -q          # pytest.ini puts backend/ on sys.path
+
+# Frontend — CI-enforced
 cd frontend && npx tsc --noEmit && npm audit --audit-level=high
 ```
 
