@@ -588,7 +588,10 @@ async def test_alert_rule(
                     continue
                 cond = clause.get("condition", ">")
                 thresh = float(clause.get("threshold_value", 0.0) or 0.0)
-                window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
+                # `or` (not a .get default): a clause with evaluation_window_minutes:null returns
+                # None from .get(key, default) → use the rule window. Matches the engine's fix;
+                # _run_group_query also backstops null, but this keeps the Test on the real window.
+                window = clause.get("evaluation_window_minutes") or rule.evaluation_window_minutes
                 tkey = clause.get("target_key")
                 agg = clause.get("aggregation", "avg")
                 gr = await _run_group_query(ds, rule.site_name, window)
