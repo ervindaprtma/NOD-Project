@@ -236,6 +236,15 @@ async def _run_group_query(
     outage, and any already-FIRING rule sees 0, fails its condition, and reports a
     false all-clear. So a degraded read must be "unknown", never "zero".
     """
+    # Defensive backstop: a null/zero window must never crash the whole eval cycle — the group
+    # pre-fetch runs OUTSIDE the per-rule try/except, so one bad rule would blind the entire
+    # engine. Fall back to 5min and let the rule evaluate rather than killing every alert.
+    if not window_minutes:
+        logger.warning(
+            "group query got null/zero window (data_source=%s site=%s) — defaulting to 5min",
+            data_source, site_name,
+        )
+        window_minutes = 5
     now_ms = int(_time.time() * 1000)
     window_ms = window_minutes * 60 * 1000
     gte_ms = now_ms - window_ms
@@ -1118,7 +1127,9 @@ async def _evaluate_composite_rule(
         mf = mf_raw
         cond = clause.get("condition", ">")
         thresh = float(clause.get("threshold_value", 0.0) or 0.0)
-        window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
+        # `.get(key, default)` only falls back when the key is ABSENT — a clause storing
+        # evaluation_window_minutes:null returns None, so use `or` to fall back to the rule window.
+        window = clause.get("evaluation_window_minutes") or rule.evaluation_window_minutes
         target_key = clause.get("target_key")
         aggregation = clause.get("aggregation", "avg")
 
@@ -2087,7 +2098,9 @@ async def _run_evaluation_cycle() -> None:
                     ds = clause.get("data_source")
                     if not ds:
                         continue
-                    window = clause.get("evaluation_window_minutes", rule.evaluation_window_minutes)
+                    # `or` (not a .get default): a clause with evaluation_window_minutes:null must
+                    # fall back to the rule window, else None reaches _run_group_query → cycle crash.
+                    window = clause.get("evaluation_window_minutes") or rule.evaluation_window_minutes
                     groups.setdefault((ds, rule.site_name, window, None), [])
 
             group_cache: dict[tuple, float | list | dict | None] = {}

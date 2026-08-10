@@ -121,6 +121,19 @@ def test_resolved_rearms_on_new_breach():
         "a fresh breach from RESOLVED must restart the sustain timer, like INACTIVE"
 
 
+def test_null_clause_window_cannot_crash_eval_cycle():
+    """A composite clause with evaluation_window_minutes:null must fall back to the rule window
+    via `or` (a `.get(key, default)` keeps an explicit null), and _run_group_query must backstop
+    a null/zero window — else None reaches `window * 60 * 1000` and the cycle-level group pre-fetch
+    (outside the per-rule try/except) crashes the WHOLE tick with 'NoneType * int'."""
+    grp = inspect.getsource(alert_engine._run_group_query)
+    assert "if not window_minutes:" in grp, \
+        "_run_group_query must backstop a null/zero window before multiplying it"
+    comp = inspect.getsource(alert_engine._evaluate_composite_rule)
+    assert 'clause.get("evaluation_window_minutes") or rule.evaluation_window_minutes' in comp, \
+        "clause window must use `or` fallback, not a `.get(key, default)` that keeps an explicit null"
+
+
 def test_resolve_hysteresis_debounces_flap():
     """FIRING must NOT clear on the first sub-threshold tick: the resolve is gated by the
     rule's own sustained_for_minutes (symmetric fire/resolve), the clear is timed via
