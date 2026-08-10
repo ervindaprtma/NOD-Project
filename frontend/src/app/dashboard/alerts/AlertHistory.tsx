@@ -20,7 +20,16 @@ interface LogRow {
   fired_at: string;
   resolved_at: string | null;
   event_code: string | null;
+  event_type: string | null;
 }
+
+// Point-event labels for the State column (VPN session / device reboot). Threshold
+// rules leave event_type null and fall back to the Firing/Resolved logic below.
+const EVENT_LABEL: Record<string, { text: string; cls: string }> = {
+  connected: { text: "🟢 Connected", cls: "text-emerald-600" },
+  disconnected: { text: "⚪ Disconnected", cls: "text-slate-500" },
+  rebooted: { text: "🔁 Rebooted", cls: "text-amber-600" },
+};
 
 interface LogDetail extends LogRow {
   rule_snapshot: Record<string, any>;
@@ -75,6 +84,9 @@ export function AlertHistory({ ruleId }: { ruleId?: string }) {
           <option value="all">All states</option>
           <option value="firing">Firing</option>
           <option value="resolved">Resolved</option>
+          <option value="connected">VPN Connected</option>
+          <option value="disconnected">VPN Disconnected</option>
+          <option value="rebooted">Rebooted</option>
         </select>
         <select value={severity} onChange={(e) => { setSeverity(e.target.value); reset(); }}
           className="px-2.5 py-1.5 text-sm border rounded-md bg-background">
@@ -124,7 +136,11 @@ export function AlertHistory({ ruleId }: { ruleId?: string }) {
                       </td>
                       <td className="py-2.5 px-3 text-xs font-mono whitespace-nowrap">{wib(log.fired_at)}</td>
                       <td className="py-2.5 px-3 text-xs">
-                        {log.resolved_at
+                        {log.event_type
+                          ? <span className={EVENT_LABEL[log.event_type]?.cls || "text-muted-foreground"}>
+                              {EVENT_LABEL[log.event_type]?.text || log.event_type}
+                            </span>
+                          : log.resolved_at
                           ? <span className="text-emerald-600">🟢 Resolved ({duration(log.fired_at, log.resolved_at)})</span>
                           : <span className="text-red-600">🔴 Firing</span>}
                       </td>
@@ -178,7 +194,9 @@ function HistoryDetail({ id }: { id: string }) {
         {d.resolved_at && <div><span className="text-muted-foreground">Duration</span>: {duration(d.fired_at, d.resolved_at)}</div>}
       </div>
 
-      {/* Per-metric detail (was → now) */}
+      {/* Per-metric detail (was → now) — threshold rules only; point events (VPN
+          session / reboot) carry their full detail in the Telegram body below. */}
+      {!d.event_type && (
       <div>
         <div className="font-semibold mb-1">Metrics</div>
         <table className="w-full text-[11px] border rounded">
@@ -204,11 +222,13 @@ function HistoryDetail({ id }: { id: string }) {
           </tbody>
         </table>
       </div>
+      )}
 
-      {/* Telegram content sent */}
+      {/* Telegram content sent — keyed by whatever event(s) this row recorded:
+          firing/resolved for threshold rules, or the point-event name. */}
       <div className="space-y-2">
         <div className="font-semibold">📨 Sent to Telegram</div>
-        {["firing", "resolved"].map((k) => {
+        {Object.keys(payloads).map((k) => {
           const p = payloads[k];
           if (!p) return null;
           return (
@@ -226,7 +246,7 @@ function HistoryDetail({ id }: { id: string }) {
             </div>
           );
         })}
-        {!payloads.firing && !payloads.resolved && (
+        {Object.keys(payloads).length === 0 && (
           <p className="text-muted-foreground">No delivery record (older event, or notification not yet sent).</p>
         )}
         <a href={`/dashboard/system-logs?category=notify`}

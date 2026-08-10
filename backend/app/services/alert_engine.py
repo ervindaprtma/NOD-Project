@@ -1713,6 +1713,40 @@ def _fmt_duration(start_ms: int | None, end_ms: int | None) -> str:
     return (f"{h}h {m}m" if h else f"{m}m {s}s" if m else f"{s}s")
 
 
+def _ms_to_dt(ms: int | float | None) -> datetime:
+    """Epoch-ms → aware UTC datetime, defaulting to now on a missing stamp."""
+    return datetime.fromtimestamp(int(ms or _time.time() * 1000) / 1000, tz=timezone.utc)
+
+
+async def _log_event_history(
+    rule: AlertRule, event_type: str, fired_at: datetime, metric_value: float,
+    snapshot: dict, subject: str, body: str,
+    sent_results: dict[str, bool], channels: list[str],
+) -> None:
+    """Write ONE Alert History row for a point-in-time event (VPN connect/disconnect,
+    device reboot). Unlike threshold rules these never resolve — the row IS the event, so
+    resolved_at stays NULL and event_type carries the label. sent_payloads is keyed by the
+    event so the detail drawer shows the exact message that went out."""
+    try:
+        code_key = snapshot.get("_code_key") if snapshot else None
+        code = _event_code(rule.id, fired_at, metric_value, {"metric_field": code_key})
+        ok = all(sent_results.values()) if sent_results else False
+        payload = {"channels": sorted(channels), "subject": subject, "body": body,
+                   "ok": ok, "results": sent_results,
+                   "sent_at": datetime.now(_WIB).strftime("%d %b %Y %H:%M:%S WIB")}
+        async with AsyncSessionLocal() as db:
+            db.add(AlertLog(
+                rule_id=rule.id, rule_name=rule.name, severity=rule.severity,
+                event_type=event_type, metric_value_at_firing=float(metric_value),
+                notified_channels=channels, fired_at=fired_at,
+                event_code=code, rule_snapshot=snapshot or {},
+                sent_payloads={event_type: payload},
+            ))
+            await db.commit()
+    except Exception as e:
+        logger.warning("event history write failed (%s/%s): %s", rule.id, event_type, e)
+
+
 async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict) -> None:
     """Render + send ONE message for a single connect/disconnect event."""
     vpn_type = "SSL VPN" if rule.data_source == "vpn_ssl" else "IPsec VPN"
@@ -1773,6 +1807,7 @@ async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict
                 f"🌐 <b>Remote IP:</b> {r_e} · <b>Active IP:</b> {a_e}{tail}")
     parse_mode = "HTML" if "<b>" in body else None
     subject = f"VPN {ctx['event_label']}: {user}"
+    sent_results: dict[str, bool] = {}
     try:
         from app.services.notifier_helper import send_alert, load_channel_configs
         db_configs = await load_channel_configs()
@@ -1782,10 +1817,22 @@ async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict
                 continue
             try:
                 await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+                sent_results[channel] = True
             except Exception as e:
+                sent_results[channel] = False
                 logger.error("Session notify failed for %s: %s", channel, e)
     except Exception as e:
         logger.error("Session notify error: %s", e)
+
+    # Record in Alert History — a connect/disconnect is its own terminal event row.
+    fired_ms = started_ms if connected else (ended_ms or int(_time.time() * 1000))
+    snap = {"site_name": rule.site_name, "vpn_type": vpn_type, "vpn_user": user,
+            "remote_ip": ctx["remote_ip"], "active_ip": ctx["active_ip"], "device": ctx["device"],
+            "started_at": ctx["started_at"], "ended_at": ctx["ended_at"], "duration": ctx["duration"],
+            "bytes_in_h": ctx["bytes_in_h"], "bytes_out_h": ctx["bytes_out_h"],
+            "bytes_total_h": ctx["bytes_total_h"], "_code_key": f"vpn:{user}"}
+    await _log_event_history(rule, event, _ms_to_dt(fired_ms), float(b_in + b_out), snap,
+                             subject, body, sent_results, list(rule.notify_channels))
 
 
 def _diff_sessions(
@@ -1996,6 +2043,7 @@ async def _send_reboot_event(rule: AlertRule, device_key: str, info: dict) -> No
                 f"⬆️ <b>Back up · new uptime:</b> {ctx['new_uptime']} (was {ctx['prev_uptime']})")
     parse_mode = "HTML" if "<b>" in body else None
     subject = f"Device Rebooted: {hostname}"
+    sent_results: dict[str, bool] = {}
     try:
         from app.services.notifier_helper import send_alert, load_channel_configs
         db_configs = await load_channel_configs()
@@ -2005,10 +2053,20 @@ async def _send_reboot_event(rule: AlertRule, device_key: str, info: dict) -> No
                 continue
             try:
                 await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+                sent_results[channel] = True
             except Exception as e:
+                sent_results[channel] = False
                 logger.error("Reboot notify failed for %s: %s", channel, e)
     except Exception as e:
         logger.error("Reboot notify error: %s", e)
+
+    # Record in Alert History — a reboot is its own terminal event row.
+    snap = {"site_name": rule.site_name, "device": hostname, "device_ip": str(device_key),
+            "reboot_at": ctx["reboot_at"], "downtime": ctx["downtime"],
+            "new_uptime": ctx["new_uptime"], "prev_uptime": ctx["prev_uptime"],
+            "_code_key": f"reboot:{device_key}"}
+    await _log_event_history(rule, "rebooted", _ms_to_dt(info.get("reboot_at")), new_up, snap,
+                             subject, body, sent_results, list(rule.notify_channels))
 
 
 async def _evaluate_reboot_rule(rule: AlertRule, db: AsyncSession) -> None:

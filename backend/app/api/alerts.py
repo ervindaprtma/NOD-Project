@@ -758,10 +758,15 @@ async def get_alert_logs(
         conds.append(or_(AlertLog.rule_name.ilike(like), AlertLog.event_code.ilike(like)))
     if rule_id:
         conds.append(AlertLog.rule_id == rule_id)
+    # Threshold rows (event_type NULL) use the firing/resolved lifecycle; point events
+    # (connect/disconnect/reboot) are filtered by their own event_type so "Firing" never
+    # sweeps up an unresolved session-connect row.
     if status_ == "firing":
-        conds.append(AlertLog.resolved_at.is_(None))
+        conds.append(and_(AlertLog.resolved_at.is_(None), AlertLog.event_type.is_(None)))
     elif status_ == "resolved":
-        conds.append(AlertLog.resolved_at.is_not(None))
+        conds.append(and_(AlertLog.resolved_at.is_not(None), AlertLog.event_type.is_(None)))
+    elif status_ in ("connected", "disconnected", "rebooted"):
+        conds.append(AlertLog.event_type == status_)
     if severity:
         conds.append(AlertLog.severity.in_([s.strip() for s in severity.split(",") if s.strip()]))
     if from_:
