@@ -17,7 +17,7 @@ from app.opensearch._common import (
     resolve_top_services, service_histogram_aggs, collapse_chart_bucket, _bool_query,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
-from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
+from app.opensearch.query import safe_search, composite_all_buckets, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
 
 SITE_SOURCE_IPS: dict[str, str] = {
     "Site_FGT-DC": "10.80.150.1",
@@ -326,40 +326,30 @@ async def sankey_data(
     if direction == "download":
         # Download (VIP->customer): Ingress -> Service -> Egress -> AS Org
         sources = [
-            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias", "missing_bucket": True}}},
             {"service_app": {"terms": {"field": "flow.application.name", "missing_bucket": True}}},
             {"service_port": {"terms": {"field": "flow.server.l4.port.id", "missing_bucket": True}}},
-            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
-            {"as_org": {"terms": {"field": "flow.client.as.org"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias", "missing_bucket": True}}},
+            {"as_org": {"terms": {"field": "flow.client.as.org", "missing_bucket": True}}},
         ]
         level_names = ["ingress", "service", "egress", "as_org"]
     else:
         # Upload (customer->VIP) and empty: AS Org -> Ingress -> Service -> Egress
         sources = [
-            {"as_org": {"terms": {"field": "flow.client.as.org"}}},
-            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
+            {"as_org": {"terms": {"field": "flow.client.as.org", "missing_bucket": True}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias", "missing_bucket": True}}},
             {"service_app": {"terms": {"field": "flow.application.name", "missing_bucket": True}}},
             {"service_port": {"terms": {"field": "flow.server.l4.port.id", "missing_bucket": True}}},
-            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias", "missing_bucket": True}}},
         ]
         level_names = ["as_org", "ingress", "service", "egress"]
 
-    body = {
-        "size": 0,
-        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, **(exclude or {}))),
-        "aggs": {
-            "sankey_flow": {
-                "composite": {
-                    "size": 1000,
-                    "sources": sources,
-                },
-                "aggs": _bytes_sum(),
-            }
-        },
-    }
-
-    resp = await safe_search(client, FLOW_INDEX, body)
-    buckets = resp.get("aggregations", {}).get("sankey_flow", {}).get("buckets", [])
+    # Paginate the composite so the top-byte flows are never lost to a 1000-bucket key-order
+    # slice (BUG-1). ponytail: service_port + as_org make this composite very high cardinality,
+    # so coverage stays bounded at the helper's max_pages ceiling (top flows by key). Upgrade
+    # path = nested terms-by-bytes. See Documentation/SANKEY_BUGS_ANALYSIS.md.
+    q = _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, **(exclude or {})))
+    buckets = await composite_all_buckets(client, FLOW_INDEX, q, sources, _bytes_sum())
 
     # direction selects the byte counter: upload=client.bytes, download=server.bytes,
     # empty=total. Matches traffic_internal.sankey_data.
@@ -370,12 +360,13 @@ async def sankey_data(
         bytes_val = int(bucket[metric]["value"] or 0)
         if bytes_val == 0:
             continue
-        row = {}
+        row: dict = {}
         for name in level_names:
             if name == "service":
                 row["service"] = resolve_service(key.get("service_app"), key.get("service_port"))
             else:
-                row[name] = key.get(name, "Unknown")
+                # missing_bucket keys are present-with-None → `or "Unknown"`, not a default arg.
+                row[name] = key.get(name) or "Unknown"
         row["bytes"] = bytes_val
         rows.append(row)
 
