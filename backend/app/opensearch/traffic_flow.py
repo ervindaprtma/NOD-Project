@@ -16,7 +16,7 @@ from app.opensearch._common import (
     _bool_query, _bytes3,
 )
 from app.opensearch.client import get_dc_client, get_drc_client
-from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
+from app.opensearch.query import safe_search, composite_all_buckets, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
 
 
 # ── Site config ──────────────────────────────────────────────────
@@ -364,57 +364,42 @@ async def sankey_data(
     if direction == "download":
         # Download: AS Org → Ingress → Apps → Egress
         sources = [
-            {"as_org": {"terms": {"field": "flow.server.as.org"}}},
-            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
-            {"app": {"terms": {"field": "flow.application.name"}}},
-            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
+            {"as_org": {"terms": {"field": "flow.server.as.org", "missing_bucket": True}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias", "missing_bucket": True}}},
+            {"app": {"terms": {"field": "flow.application.name", "missing_bucket": True}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias", "missing_bucket": True}}},
         ]
         level_names = ["as_org", "ingress", "app", "egress"]
     else:
         # Upload (and empty): Ingress → Apps → Egress → AS Org
         sources = [
-            {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
-            {"app": {"terms": {"field": "flow.application.name"}}},
-            {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
-            {"as_org": {"terms": {"field": "flow.server.as.org"}}},
+            {"ingress": {"terms": {"field": "flow.in.netif.alias", "missing_bucket": True}}},
+            {"app": {"terms": {"field": "flow.application.name", "missing_bucket": True}}},
+            {"egress": {"terms": {"field": "flow.out.netif.alias", "missing_bucket": True}}},
+            {"as_org": {"terms": {"field": "flow.server.as.org", "missing_bucket": True}}},
         ]
         level_names = ["ingress", "app", "egress", "as_org"]
 
-    body = {
-        "size": 0,
-        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, **(exclude or {}))),
-        "aggs": {
-            "sankey_flow": {
-                "composite": {
-                    "size": 1000,
-                    "sources": sources,
-                },
-                "aggs": {
-                    "upload_bytes": {"sum": {"field": "flow.client.bytes", "missing": 0}},
-                    "download_bytes": {"sum": {"field": "flow.server.bytes", "missing": 0}}
-                }
-            }
-        },
-    }
-
-    resp = await safe_search(client, FLOW_INDEX, body)
-    buckets = resp.get("aggregations", {}).get("sankey_flow", {}).get("buckets", [])
+    # Paginate the composite so the top-byte flows are never lost to a 1000-bucket
+    # key-order slice (BUG-1); _bytes_sum() gives a server-side total_bytes so the
+    # empty-direction case needs no special branch. See Documentation/SANKEY_BUGS_ANALYSIS.md.
+    q = _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, **(exclude or {})))
+    buckets = await composite_all_buckets(client, FLOW_INDEX, q, sources, _bytes_sum())
 
     # direction selects the byte counter: upload=client.bytes, download=server.bytes,
-    # empty=both (total). Matches traffic_internal.sankey_data.
-    metric = {"upload": "upload_bytes", "download": "download_bytes"}.get(direction)
+    # empty=total. Matches traffic_internal.sankey_data.
+    metric = {"upload": "upload_bytes", "download": "download_bytes"}.get(direction, "total_bytes")
     rows: list[dict] = []
     for bucket in buckets:
         key = bucket["key"]
-        if metric:
-            bytes_val = int(bucket[metric]["value"] or 0)
-        else:
-            bytes_val = int(bucket["upload_bytes"]["value"] or 0) + int(bucket["download_bytes"]["value"] or 0)
+        bytes_val = int(bucket[metric]["value"] or 0)
         if bytes_val == 0:
             continue
-        row = {}
-        for i, name in enumerate(level_names):
-            row[name] = key.get(name, "Unknown")
+        # missing_bucket keys are PRESENT with value None → `.get(name) or "Unknown"`,
+        # not `.get(name, "Unknown")` (which would keep None and label a node "None").
+        row: dict = {}
+        for name in level_names:
+            row[name] = key.get(name) or "Unknown"
         row["bytes"] = bytes_val
         rows.append(row)
 

@@ -17,7 +17,7 @@ from app.opensearch._common import (
     service_terms_agg, collapse_service_buckets, resolve_service,
     resolve_top_services, service_histogram_aggs, collapse_chart_bucket, _bool_query,
 )
-from app.opensearch.query import safe_search, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
+from app.opensearch.query import safe_search, composite_all_buckets, drop_partial_tail, spread_long_sessions, log_zero_bucket_anomaly
 
 SITE_FLOW_MAP: dict[str, tuple[str, str]] = {
     "Site_FGT-DC": ("10.80.150.1", "dc"),
@@ -311,37 +311,17 @@ async def sankey_data(
         {"egress": {"terms": {"field": "flow.out.netif.alias"}}},
     ]
 
-    # Paginate composite to get all unique (ingress, service, egress) combinations.
-    # Ponytail: max 5 pages × 2000 = 10,000 combos; covers DC's 10K+ with headroom.
-    all_buckets: list[dict] = []
-    after_key = None
-    for _ in range(5):
-        body = {
-            "size": 0,
-            "query": _bool_query(filters, filters_excl),
-            "aggs": {
-                "sankey_flow": {
-                    "composite": {
-                        "size": 2000,
-                        "sources": composite_sources,
-                        **({"after": after_key} if after_key else {}),
-                    },
-                    "aggs": _bytes_sum(),
-                }
-            },
-        }
-        resp = await safe_search(client, FLOW_INDEX, body)
-        agg = resp.get("aggregations", {}).get("sankey_flow", {})
-        all_buckets.extend(agg.get("buckets", []))
-        after_key = agg.get("after_key")
-        if not after_key:
-            break
+    # Paginate the composite so the top-byte flows are never lost to a key-order slice
+    # (shared helper — same fix as flow/inbound). ponytail: service_port makes this composite
+    # exceed 80k combos, so coverage stays bounded at the helper's max_pages ceiling (top flows
+    # by key). Upgrade path = nested terms-by-bytes. See Documentation/SANKEY_BUGS_ANALYSIS.md.
+    buckets = await composite_all_buckets(client, FLOW_INDEX, _bool_query(filters, filters_excl), composite_sources, _bytes_sum())
 
     rows: list[dict] = []
-    for bucket in all_buckets:
+    for bucket in buckets:
         key = bucket["key"]
         metric = {"upload": "upload_bytes", "download": "download_bytes"}.get(direction, "total_bytes")
-        bytes_val = int(bucket[metric]["value"])
+        bytes_val = int(bucket[metric]["value"] or 0)
         if bytes_val == 0:
             continue
         rows.append({

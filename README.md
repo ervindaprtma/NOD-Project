@@ -20,7 +20,7 @@ Browser → Nginx (HTTPS:443) → Frontend (Next.js:3000)
 
 - Docker Engine ≥ 24.x
 - Docker Compose v2
-- Network access to OpenSearch clusters (DC: 10.80.150.108, DRC: 10.90.150.108)
+- Network access to OpenSearch clusters (DC: opensearch-dc.internal, DRC: opensearch-drc.internal)
 - Port 80/443 available on host
 
 ### First-Time Setup
@@ -52,6 +52,22 @@ docker compose ps
 docker compose exec backend python scripts/seed_superadmin.py
 ```
 
+### Deploying Updates (existing server)
+
+The backend source is **baked into its image** and runs `alembic upgrade head` itself on
+start, so shipping a new version is one command from the repo root:
+
+```bash
+git pull
+docker compose up -d --build      # rebuild changed images, recreate containers, run pending migrations
+docker compose ps                 # wait for all services 'healthy'
+```
+
+- Code changes (backend or frontend) require `--build` — the source is baked, not bind-mounted.
+- **Roll back:** `git checkout <previous-tag-or-commit>` then re-run the same command.
+- Only `.env`, `nginx/`, and `nginx/certs/` are host-local; everything else travels with
+  `git clone` (see [Migrate to a New VM](#migrate-to-a-new-vm--host-keep-credentials--sessions--logs)).
+
 ### Environment Variables (.env)
 
 **Required:**
@@ -61,9 +77,9 @@ docker compose exec backend python scripts/seed_superadmin.py
 | `JWT_SECRET` | JWT signing key (≥32 chars) | `openssl rand -base64 32` |
 | `POSTGRES_PASSWORD` | Database password | `your_password_here` |
 | `DATABASE_URL` | PostgreSQL connection | `postgresql+asyncpg://nod_user:pass@db:5432/nod_db` |
-| `OPENSEARCH_DC_URL` | DC OpenSearch (Site_FGT-DC) | `https://10.80.150.108:9200` |
-| `OPENSEARCH_DRC_URL` | DRC OpenSearch (Site_FGT-DRC + Site_FGT_Office) | `https://10.90.150.108:9200` |
-| `OPENSEARCH_IPSEC_URL` | IPsec OpenSearch | `https://10.90.150.108:9200` |
+| `OPENSEARCH_DC_URL` | DC OpenSearch (Site_FGT-DC) | `https://opensearch-dc.internal:9200` |
+| `OPENSEARCH_DRC_URL` | DRC OpenSearch (Site_FGT-DRC + Site_FGT_Office) | `https://opensearch-drc.internal:9200` |
+| `OPENSEARCH_IPSEC_URL` | IPsec OpenSearch | `https://opensearch-drc.internal:9200` |
 
 **Optional (Notifications):**
 
@@ -95,14 +111,102 @@ Retention is pruned daily by a scheduled job. Only INFO grows fast; if disk is a
 concern on a busy site, set `SYSTEM_LOG_INFO_RETENTION_DAYS=3` or
 `SYSTEM_LOG_CAPTURE_INFO_REQUESTS=false`.
 
+#### Optional (Alert engine)
+
+All optional; defaults are sensible. Tune only to change how fast rules fire/resolve/re-notify.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ALERT_POLL_INTERVAL_SECONDS` | `60` | Scheduler tick — how often every rule is evaluated. |
+| `ALERT_RENOTIFY_INTERVAL_MINUTES` | `30` | While FIRING, re-send a reminder this often (per-rule override wins; `0` = notify once). |
+
+**Resolve hysteresis (anti-flap)** is not an env var — it mirrors each rule's **Sustain**
+(`sustained_for_minutes`, set per-rule in the Alert Rules menu). A rule that must breach for
+N minutes to FIRE must also read clear for N minutes to RESOLVE (symmetric fire-slow/resolve-slow),
+so bursty metrics (per-app AppID Scan speed) can't flap fire↔resolve. `Sustain = 0` → resolve on
+the first clear tick.
+
 ### Access
 
 | URL | Description |
 |-----|-------------|
-| `https://nod.esign.id/` | Dashboard (auto-redirect to login) |
-| `https://nod.esign.id/login` | Login page |
-| `https://nod.esign.id/api/docs` | Swagger UI |
-| `https://nod.esign.id/health` | Health check |
+| `https://your-domain.example/` | Dashboard (auto-redirect to login) |
+| `https://your-domain.example/login` | Login page |
+| `https://your-domain.example/api/docs` | Swagger UI |
+| `https://your-domain.example/health` | Health check |
+
+---
+
+## Features by Page
+
+Monitoring spans three sites (**DC**, **DRC**, **Office**) sourced from FortiGate flow/metric
+data in OpenSearch. Every page shares a common shell: a **time-range picker** (15m/30m/1h/2h/4h
+presets + a Custom datetime drawer) and an **auto-refresh** selector (Off/15s/30s/60s). Traffic,
+SD-WAN, and Resources charts support **drag-to-zoom** (brush a region, then "Reset zoom").
+Chart primitives are area/line charts, hand-rolled SVG stacked bars, d3-sankey diagrams,
+ranked-bar/KPI cards, and HTML tables. Min role in the table is the nav/server-enforced floor
+(see [Roles & Access](#roles--access-rbac)).
+
+| Page | What it shows | Visual | Min role |
+|------|---------------|--------|----------|
+| **Overview** | NOC landing page — KPIs, device health, SD-WAN link state, site availability, WAN/MPLS bandwidth, top talkers across all sites | Clickable card grid: 5 KPI cards (SSL/IPsec users, device count, HA, active Alerts), per-site Device Health (CPU/mem gauges, sessions, HA pills), SD-WAN Link Status, Site Availability (own 24h/7d/30d toggle), WAN/MPLS bandwidth, ranked top-talker rows — every card deep-links to detail | viewer |
+| **Traffic Internet** | Per-site outbound internet analytics — top apps/categories/AS/countries/clients/servers, interface & protocol mix | **Overview** + **Sankey Diagram** tabs; multi-field filter drawer (app, IP, protocol, port, interface, include/exclude chips). Overview: ranked cards + Total/App throughput charts + flow-records table. Sankey: Upload & Download d3-sankey | viewer |
+| **Traffic Inbound** | Per-site inbound VIP traffic to published services — top services, client AS/countries, IPs, interfaces | Same shell as Traffic Internet — **Overview** + **Sankey** tabs, ranked cards, throughput charts, flow table | viewer |
+| **Traffic Internal** | East-west (LAN) traffic — intra-LAN & inter-site flows | **Overview** + **Sankey** tabs, plus a Traffic-Path selector (All / Intra-LAN / Inter-Site); ranked cards, throughput charts, flow table | viewer |
+| **SD-WAN SLA** | Per-link SLA — status + latency/jitter/packet-loss time-series with per-link summary KPIs | Single view; link filter bar (WAN/MPLS/individual). Link Status table, SLA Summary KPI cards, and Latency/Jitter/Loss area charts (each with "View Full" expand) | viewer |
+| **Resources** | FortiGate device health — CPU/mem/sessions, HA cluster, interface bandwidth, uptime SLA | **Resource Usage** + **Interface Bandwidth** + **Availability** tabs. Usage: HA panel + per-device timeline charts. Bandwidth: per-interface In/Out cards. Availability: own SLA window, SLA table, reboot history, dual charts | viewer |
+| **VPN Sessions** | SSL & IPsec VPN — active users per protocol + reconstructed session history | SSL VPN table + IPsec VPN table (active-count badges, "View Full"), and a Session History table with client-side filters (user/type/device) | viewer |
+| **Raw Data** | Raw OpenSearch flow-record browser — paginated, filterable, exportable | Data table; site + traffic-path selectors, column-visibility & page-size controls, filter drawer, CSV export, cursor pagination (cap 10k) | **operator** |
+| **Alerts** | Alert rule engine management + firing/resolved history (live SSE indicator) | **Alert Rules** + **Alert History** tabs. Rules: template gallery, engine-health line, rules table (toggle/test/edit/delete), Create/Edit modal. History: searchable event table with per-clause fire/resolve snapshots | view: viewer · rules: **admin** |
+| **Reports** | On-demand report generation (10 types) & distribution | Generate form (type picker R-01…R-10, site checkboxes, PDF/HTML/DOCX, range, type-specific options) + Report History table (download / preview / distribute modal) | **operator** |
+| **Users** | User CRUD + active-session administration | Users table with role badges + Create/Edit/Delete modal; Active Sessions panel | **superadmin** |
+| **Activity Logs** | User-action audit trail (logins, user/rule CRUD, report actions) | Single table (time, action, user, role, source IP, details JSON) with action filter; auto-refresh 30s | **superadmin** |
+| **System Logs** | Backend+frontend log console (INFO/WARNING/ERROR/ALERT) | Log table; multi-select level filters with facet counts, source/category/time/user/search filters, inline row expansion, CSV export, live refresh | **admin** |
+| **Settings** | Per-user preferences + admin messaging/maintenance config | Tabs: Change Password, Profile, Appearance (theme); **admin-only** tabs: Notification Channels, Message Templates, Maintenance Windows | viewer · config: **admin** |
+
+---
+
+## Alerting
+
+A background engine evaluates every enabled rule on a **60-second tick** through a state machine:
+`INACTIVE → PENDING → FIRING → RESOLVED`. A rule's **Sustain** debounces firing (breach must hold
+N minutes) and now symmetrically debounces resolving (clear must hold the same N minutes) so bursty
+metrics can't flap. Reads that hit degraded OpenSearch are **held**, not falsely resolved.
+
+- **Rule kinds:** *single-metric* (one data source + metric + aggregation + condition + threshold)
+  and *composite* (multiple clauses combined with **any** = OR / **all** = AND logic).
+- **Data sources:** `appid_flow` (application traffic scan), `sdwan_sla` (latency / jitter / packet
+  loss / link status), `interface_stats` (bandwidth / utilization / oper-status), `device_uptime`,
+  `ha_resource` (CPU / memory / sessions), `vpn_ssl`, `vpn_ipsec`.
+- **Severity:** INFO · WARNING · CRITICAL. **Aggregations:** avg / max / min / sum / count.
+- **Notifications:** Telegram and Email, per-rule channels, with a configurable re-notify cadence
+  (global default, per-rule override, or notify-once). Redacted — credentials are never sent.
+- **History:** every fire and resolve is recorded with a stable **event code**, full per-metric
+  *was → now* detail, and the exact message payload sent, searchable from the Alert History tab
+  (readable by all roles). Rule config lives with admins; see below.
+
+---
+
+## Roles & Access (RBAC)
+
+Four roles form a strict hierarchy — each inherits everything below it:
+
+**`viewer` (0) → `operator` (1) → `admin` (2) → `superadmin` (3)**
+
+Enforcement is **server-side** on every endpoint via `require_role(...)` (authoritative); the UI
+additionally hides nav items and gates in-page controls below your role (`hasMinRole`).
+
+| Role | Can do |
+|------|--------|
+| **viewer** | Read all monitoring — Overview, Traffic (Internet/Inbound/Internal), SD-WAN SLA, Resources, VPN Sessions; view Alerts + Alert History; own profile, password & theme in Settings |
+| **operator** | *viewer* **+** browse **Raw Data**, generate/download/distribute **Reports**, and instantiate alert rules from templates |
+| **admin** | *operator* **+** full **Alert** rule & test management, **notification channels / message templates / maintenance windows**, and the **System Logs** console |
+| **superadmin** | *admin* **+** **User** management (create/edit/delete, active sessions) and the **Activity Logs** audit trail |
+
+Notable in-page gates: the **Alerts → Rules** tab is admin+ (viewers land on **History**); **Settings**
+notification/template/maintenance tabs are admin-only; **Users** delete is superadmin-only and cannot
+target yourself; **Activity Logs** and **System Logs** return a role-gated "Access Denied" block below
+their required role.
 
 ---
 
@@ -118,13 +222,13 @@ upstream backend_upstream { server backend:8000; }
 
 server {
     listen 80;
-    server_name nod.esign.id;
+    server_name your-domain.example;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl http2;
-    server_name nod.esign.id;
+    server_name your-domain.example;
 
     ssl_certificate /etc/nginx/certs/nod-selfsigned.crt;
     ssl_certificate_key /etc/nginx/certs/nod-selfsigned.key;
@@ -162,22 +266,22 @@ server {
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout nginx/certs/nod-selfsigned.key \
   -out nginx/certs/nod-selfsigned.crt \
-  -subj "/CN=nod.esign.id"
+  -subj "/CN=your-domain.example"
 
 # Option 2: Let's Encrypt (production)
-certbot certonly --webroot -w /usr/share/nginx/html -d nod.esign.id
+certbot certonly --webroot -w /usr/share/nginx/html -d your-domain.example
 # Update nginx.conf with certificate paths, then restart nginx
 docker compose restart nginx
 ```
 
 ### Domain Configuration
 
-1. Create DNS A record: `nod.esign.id` → Nginx server IP
+1. Create DNS A record: `your-domain.example` → Nginx server IP
 2. Ensure Nginx server has ports 80/443 open
 3. Update `.env` with production values:
    ```
-   NEXT_PUBLIC_API_BASE_URL=https://nod.esign.id
-   ALLOWED_ORIGINS=https://nod.esign.id
+   NEXT_PUBLIC_API_BASE_URL=https://your-domain.example
+   ALLOWED_ORIGINS=https://your-domain.example
    ```
 
 ---
@@ -368,11 +472,11 @@ docker run --rm -v network_project_postgres_data:/d -v "$PWD":/b alpine sh -c 'c
 ```
 
 **Notes**
-- Same domain (`nod.esign.id`) **+** same `JWT_SECRET` → active sessions survive
+- Same domain (`your-domain.example`) **+** same `JWT_SECRET` → active sessions survive
   (the refresh cookie still validates). Different domain → users simply re-login;
   no stored data is lost either way.
 - Point DNS at the new host and confirm it can reach the OpenSearch clusters
-  (`10.80.150.108`, `10.90.150.108`) before going live.
+  (`opensearch-dc.internal`, `opensearch-drc.internal`) before going live.
 
 ---
 
@@ -419,7 +523,7 @@ docker compose exec backend grep '"level":"ERROR"' logs/error.log
 docker compose ps
 
 # Backend health endpoint
-curl -k https://nod.esign.id/health
+curl -k https://your-domain.example/health
 
 # Expected response:
 # {"api":"ok","db":"ok","opensearch_dc":"ok","opensearch_drc":"ok","opensearch_ipsec":"ok"}

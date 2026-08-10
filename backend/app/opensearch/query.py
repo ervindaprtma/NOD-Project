@@ -453,3 +453,59 @@ async def safe_search(
     # Defensive fallback — every code path above returns, but mypy doesn't
     # always narrow through for/continue, so this satisfies the type checker.
     return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_error": "unreachable"}
+
+
+async def composite_all_buckets(
+    client: AsyncOpenSearch,
+    index: str,
+    query: dict,
+    sources: list[dict],
+    sub_aggs: dict,
+    page_size: int = 2000,
+    max_pages: int = 10,
+) -> list[dict[str, Any]]:
+    """Drain a composite aggregation via after_key pagination.
+
+    Composite returns buckets in KEY order, not byte order — a single page can miss
+    the highest-volume flows entirely (the Sankey "Office shows 5%" bug). Pages until
+    exhausted or max_pages, then logs (INFO, not silent) if data remains.
+
+    ponytail: max_pages is a deliberate latency ceiling — draining an unbounded composite
+    is O(cardinality). Internet (~9k combos) drains fully; Internal/Inbound include L4
+    service_port and exceed 80k combos, so they stay coverage-bounded at max_pages*page_size
+    by key. Upgrade path: replace the composite with nested terms aggs ordered by bytes
+    (top-N per level directly, one query) — see Documentation/SANKEY_BUGS_ANALYSIS.md.
+    """
+    # ponytail: 10 pages x 2000 = 20k combos; Internet Office measured 8,783 (2026-08).
+    buckets: list[dict[str, Any]] = []
+    after_key: dict | None = None
+    for _ in range(max_pages):
+        body = {
+            "size": 0,
+            "query": query,
+            "aggs": {
+                "page": {
+                    "composite": {
+                        "size": page_size,
+                        "sources": sources,
+                        **({"after": after_key} if after_key else {}),
+                    },
+                    "aggs": sub_aggs,
+                }
+            },
+        }
+        resp = await safe_search(client, index, body)
+        agg = resp.get("aggregations", {}).get("page", {})
+        buckets.extend(agg.get("buckets", []))
+        after_key = agg.get("after_key")
+        if not after_key:
+            break
+    if after_key:
+        # INFO, not WARNING: this is an expected coverage ceiling for high-cardinality
+        # composites (Internal/Inbound with L4 port), not an anomaly — keep it out of the
+        # WARNING-grade System Logs sink while staying discoverable in file/stdout logs.
+        logger.info(
+            "composite pagination bounded at max_pages=%d on %s (%d buckets kept) — coverage capped, top flows by key only",
+            max_pages, index, len(buckets),
+        )
+    return buckets

@@ -864,6 +864,7 @@ async def _advance_state_machine(
                     state.state = "FIRING"
                     state.last_fired_at = now
                     state.last_notified_at = now
+                    state.pending_since = None  # free the slot: reused as the clear-timer while FIRING
                     _driver = getattr(rule, "_fired_clause", None)
                     db.add(AlertLog(
                         rule_id=rule.id,
@@ -913,6 +914,7 @@ async def _advance_state_machine(
                     )
 
         elif state.state == "FIRING":
+            state.pending_since = None  # breached again → cancel any in-flight resolve clear-timer
             # Per-rule re-notify cadence: None → global default; 0 → notify once (no reminders).
             interval_min = rule.renotify_interval_minutes
             if interval_min is None:
@@ -937,7 +939,24 @@ async def _advance_state_machine(
                     )
 
     else:
-        if state.state in ("FIRING", "PENDING"):
+        # Resolve hysteresis (anti-flap) mirrors the fire debounce: a rule that must breach
+        # for sustained_for_minutes to FIRE must also read clear that same duration to RESOLVE
+        # (symmetric fire-slow/resolve-slow). Bursty metrics (per-app scan speed) would
+        # otherwise flap fire↔resolve on the first clear tick. pending_since is dormant while
+        # FIRING → reuse it as the clear-timer (None → clear starts this tick). sustained_for=0
+        # → resolve at once. PENDING never fired → resolve at once too (no message sent).
+        do_resolve = state.state == "PENDING"
+        if state.state == "FIRING":
+            hysteresis = rule.sustained_for_minutes
+            if hysteresis <= 0:
+                do_resolve = True
+            elif state.pending_since is None:
+                state.pending_since = now  # start clear-timer, stay FIRING this tick
+                await db.flush()
+            elif (now - state.pending_since).total_seconds() / 60 >= hysteresis:
+                do_resolve = True
+
+        if do_resolve:
             was_firing = state.state == "FIRING"
             state.state = "RESOLVED"
             state.pending_since = None
