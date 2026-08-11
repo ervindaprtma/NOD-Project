@@ -1718,6 +1718,15 @@ def _ms_to_dt(ms: int | float | None) -> datetime:
     return datetime.fromtimestamp(int(ms or _time.time() * 1000) / 1000, tz=timezone.utc)
 
 
+# System Logs event names for point events, mirroring the threshold path's
+# alert.fired/alert.resolved so every alert kind has an audit row.
+_EVENT_LOG_NAME = {
+    "connected": "vpn.connected",
+    "disconnected": "vpn.disconnected",
+    "rebooted": "device.rebooted",
+}
+
+
 async def _log_event_history(
     rule: AlertRule, event_type: str, fired_at: datetime, metric_value: float,
     snapshot: dict, subject: str, body: str,
@@ -1726,7 +1735,34 @@ async def _log_event_history(
     """Write ONE Alert History row for a point-in-time event (VPN connect/disconnect,
     device reboot). Unlike threshold rules these never resolve — the row IS the event, so
     resolved_at stays NULL and event_type carries the label. sent_payloads is keyed by the
-    event so the detail drawer shows the exact message that went out."""
+    event so the detail drawer shows the exact message that went out.
+
+    Also emits the System Logs audit + per-channel delivery rows that threshold rules get
+    from _advance_state_machine + _flush_batch_notify — session/reboot bypass both, so
+    without this they'd be invisible in System Logs."""
+    # System Logs: audit trail + delivery outcome. Best-effort — never break the send/history.
+    try:
+        from app.services.system_logger import log_event
+        meta = {"event_type": event_type, "site": rule.site_name,
+                "severity": rule.severity, "channels": sorted(channels)}
+        log_event(level="ALERT", category="alert",
+                  event=_EVENT_LOG_NAME.get(event_type, f"event.{event_type}"),
+                  message=subject, username="system", rule_id=rule.id, details=meta)
+        for ch in channels:
+            if ch not in sent_results:
+                log_event(level="WARNING", category="notify", event="notify.channel_unconfigured",
+                          message=f"Channel '{ch}' wanted by {rule.name} is not enabled/configured",
+                          username="system", rule_id=rule.id, details=meta)
+            elif sent_results[ch]:
+                log_event(level="INFO", category="notify", event=f"{ch}.sent",
+                          message=f"{subject} → {ch}", username="system", rule_id=rule.id, details=meta)
+            else:
+                log_event(level="ERROR", category="notify", event=f"{ch}.send_failed",
+                          message=f"{ch} rejected event from {rule.name}",
+                          username="system", rule_id=rule.id, details=meta)
+    except Exception as e:
+        logger.warning("event system-log failed (%s/%s): %s", rule.id, event_type, e)
+
     try:
         code_key = snapshot.get("_code_key") if snapshot else None
         code = _event_code(rule.id, fired_at, metric_value, {"metric_field": code_key})
@@ -1816,8 +1852,8 @@ async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict
             if not cfg:
                 continue
             try:
-                await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
-                sent_results[channel] = True
+                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+                sent_results[channel] = bool(ok)
             except Exception as e:
                 sent_results[channel] = False
                 logger.error("Session notify failed for %s: %s", channel, e)
@@ -2052,8 +2088,8 @@ async def _send_reboot_event(rule: AlertRule, device_key: str, info: dict) -> No
             if not cfg:
                 continue
             try:
-                await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
-                sent_results[channel] = True
+                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+                sent_results[channel] = bool(ok)
             except Exception as e:
                 sent_results[channel] = False
                 logger.error("Reboot notify failed for %s: %s", channel, e)
