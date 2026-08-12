@@ -183,18 +183,32 @@ async def flow_summary(
         },
     }
 
-    # AppID enrichment panels (parser v4.7.4+): Internet path only. Extra terms aggs are
-    # skipped for inbound/internal so those pages don't pay for panels they never render.
-    # All three fields are keyword — aggregate directly, same shape as top_apps.
+    # Risk rides in the MAIN query — it's keyword on every index, so it never errors and
+    # works today. Internet path only (inbound/internal don't render it).
     if path_filter == "internet":
-        cast(dict, body["aggs"]).update({
-            "top_vendor": {"terms": {"field": "flow.application.vendor", "size": 20, "order": BYTES_DESC}, "aggs": _bytes_sum()},
-            "top_tech": {"terms": {"field": "flow.application.tech", "size": 20, "order": BYTES_DESC}, "aggs": _bytes_sum()},
-            "top_risk": {"terms": {"field": "flow.application.risk", "size": 8, "order": BYTES_DESC}, "aggs": _bytes_sum()},
-        })
+        cast(dict, body["aggs"])["top_risk"] = {
+            "terms": {"field": "flow.application.risk", "size": 8, "order": BYTES_DESC}, "aggs": _bytes_sum(),
+        }
 
     resp = await safe_search(client, FLOW_INDEX, body)
     aggs = resp["aggregations"]
+
+    # Vendor/Tech run in a SEPARATE guarded query (Internet path only). On the pre-upgrade
+    # index these two are still `text`, which errors the WHOLE _search — isolating them means
+    # that error empties only these two panels, never the main summary/page. They self-fill
+    # once every index in the window maps them as keyword (post-rollover). safe_search returns
+    # {"aggregations": {}} on any error → .get(...) → [] → empty panels, no exception here.
+    enrich_aggs: dict[str, Any] = {}
+    if path_filter == "internet":
+        enrich_body = {
+            "size": 0,
+            "query": body["query"],
+            "aggs": {
+                "top_vendor": {"terms": {"field": "flow.application.vendor", "size": 20, "order": BYTES_DESC}, "aggs": _bytes_sum()},
+                "top_tech": {"terms": {"field": "flow.application.tech", "size": 20, "order": BYTES_DESC}, "aggs": _bytes_sum()},
+            },
+        }
+        enrich_aggs = (await safe_search(client, FLOW_INDEX, enrich_body)).get("aggregations", {}) or {}
 
     def _buckets(agg_name: str) -> list[dict[str, Any]]:
         buckets: list[dict[str, Any]] = aggs.get(agg_name, {}).get("buckets", [])
@@ -268,14 +282,16 @@ async def flow_summary(
             {"interface": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
             for b in _buckets("ingress_breakdown")
         ],
-        # AppID enrichment — empty on non-internet paths (aggs not requested → _buckets → []).
+        # AppID enrichment. Risk from the main query (keyword, safe); Vendor/Tech from the
+        # isolated guarded query above (empty if it errored on a text-mapped index — the main
+        # summary is unaffected, so the page never shows the degradation banner for these).
         "top_vendor": [
             {"vendor": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
-            for b in _buckets("top_vendor")
+            for b in enrich_aggs.get("top_vendor", {}).get("buckets", [])
         ],
         "top_tech": [
             {"tech": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
-            for b in _buckets("top_tech")
+            for b in enrich_aggs.get("top_tech", {}).get("buckets", [])
         ],
         "top_risk": [
             {"risk": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
