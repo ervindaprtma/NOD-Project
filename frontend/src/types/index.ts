@@ -160,6 +160,10 @@ export interface TrafficFlowServerItem { ip: string; total_bytes: number; upload
 export interface TrafficFlowProtocolItem { protocol: string; total_bytes: number; percentage: number; }
 export interface TrafficFlowEgressItem { interface: string; total_bytes: number; }
 export interface TrafficFlowSrcASOrgItem { org_name: string; total_bytes: number; }
+// AppID enrichment (parser v4.7.4+) — Internet path only.
+export interface TrafficFlowVendorItem { vendor: string; total_bytes: number; }
+export interface TrafficFlowTechItem { tech: string; total_bytes: number; }
+export interface TrafficFlowRiskItem { risk: string; total_bytes: number; }
 export interface TrafficFlowSummary {
   total_bytes: number;
   total_upload: number;
@@ -175,6 +179,9 @@ export interface TrafficFlowSummary {
   protocol_dist: TrafficFlowProtocolItem[];
   egress_breakdown: TrafficFlowEgressItem[];
   ingress_breakdown: TrafficFlowEgressItem[];
+  top_vendor?: TrafficFlowVendorItem[];
+  top_tech?: TrafficFlowTechItem[];
+  top_risk?: TrafficFlowRiskItem[];
 }
 export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; bucket_seconds?: number; global_speed_by_app?: Record<string, number>; }
 export interface TrafficFlowTableRecord { client_ip: string; server_ip: string; app_name: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }

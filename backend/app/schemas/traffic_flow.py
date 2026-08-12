@@ -76,6 +76,22 @@ class TopSrcASOrgItem(BaseModel):
     total_bytes: int
 
 
+# AppID enrichment (parser v4.7.4+) — Internet path only.
+class TopVendorItem(BaseModel):
+    vendor: str
+    total_bytes: int
+
+
+class TopTechItem(BaseModel):
+    tech: str
+    total_bytes: int
+
+
+class TopRiskItem(BaseModel):
+    risk: str
+    total_bytes: int
+
+
 # ── SUMMARY RESPONSE ────────────────────────────────────────────
 
 
@@ -94,6 +110,10 @@ class TrafficSummaryResponse(BaseModel):
     protocol_dist: list[ProtocolDistItem]
     egress_breakdown: list[EgressBreakdownItem]
     ingress_breakdown: list[EgressBreakdownItem]
+    # AppID enrichment — default [] so non-internet paths and the error-fallback stay valid.
+    top_vendor: list[TopVendorItem] = []
+    top_tech: list[TopTechItem] = []
+    top_risk: list[TopRiskItem] = []
 
 
 # ── CHART RESPONSE ───────────────────────────────────────────────

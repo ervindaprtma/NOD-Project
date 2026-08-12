@@ -539,7 +539,32 @@ export default function TrafficPage() {
               />
             </div>
 
-            {/* ═══ ROW 3 — Ingress + Egress ═══ */}
+            {/* ═══ ROW 3 — AppID Enrichment (Risk / Vendor / Tech) ═══ */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+              <RankedCard
+                title="Application Risk"
+                loading={summaryLoading}
+                error={!!summaryError}
+                items={(summary?.top_risk || []).map(r => ({ name: r.risk, value: r.total_bytes }))}
+                color="rose"
+              />
+              <RankedCard
+                title="Top Vendors"
+                loading={summaryLoading}
+                error={!!summaryError}
+                items={(summary?.top_vendor || []).slice(0, 10).map(v => ({ name: v.vendor, value: v.total_bytes }))}
+                color="sky"
+              />
+              <RankedCard
+                title="Top Technologies"
+                loading={summaryLoading}
+                error={!!summaryError}
+                items={(summary?.top_tech || []).slice(0, 10).map(t => ({ name: t.tech, value: t.total_bytes }))}
+                color="teal"
+              />
+            </div>
+
+            {/* ═══ ROW 4 — Ingress + Egress ═══ */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
               <RankedCard
                 title="Ingress Interfaces"
@@ -883,6 +908,8 @@ const RANK_COLORS: Record<string, { bg: string; bar: string; text: string }> = {
   cyan:    { bg: "bg-cyan-50 dark:bg-cyan-950/20", bar: "bg-cyan-500", text: "text-cyan-700 dark:text-cyan-300" },
   orange:  { bg: "bg-orange-50 dark:bg-orange-950/20", bar: "bg-orange-500", text: "text-orange-700 dark:text-orange-300" },
   teal:    { bg: "bg-teal-50 dark:bg-teal-950/20", bar: "bg-teal-500", text: "text-teal-700 dark:text-teal-300" },
+  rose:    { bg: "bg-rose-50 dark:bg-rose-950/20", bar: "bg-rose-500", text: "text-rose-700 dark:text-rose-300" },
+  sky:     { bg: "bg-sky-50 dark:bg-sky-950/20", bar: "bg-sky-500", text: "text-sky-700 dark:text-sky-300" },
 };
 
 interface RankedItem {

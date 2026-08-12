@@ -7,7 +7,7 @@ Routes: DC→dc cluster, DRC+Office→drc cluster
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from opensearchpy import AsyncOpenSearch
 
@@ -25,6 +25,10 @@ SITE_SOURCE_IPS: dict[str, str] = {
     "Site_FGT-DRC": "10.90.150.1",
     "Site_FGT_Office": "10.10.10.10",
 }
+
+# AppID risk is a severity, not a long tail — render Critical→Low regardless of which
+# level carries the most bytes (a DNS-heavy site would otherwise bury Critical/High).
+_RISK_ORDER: dict[str, int] = {"Critical": 0, "High": 1, "Elevated": 2, "Medium": 3, "Low": 4}
 
 
 def _get_client(site_name: str = "Site_FGT-DC") -> AsyncOpenSearch:
@@ -179,6 +183,16 @@ async def flow_summary(
         },
     }
 
+    # AppID enrichment panels (parser v4.7.4+): Internet path only. Extra terms aggs are
+    # skipped for inbound/internal so those pages don't pay for panels they never render.
+    # All three fields are keyword — aggregate directly, same shape as top_apps.
+    if path_filter == "internet":
+        cast(dict, body["aggs"]).update({
+            "top_vendor": {"terms": {"field": "flow.application.vendor", "size": 20, "order": BYTES_DESC}, "aggs": _bytes_sum()},
+            "top_tech": {"terms": {"field": "flow.application.tech", "size": 20, "order": BYTES_DESC}, "aggs": _bytes_sum()},
+            "top_risk": {"terms": {"field": "flow.application.risk", "size": 8, "order": BYTES_DESC}, "aggs": _bytes_sum()},
+        })
+
     resp = await safe_search(client, FLOW_INDEX, body)
     aggs = resp["aggregations"]
 
@@ -253,6 +267,19 @@ async def flow_summary(
         "ingress_breakdown": [
             {"interface": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
             for b in _buckets("ingress_breakdown")
+        ],
+        # AppID enrichment — empty on non-internet paths (aggs not requested → _buckets → []).
+        "top_vendor": [
+            {"vendor": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
+            for b in _buckets("top_vendor")
+        ],
+        "top_tech": [
+            {"tech": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
+            for b in _buckets("top_tech")
+        ],
+        "top_risk": [
+            {"risk": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
+            for b in sorted(_buckets("top_risk"), key=lambda b: _RISK_ORDER.get(b["key"], 99))
         ],
     }
 
