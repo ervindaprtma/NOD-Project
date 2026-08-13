@@ -26,9 +26,6 @@ SITE_SOURCE_IPS: dict[str, str] = {
     "Site_FGT_Office": "10.10.10.10",
 }
 
-# AppID risk is a severity, not a long tail — render Critical→Low regardless of which
-# level carries the most bytes (a DNS-heavy site would otherwise bury Critical/High).
-_RISK_ORDER: dict[str, int] = {"Critical": 0, "High": 1, "Elevated": 2, "Medium": 3, "Low": 4}
 
 
 def _get_client(site_name: str = "Site_FGT-DC") -> AsyncOpenSearch:
@@ -293,9 +290,11 @@ async def flow_summary(
             {"tech": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
             for b in enrich_aggs.get("top_tech", {}).get("buckets", [])
         ],
+        # Byte-descending (the agg's BYTES_DESC order) so the biggest level is on top,
+        # consistent with every other Top-N card — no severity re-sort.
         "top_risk": [
             {"risk": b["key"], "total_bytes": int(b["total_bytes"]["value"])}
-            for b in sorted(_buckets("top_risk"), key=lambda b: _RISK_ORDER.get(b["key"], 99))
+            for b in _buckets("top_risk")
         ],
     }
 
