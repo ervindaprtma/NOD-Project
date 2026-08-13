@@ -46,11 +46,13 @@ def _base_filters(
     dst_port: int | None = None, dst_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
+    risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
     app_filter_not: str = "", category_filter_not: str = "",
     client_ip_not: str = "", server_ip_not: str = "", protocol_not: str = "",
     dst_port_not: int | list[int] | None = None, dst_as_org_not: str = "",
     ingress_interface_not: str = "",
     egress_interface_not: str = "",
+    risk_filter_not: str = "", vendor_filter_not: str = "", tech_filter_not: str = "",
     **_ignore,  # tolerate any unknown *_not param (stale bookmark / URL edit) → never crash the query
 ) -> tuple[list[dict], list[dict]]:
     """Returns (filter, must_not). Scope (time/site/path/direction) is include-only; every
@@ -85,6 +87,15 @@ def _base_filters(
          _multi_term_any(['flow.in.netif.name', 'flow.in.netif.alias'], ingress_interface_not)),
         (_multi_term_any(['flow.out.netif.name', 'flow.out.netif.alias'], egress_interface),
          _multi_term_any(['flow.out.netif.name', 'flow.out.netif.alias'], egress_interface_not)),
+        # AppID enrichment (parser v4.7.4+). Wildcard + case_insensitive so it matches whether
+        # the index maps the field as keyword (whole-value) or text (per-token) — a filter query
+        # (unlike an aggregation) is fine on a text field, so no text-mapping caveat here.
+        (_multi_wildcard("flow.application.risk", risk_filter),
+         _multi_wildcard("flow.application.risk", risk_filter_not)),
+        (_multi_wildcard("flow.application.vendor", vendor_filter),
+         _multi_wildcard("flow.application.vendor", vendor_filter_not)),
+        (_multi_wildcard("flow.application.tech", tech_filter),
+         _multi_wildcard("flow.application.tech", tech_filter_not)),
     ):
         if inc: filters.append(inc)
         if exc: excl.append(exc)
@@ -114,6 +125,7 @@ async def flow_summary(
     dst_port: int | None = None, dst_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
+    risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
     exclude: dict | None = None,
 ) -> dict:
     if client is None:
@@ -121,7 +133,7 @@ async def flow_summary(
 
     body = {
         "size": 0,
-        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, **(exclude or {}))),
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {}))),
         "aggs": {
             "grand_total_upload": {"sum": {"field": "flow.client.bytes", "missing": 0}},
             "grand_total_download": {"sum": {"field": "flow.server.bytes", "missing": 0}},
@@ -310,6 +322,7 @@ async def flow_chart(
     bucket_seconds: int = 60, app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
     exclude: dict | None = None,
 ) -> dict:
     if client is None:
@@ -318,7 +331,7 @@ async def flow_chart(
     interval_str = f"{bucket_seconds}s"
     # base_filter stays the include list (reused by spread_long_sessions / anomaly logging,
     # which already operate on the post-exclude charted app set); excludes apply to the main query.
-    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, **(exclude or {}))
+    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {}))
     body = {
         "size": 0,
         "query": _bool_query(base_filter, base_excl),
@@ -388,6 +401,7 @@ async def sankey_data(
     direction: str = "", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
     exclude: dict | None = None,
 ) -> dict:
     """Sankey for Internet traffic flow.
@@ -425,7 +439,7 @@ async def sankey_data(
     # Paginate the composite so the top-byte flows are never lost to a 1000-bucket
     # key-order slice (BUG-1); _bytes_sum() gives a server-side total_bytes so the
     # empty-direction case needs no special branch. See Documentation/SANKEY_BUGS_ANALYSIS.md.
-    q = _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, **(exclude or {})))
+    q = _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {})))
     buckets = await composite_all_buckets(client, FLOW_INDEX, q, sources, _bytes_sum())
 
     # direction selects the byte counter: upload=client.bytes, download=server.bytes,
@@ -507,6 +521,7 @@ async def flow_table(
     path_filter: str = "internet", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
     dst_port: int | None = None, dst_as_org: str = "",
+    risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
     exclude: dict | None = None,
 ) -> dict:
     if client is None:
@@ -525,7 +540,7 @@ async def flow_table(
 
     body = {
         "size": 0,
-        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, **(exclude or {}))),
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {}))),
         "aggs": {
             "flow_table": {
                 "composite": composite_body,
@@ -962,10 +977,18 @@ async def raw_flows(
         if key == "egress_interface":
             return {"bool": {"should": [{"terms": {"flow.out.netif.name": vals}},
                                         {"terms": {"flow.out.netif.alias": vals}}], "minimum_should_match": 1}}
+        if key in ("risk", "vendor", "tech"):
+            # AppID enrichment. Case-insensitive partial match (like the summary filters) so it
+            # works whether the index maps these as keyword or text (a filter query is fine on text).
+            fld = {"risk": "flow.application.risk", "vendor": "flow.application.vendor",
+                   "tech": "flow.application.tech"}[key]
+            return {"bool": {"should": [{"wildcard": {fld: {"value": f"*{v}*", "case_insensitive": True}}}
+                                        for v in vals], "minimum_should_match": 1}}
         return None
 
     _RAW_FILTER_KEYS = ("client_ip", "server_ip", "application", "category", "protocol",
-                        "dst_port", "ingress_interface", "egress_interface", "correlation_id")
+                        "dst_port", "ingress_interface", "egress_interface", "correlation_id",
+                        "risk", "vendor", "tech")
     must_not_filters: list[dict] = []
     if filters:
         for k in _RAW_FILTER_KEYS:

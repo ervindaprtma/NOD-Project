@@ -54,6 +54,9 @@ interface FilterState {
   dst_as_org: string[];
   ingress_interface: string[];
   egress_interface: string[];
+  risk: string[];
+  vendor: string[];
+  tech: string[];
 }
 
 const defaultFilters: FilterState = {
@@ -66,6 +69,9 @@ const defaultFilters: FilterState = {
   dst_as_org: [],
   ingress_interface: [],
   egress_interface: [],
+  risk: [],
+  vendor: [],
+  tech: [],
 };
 
 function countActiveFilters(f: FilterState): number {
@@ -79,6 +85,9 @@ function countActiveFilters(f: FilterState): number {
   if (f.dst_as_org.length > 0) n++;
   if (f.ingress_interface.length > 0) n++;
   if (f.egress_interface.length > 0) n++;
+  if (f.risk.length > 0) n++;
+  if (f.vendor.length > 0) n++;
+  if (f.tech.length > 0) n++;
   return n;
 }
 
@@ -160,6 +169,9 @@ export default function TrafficPage() {
     push("dst_as_org", filters.dst_as_org);
     push("ingress_interface", filters.ingress_interface);
     push("egress_interface", filters.egress_interface);
+    push("risk_filter", filters.risk);
+    push("vendor_filter", filters.vendor);
+    push("tech_filter", filters.tech);
     return parts.length > 0 ? "&" + parts.join("&") : "";
   }, [filters]);
 
@@ -455,6 +467,12 @@ export default function TrafficPage() {
                 onChange={(v) => setDraftFilters({ ...draftFilters, ingress_interface: v })} mono />
               <TagFilterField label="Egress Interface" values={draftFilters.egress_interface}
                 onChange={(v) => setDraftFilters({ ...draftFilters, egress_interface: v })} mono />
+              <TagFilterField label="Risk" values={draftFilters.risk}
+                onChange={(v) => setDraftFilters({ ...draftFilters, risk: v })} />
+              <TagFilterField label="Vendor" values={draftFilters.vendor}
+                onChange={(v) => setDraftFilters({ ...draftFilters, vendor: v })} />
+              <TagFilterField label="Technology" values={draftFilters.tech}
+                onChange={(v) => setDraftFilters({ ...draftFilters, tech: v })} />
             </div>
             <div className="flex items-center gap-2 mt-3">
               <button onClick={applyFilters}

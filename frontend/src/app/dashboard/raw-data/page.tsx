@@ -18,6 +18,9 @@ interface FilterState {
   server_ip: string[];
   application: string[];
   category: string[];
+  risk: string[];
+  vendor: string[];
+  tech: string[];
   protocol: string[];
   dst_port: string[];
   ingress_interface: string[];
@@ -30,6 +33,9 @@ const defaultFilters: FilterState = {
   server_ip: [],
   application: [],
   category: [],
+  risk: [],
+  vendor: [],
+  tech: [],
   protocol: [],
   dst_port: [],
   ingress_interface: [],
@@ -98,6 +104,9 @@ export default function RawDataPage() {
     push("server_ip", filters.server_ip);
     push("application", filters.application);
     push("category", filters.category);
+    push("risk", filters.risk);
+    push("vendor", filters.vendor);
+    push("tech", filters.tech);
     push("protocol", filters.protocol);
     push("dst_port", filters.dst_port);
     push("ingress_interface", filters.ingress_interface);
@@ -370,6 +379,15 @@ export default function RawDataPage() {
             <TagFilterField label="Category" values={draftFilters.category}
               onChange={(v) => setDraftFilters({ ...draftFilters, category: v })}
               placeholder="e.g. Web.Client" />
+            <TagFilterField label="Risk" values={draftFilters.risk}
+              onChange={(v) => setDraftFilters({ ...draftFilters, risk: v })}
+              placeholder="e.g. Elevated" />
+            <TagFilterField label="Vendor" values={draftFilters.vendor}
+              onChange={(v) => setDraftFilters({ ...draftFilters, vendor: v })}
+              placeholder="e.g. Microsoft" />
+            <TagFilterField label="Technology" values={draftFilters.tech}
+              onChange={(v) => setDraftFilters({ ...draftFilters, tech: v })}
+              placeholder="e.g. Browser-Based" />
             <TagFilterField label="Protocol" values={draftFilters.protocol}
               onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })}
               placeholder="e.g. tcp" />
