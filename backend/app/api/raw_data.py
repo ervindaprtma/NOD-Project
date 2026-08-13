@@ -144,6 +144,10 @@ async def get_raw_flows(
             correlation_id=r.get("correlation_id"),
             correlation_direction=r.get("correlation_direction"),
             classification=r.get("classification", ""),
+            risk=r.get("risk", ""),
+            vendor=r.get("vendor", ""),
+            tech=r.get("tech", ""),
+            url=r.get("url", ""),
         )
         for r in result["records"]
     ]
