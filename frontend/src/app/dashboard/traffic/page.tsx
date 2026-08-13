@@ -540,15 +540,18 @@ export default function TrafficPage() {
             </div>
 
             {/* ═══ ROW 3 — AppID Enrichment (Risk / Vendor / Tech) ═══ */}
-            {/* 4-col grid (not 3) so card widths match Row 2 above and columns line up;
-                the three cards fill cols 1-3, the 4th cell stays empty. */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            {/* Centered trio at Row-2 (quarter) card width: flex + justify-center so the three
+                cards sit centered, not left-aligned with an empty 4th grid cell. Each card is a
+                direct flex child, so align-items:stretch keeps the three equal height. The
+                calc() widths match Row 2's 4-col gap-4 columns exactly. */}
+            <div className="flex flex-wrap justify-center gap-4 mb-6">
               <RankedCard
                 title="Application Risk"
                 loading={summaryLoading}
                 error={!!summaryError}
                 items={(summary?.top_risk || []).map(r => ({ name: r.risk, value: r.total_bytes }))}
                 color="rose"
+                className="w-full sm:w-[calc(50%_-_0.5rem)] lg:w-[calc(25%_-_0.75rem)]"
               />
               <RankedCard
                 title="Top Vendors"
@@ -556,6 +559,7 @@ export default function TrafficPage() {
                 error={!!summaryError}
                 items={(summary?.top_vendor || []).slice(0, 10).map(v => ({ name: v.vendor, value: v.total_bytes }))}
                 color="sky"
+                className="w-full sm:w-[calc(50%_-_0.5rem)] lg:w-[calc(25%_-_0.75rem)]"
               />
               <RankedCard
                 title="Top Technologies"
@@ -563,6 +567,7 @@ export default function TrafficPage() {
                 error={!!summaryError}
                 items={(summary?.top_tech || []).slice(0, 10).map(t => ({ name: t.tech, value: t.total_bytes }))}
                 color="teal"
+                className="w-full sm:w-[calc(50%_-_0.5rem)] lg:w-[calc(25%_-_0.75rem)]"
               />
             </div>
 
@@ -920,19 +925,23 @@ interface RankedItem {
   mono?: boolean;
 }
 
-function RankedCard({ title, loading, error, items, color, wide }: {
+function RankedCard({ title, loading, error, items, color, wide, className }: {
   title: string;
   loading: boolean;
   error: boolean;
   items: RankedItem[];
   color: string;
   wide?: boolean;
+  className?: string;
 }) {
   const c = RANK_COLORS[color] || RANK_COLORS.blue;
-  const maxVal = items.length > 0 ? items[0].value : 1;
+  // True max, NOT items[0]: the Risk card is sorted by SEVERITY (Critical→Low), so its first
+  // row isn't the largest value — using items[0] let a bigger later bar (e.g. Medium) compute
+  // >100% and overflow the card. Bars are also clamped to 100% below as a backstop.
+  const maxVal = items.length > 0 ? Math.max(...items.map(i => i.value), 1) : 1;
 
   return (
-    <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
+    <div className={`bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6 ${className || ""}`}>
       <h2 className="text-lg font-semibold mb-3">{title}</h2>
       {loading ? (
         <SkeletonBars count={wide ? 10 : 5} />
@@ -941,7 +950,7 @@ function RankedCard({ title, loading, error, items, color, wide }: {
       ) : items.length > 0 ? (
         <div className="space-y-1.5">
           {items.slice(0, wide ? 10 : 10).map((item, i) => {
-            const pct = Math.max(2, (item.value / maxVal) * 100);
+            const pct = Math.max(2, Math.min(100, (item.value / maxVal) * 100));
             const opacity = 1 - i * 0.06;
             return (
               <div key={i} className="flex items-center gap-2 text-xs">
@@ -953,7 +962,7 @@ function RankedCard({ title, loading, error, items, color, wide }: {
                     </span>
                     <span className="ml-2 text-muted-foreground shrink-0">{formatBytes(item.value)}</span>
                   </div>
-                  <div className={`h-1.5 rounded-full ${c.bg}`}>
+                  <div className={`h-1.5 rounded-full overflow-hidden ${c.bg}`}>
                     <div className={`h-full rounded-full ${c.bar}`} style={{ width: `${pct}%`, opacity }} />
                   </div>
                 </div>
