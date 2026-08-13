@@ -540,18 +540,17 @@ export default function TrafficPage() {
             </div>
 
             {/* ═══ ROW 3 — AppID Enrichment (Risk / Vendor / Tech) ═══ */}
-            {/* Centered trio at Row-2 (quarter) card width: flex + justify-center so the three
-                cards sit centered, not left-aligned with an empty 4th grid cell. Each card is a
-                direct flex child, so align-items:stretch keeps the three equal height. The
-                calc() widths match Row 2's 4-col gap-4 columns exactly. */}
-            <div className="flex flex-wrap justify-center gap-4 mb-6">
+            {/* Full-row trio: 3 equal fluid (1fr) columns, always 3-across (desktop→phone).
+                Cards dynamically divide the whole row (~1/3 each); grid align-items:stretch
+                keeps them equal height. Bars are max-normalised + clamped in RankedCard, so
+                the Risk (severity-sorted) bars stay inside the card. */}
+            <div className="grid grid-cols-3 gap-4 mb-6">
               <RankedCard
                 title="Application Risk"
                 loading={summaryLoading}
                 error={!!summaryError}
                 items={(summary?.top_risk || []).map(r => ({ name: r.risk, value: r.total_bytes }))}
                 color="rose"
-                className="w-full sm:w-[calc(50%_-_0.5rem)] lg:w-[calc(25%_-_0.75rem)]"
               />
               <RankedCard
                 title="Top Vendors"
@@ -559,7 +558,6 @@ export default function TrafficPage() {
                 error={!!summaryError}
                 items={(summary?.top_vendor || []).slice(0, 10).map(v => ({ name: v.vendor, value: v.total_bytes }))}
                 color="sky"
-                className="w-full sm:w-[calc(50%_-_0.5rem)] lg:w-[calc(25%_-_0.75rem)]"
               />
               <RankedCard
                 title="Top Technologies"
@@ -567,7 +565,6 @@ export default function TrafficPage() {
                 error={!!summaryError}
                 items={(summary?.top_tech || []).slice(0, 10).map(t => ({ name: t.tech, value: t.total_bytes }))}
                 color="teal"
-                className="w-full sm:w-[calc(50%_-_0.5rem)] lg:w-[calc(25%_-_0.75rem)]"
               />
             </div>
 
