@@ -540,7 +540,9 @@ export default function TrafficPage() {
             </div>
 
             {/* ═══ ROW 3 — AppID Enrichment (Risk / Vendor / Tech) ═══ */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+            {/* 4-col grid (not 3) so card widths match Row 2 above and columns line up;
+                the three cards fill cols 1-3, the 4th cell stays empty. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <RankedCard
                 title="Application Risk"
                 loading={summaryLoading}
@@ -582,7 +584,7 @@ export default function TrafficPage() {
               />
             </div>
 
-            {/* ═══ ROW 4 — Protocol ═══ */}
+            {/* ═══ ROW 5 — Protocol ═══ */}
             <div className="mb-6">
               <RankedCard
                 title="Protocol Distribution"
