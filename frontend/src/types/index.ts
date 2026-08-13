@@ -205,6 +205,11 @@ export interface RawFlowRecord {
   egress_interface: string;
   correlation_id?: string;
   correlation_direction?: string;
+  // AppID enrichment (parser v4.7.4+)
+  risk?: string;
+  vendor?: string;
+  tech?: string;
+  url?: string;
 }
 
 // ── Interface Stats v2.0 ─────────────────────────────────────────

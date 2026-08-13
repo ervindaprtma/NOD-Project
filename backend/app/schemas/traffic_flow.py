@@ -165,6 +165,11 @@ class RawFlowRecord(BaseModel):
     path: str  # traffic path: internet, inbound-vip, inter-site, intra-lan
     correlation_id: Optional[str] = None
     correlation_direction: Optional[str] = None
+    # AppID enrichment (parser v4.7.4+) — default "" so pre-upgrade docs stay valid.
+    risk: str = ""
+    vendor: str = ""
+    tech: str = ""       # multi-valued in source; comma-joined
+    url: str = ""        # FortiGuard app-control URL; rendered as a "check via link" anchor
 
 
 # ── SANKEY RESPONSE ──────────────────────────────────────────────

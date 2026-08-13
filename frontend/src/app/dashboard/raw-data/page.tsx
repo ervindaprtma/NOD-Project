@@ -68,6 +68,7 @@ export default function RawDataPage() {
     category: true, classification: true, protocol: true, dst_port: true, total_bytes: true,
     packets: true, ingress_interface: true, egress_interface: true,
     correlation_id: true, correlation_direction: true, path: false,
+    risk: true, vendor: true, tech: true, url: true,
   });
 
   // ── Build query params ────────────────────────────────────────
@@ -196,6 +197,10 @@ export default function RawDataPage() {
     { key: "server_ip", label: "Server IP", visible: visibleColumns.server_ip, sortable: false },
     { key: "application", label: "Application", visible: visibleColumns.application, sortable: false },
     { key: "category", label: "Category", visible: visibleColumns.category, sortable: false },
+    { key: "risk", label: "Risk", visible: visibleColumns.risk, sortable: false },
+    { key: "vendor", label: "Vendor", visible: visibleColumns.vendor, sortable: false },
+    { key: "tech", label: "Technology", visible: visibleColumns.tech, sortable: false },
+    { key: "url", label: "App URL", visible: visibleColumns.url, sortable: false },
     { key: "classification", label: "Classification", visible: visibleColumns.classification, sortable: false },
     { key: "protocol", label: "Protocol", visible: visibleColumns.protocol, sortable: false },
     { key: "dst_port", label: "Dst Port", visible: visibleColumns.dst_port, sortable: false },
@@ -497,6 +502,26 @@ export default function RawDataPage() {
                             <span className="break-all" title={String(val || "")}>
                               {String(val || "—")}
                             </span>
+                          </td>
+                        );
+                      }
+                      if (col.key === "url") {
+                        const u = String(val || "");
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap">
+                            {u ? (
+                              <a
+                                href={u}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 dark:text-blue-400 hover:underline"
+                                title={u}
+                              >
+                                check via link
+                              </a>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
                           </td>
                         );
                       }

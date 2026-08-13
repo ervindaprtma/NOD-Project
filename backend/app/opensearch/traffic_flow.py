@@ -871,6 +871,14 @@ async def appid_flow_app_detail(
 # ─────────────────────────────────────────────────────────────────
 
 
+def _join_tech(v: Any) -> str:
+    """flow.application.tech is multi-valued in _source (a list) — render as a comma list.
+    Tolerates a scalar or missing value too."""
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v)
+    return str(v) if v else ""
+
+
 async def raw_flows(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,
@@ -914,6 +922,10 @@ async def raw_flows(
         "flow.correlation_direction",
         "flow.traffic.path",
         "flow.application.classification_method",
+        "flow.application.risk",
+        "flow.application.vendor",
+        "flow.application.tech",
+        "flow.application.url",
     ]
 
     must_filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
@@ -1017,6 +1029,11 @@ async def raw_flows(
             "correlation_direction": src.get("flow.correlation_direction", ""),
             "classification": src.get("flow.application.classification_method", ""),
             "path": src.get("flow.traffic.path", ""),
+            # AppID enrichment (parser v4.7.4+). tech is multi-valued in _source → joined.
+            "risk": src.get("flow.application.risk", "") or "",
+            "vendor": src.get("flow.application.vendor", "") or "",
+            "tech": _join_tech(src.get("flow.application.tech")),
+            "url": src.get("flow.application.url", "") or "",
         })
 
     next_search_after = hits[-1]["sort"] if hits else None
