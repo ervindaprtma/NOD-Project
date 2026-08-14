@@ -894,6 +894,14 @@ def _join_tech(v: Any) -> str:
     return str(v) if v else ""
 
 
+def _as_list(v: Any) -> list[str]:
+    """flow.application.behavior is multi-valued — keep it an array so the UI renders tags.
+    Tolerates a scalar or missing value (absent when the app has no behavior)."""
+    if isinstance(v, list):
+        return [str(x) for x in v]
+    return [str(v)] if v else []
+
+
 async def raw_flows(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,
@@ -941,6 +949,7 @@ async def raw_flows(
         "flow.application.vendor",
         "flow.application.tech",
         "flow.application.url",
+        "flow.application.behavior",
     ]
 
     must_filters = [_time_range(gte_ms, lte_ms), _site_filter(site_name)]
@@ -977,18 +986,18 @@ async def raw_flows(
         if key == "egress_interface":
             return {"bool": {"should": [{"terms": {"flow.out.netif.name": vals}},
                                         {"terms": {"flow.out.netif.alias": vals}}], "minimum_should_match": 1}}
-        if key in ("risk", "vendor", "tech"):
+        if key in ("risk", "vendor", "tech", "behavior"):
             # AppID enrichment. Case-insensitive partial match (like the summary filters) so it
             # works whether the index maps these as keyword or text (a filter query is fine on text).
             fld = {"risk": "flow.application.risk", "vendor": "flow.application.vendor",
-                   "tech": "flow.application.tech"}[key]
+                   "tech": "flow.application.tech", "behavior": "flow.application.behavior"}[key]
             return {"bool": {"should": [{"wildcard": {fld: {"value": f"*{v}*", "case_insensitive": True}}}
                                         for v in vals], "minimum_should_match": 1}}
         return None
 
     _RAW_FILTER_KEYS = ("client_ip", "server_ip", "application", "category", "protocol",
                         "dst_port", "ingress_interface", "egress_interface", "correlation_id",
-                        "risk", "vendor", "tech")
+                        "risk", "vendor", "tech", "behavior")
     must_not_filters: list[dict] = []
     if filters:
         for k in _RAW_FILTER_KEYS:
@@ -1057,6 +1066,7 @@ async def raw_flows(
             "vendor": src.get("flow.application.vendor", "") or "",
             "tech": _join_tech(src.get("flow.application.tech")),
             "url": src.get("flow.application.url", "") or "",
+            "behavior": _as_list(src.get("flow.application.behavior")),
         })
 
     next_search_after = hits[-1]["sort"] if hits else None

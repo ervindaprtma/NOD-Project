@@ -210,6 +210,7 @@ export interface RawFlowRecord {
   vendor?: string;
   tech?: string;
   url?: string;
+  behavior?: string[];
 }
 
 // ── Interface Stats v2.0 ─────────────────────────────────────────

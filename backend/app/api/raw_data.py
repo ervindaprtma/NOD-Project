@@ -47,6 +47,7 @@ async def get_raw_flows(
     risk: Optional[str] = Query(default=None, description="Comma-separated risks"),
     vendor: Optional[str] = Query(default=None, description="Comma-separated vendors"),
     tech: Optional[str] = Query(default=None, description="Comma-separated technologies"),
+    behavior: Optional[str] = Query(default=None, description="Comma-separated behaviors"),
     protocol: Optional[str] = Query(default=None, description="Comma-separated protocols"),
     dst_port: Optional[str] = Query(default=None, description="Destination port(s) — single value or comma-separated list (e.g. 80,443,8080)"),
     ingress_interface: str = Query(default=None),
@@ -86,6 +87,8 @@ async def get_raw_flows(
         filters["vendor"] = [v.strip() for v in vendor.split(",") if v.strip()]
     if tech:
         filters["tech"] = [t.strip() for t in tech.split(",") if t.strip()]
+    if behavior:
+        filters["behavior"] = [b.strip() for b in behavior.split(",") if b.strip()]
     if protocol:
         filters["protocol"] = [p.strip() for p in protocol.split(",") if p.strip()]
     if dst_port is not None:
@@ -104,7 +107,7 @@ async def get_raw_flows(
     # to must_not (drop rows matching any). Absent params leave the query byte-identical to before.
     for key in ("client_ip", "server_ip", "application", "category", "protocol",
                 "ingress_interface", "egress_interface", "correlation_id",
-                "risk", "vendor", "tech"):
+                "risk", "vendor", "tech", "behavior"):
         raw = request.query_params.get(key + "_not")
         if raw:
             vals = [v.strip() for v in raw.split(",") if v.strip()]
@@ -158,6 +161,7 @@ async def get_raw_flows(
             vendor=r.get("vendor", ""),
             tech=r.get("tech", ""),
             url=r.get("url", ""),
+            behavior=r.get("behavior", []),
         )
         for r in result["records"]
     ]

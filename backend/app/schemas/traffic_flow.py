@@ -170,6 +170,7 @@ class RawFlowRecord(BaseModel):
     vendor: str = ""
     tech: str = ""       # multi-valued in source; comma-joined
     url: str = ""        # FortiGuard app-control URL; rendered as a "check via link" anchor
+    behavior: list[str] = []  # multi-valued; rendered as tags (absent when app has no behavior)
 
 
 # ── SANKEY RESPONSE ──────────────────────────────────────────────

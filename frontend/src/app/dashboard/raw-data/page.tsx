@@ -21,6 +21,7 @@ interface FilterState {
   risk: string[];
   vendor: string[];
   tech: string[];
+  behavior: string[];
   protocol: string[];
   dst_port: string[];
   ingress_interface: string[];
@@ -36,6 +37,7 @@ const defaultFilters: FilterState = {
   risk: [],
   vendor: [],
   tech: [],
+  behavior: [],
   protocol: [],
   dst_port: [],
   ingress_interface: [],
@@ -74,7 +76,7 @@ export default function RawDataPage() {
     category: true, classification: true, protocol: true, dst_port: true, total_bytes: true,
     packets: true, ingress_interface: true, egress_interface: true,
     correlation_id: true, correlation_direction: true, path: false,
-    risk: true, vendor: true, tech: true, url: true,
+    risk: true, vendor: true, tech: true, url: true, behavior: true,
   });
 
   // ── Build query params ────────────────────────────────────────
@@ -107,6 +109,7 @@ export default function RawDataPage() {
     push("risk", filters.risk);
     push("vendor", filters.vendor);
     push("tech", filters.tech);
+    push("behavior", filters.behavior);
     push("protocol", filters.protocol);
     push("dst_port", filters.dst_port);
     push("ingress_interface", filters.ingress_interface);
@@ -210,6 +213,7 @@ export default function RawDataPage() {
     { key: "vendor", label: "Vendor", visible: visibleColumns.vendor, sortable: false },
     { key: "tech", label: "Technology", visible: visibleColumns.tech, sortable: false },
     { key: "url", label: "App URL", visible: visibleColumns.url, sortable: false },
+    { key: "behavior", label: "Behavior", visible: visibleColumns.behavior, sortable: false },
     { key: "classification", label: "Classification", visible: visibleColumns.classification, sortable: false },
     { key: "protocol", label: "Protocol", visible: visibleColumns.protocol, sortable: false },
     { key: "dst_port", label: "Dst Port", visible: visibleColumns.dst_port, sortable: false },
@@ -388,6 +392,9 @@ export default function RawDataPage() {
             <TagFilterField label="Technology" values={draftFilters.tech}
               onChange={(v) => setDraftFilters({ ...draftFilters, tech: v })}
               placeholder="e.g. Browser-Based" />
+            <TagFilterField label="Behavior" values={draftFilters.behavior}
+              onChange={(v) => setDraftFilters({ ...draftFilters, behavior: v })}
+              placeholder="e.g. Cloud" />
             <TagFilterField label="Protocol" values={draftFilters.protocol}
               onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })}
               placeholder="e.g. tcp" />
@@ -539,6 +546,24 @@ export default function RawDataPage() {
                               </a>
                             ) : (
                               <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                        );
+                      }
+                      if (col.key === "behavior") {
+                        const arr = Array.isArray(val) ? (val as string[]) : [];
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap">
+                            {arr.length === 0 ? (
+                              <span className="text-muted-foreground">—</span>
+                            ) : (
+                              <span className="flex flex-wrap gap-1">
+                                {arr.map((b, bi) => (
+                                  <span key={bi} className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400">
+                                    {b}
+                                  </span>
+                                ))}
+                              </span>
                             )}
                           </td>
                         );
