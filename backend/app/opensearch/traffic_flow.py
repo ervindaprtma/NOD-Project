@@ -861,8 +861,21 @@ async def appid_flow_app_detail(
                     **_bytes_sum(),
                     "src_ips": {"terms": {"field": "flow.client.ip.addr", "size": top, "order": BYTES_DESC},
                                 "aggs": _bytes_sum()},
+                    "dst_ips": {"terms": {"field": "flow.server.ip.addr", "size": top, "order": BYTES_DESC},
+                                "aggs": _bytes_sum()},
                     "dst_orgs": {"terms": {"field": "flow.server.as.org", "size": top, "order": BYTES_DESC},
                                  "aggs": _sort},
+                    # port + proto are the "what service did this app use" pair: on inter-site
+                    # / intra-lan paths the app name alone often identifies the flow (SMB, MSSQL,
+                    # WinRM) but the port + protocol answer "MS-SQL over 1433/TCP" — same shape
+                    # the destination bytes are ordered on. Includes 0 buckets so the template
+                    # can show "(port 0)" when the field is unmapped instead of dropping the row.
+                    "ports": {"terms": {"field": "flow.server.l4.port.id", "size": top, "order": BYTES_DESC,
+                                        "missing_bucket": True},
+                              "aggs": _bytes_sum()},
+                    "protos": {"terms": {"field": "l4.proto.name", "size": top, "order": BYTES_DESC,
+                                         "missing_bucket": True},
+                               "aggs": _bytes_sum()},
                     "egress": egress_agg,
                 },
             }
@@ -873,12 +886,29 @@ async def appid_flow_app_detail(
     for ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
         t, _u, _d = _bytes3(ab)
         src_ips = [{"ip": x["key"], "bytes": _bytes3(x)[0]} for x in ab.get("src_ips", {}).get("buckets", [])]
+        dst_ips = [{"ip": x["key"], "bytes": _bytes3(x)[0]} for x in ab.get("dst_ips", {}).get("buckets", [])]
         dst_orgs = [x["key"] for x in ab.get("dst_orgs", {}).get("buckets", [])]
+        # port label: 0 / "0" / missing = "—" (no port), else int. Raw key preserved so the
+        # template can decide to render "Port 443" vs "Port 443/TCP" vs a specific service name.
+        ports = [{"port": _port_int(x["key"]), "bytes": _bytes3(x)[0]}
+                 for x in ab.get("ports", {}).get("buckets", [])]
+        protos = [x["key"] or "—" for x in ab.get("protos", {}).get("buckets", []) if x["key"] is not None]
+        # Sort ports ascending for stable human reading (smallest → largest).
+        ports.sort(key=lambda p: (p["port"] is None, p["port"] if p["port"] is not None else 0))
         eg = ab.get("egress", {})
         eg_buckets = eg.get("ifaces", {}).get("buckets", []) if internet_path else eg.get("buckets", [])
         egress = [x["key"] for x in eg_buckets]
-        out[ab["key"]] = {"total_bytes": t, "src_ips": src_ips, "dst_orgs": dst_orgs, "egress": egress}
+        out[ab["key"]] = {"total_bytes": t, "src_ips": src_ips, "dst_ips": dst_ips,
+                          "dst_orgs": dst_orgs, "ports": ports, "protos": protos, "egress": egress}
     return out
+
+
+def _port_int(raw: Any) -> int | None:
+    """OpenSearch returns numeric port keys as int; missing_bucket is None. Normalize."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -154,6 +154,12 @@ def sample_render_ctx(
         "scan_src_ips_text": "192.168.1.200 (8.1 GB), 192.168.1.87 (2.4 GB)",
         "scan_egress_text": "WAN-LinkNet",
         "scan_dst_orgs_text": "Google LLC, Fastly, Inc.",
+        # WHAT-service triplet (port / protocol / dst IP) — preview parity with fire-time ctx.
+        # On internal paths the operator uses these to identify "MS-SQL over 1433/TCP",
+        # "SMB over 445/TCP" etc. without opening the Raw Data page.
+        "scan_protocols_text": "TCP",
+        "scan_ports_text": "443 (8.1 GB), 80 (1.2 GB)",
+        "scan_dst_ips_text": "142.250.190.78 (5.4 GB), 142.250.190.46 (2.7 GB)",
         "scan_recovered_mbps": 6.2, "scan_drop_mbps": 27.4, "scan_recovered_known": True,
         # SD-WAN composite full per-link report (2 links, mixed breached/ok, incl. a DOWN state)
         "sdwan_links": [
@@ -1409,7 +1415,13 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         _scan_apps = getattr(rule, "_scan_apps", None) or []
         _scan_detail = getattr(rule, "_scan_detail", None) or {}
         scan_apps_text = None
+        # All scan_* vars are always present (None for non-scan / no detail) so StrictUndefined
+        # never trips a template. Port + protocol + destination-IP are the "what service" pair the
+        # operationally-meaningful fields for internal-path alerts (SMB, MSSQL, WinRM traffic etc.)
+        # — they answer "MS-SQL over 1433/TCP from 192.168.1.10 → 10.10.10.5" without the operator
+        # having to open the Raw Data page.
         scan_volume_text = scan_src_ips_text = scan_egress_text = scan_dst_orgs_text = None
+        scan_protocols_text = scan_ports_text = scan_dst_ips_text = None
         if _scan_apps:
             scan_apps_text = ", ".join(
                 f'{a.get("app")} ({round(float(a.get(_scan_metric_key) or 0.0), 1)} Mbps)'
@@ -1421,8 +1433,22 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 scan_src_ips_text = ", ".join(
                     f'{s.get("ip")} ({_fmt_bytes(s.get("bytes") or 0)})'
                     for s in (_d.get("src_ips") or [])) or None
+                # dst_ips: same shape as src_ips (ip + bytes). Operator can see "where the traffic went".
+                scan_dst_ips_text = ", ".join(
+                    f'{s.get("ip")} ({_fmt_bytes(s.get("bytes") or 0)})'
+                    for s in (_d.get("dst_ips") or [])) or None
                 scan_egress_text = ", ".join(_d.get("egress") or []) or None
                 scan_dst_orgs_text = ", ".join(_d.get("dst_orgs") or []) or None
+                # protocols: protocol names (TCP/UDP/ICMP/...). One name covers most internal flows.
+                # Falls back to "—" only when the bucket key is genuinely missing — never to "0".
+                scan_protocols_text = ", ".join(_d.get("protos") or []) or None
+                # ports: list of {port: int|None, bytes: int}. Render as "443 (1.2 GB), 80 (240.0 MB)"
+                # so the operator sees "the high-volume port" first. None = unmapped (rare; missing_bucket).
+                _ports = _d.get("ports") or []
+                if _ports:
+                    scan_ports_text = ", ".join(
+                        f'{p["port"] if p.get("port") is not None else "—"}({_fmt_bytes(p.get("bytes") or 0)})'
+                        for p in _ports) or None
         # Recovery was→now: on a scan resolve, mv is the fire value ("was"); _scan_recovered is the
         # fired app's current speed ("now"), None if it fell out of the top-N. Drop = was − now.
         # Always present (StrictUndefined-safe): known=False for fire / non-scan / app-gone.
@@ -1532,6 +1558,12 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "scan_src_ips_text": scan_src_ips_text,
                 "scan_egress_text": scan_egress_text,
                 "scan_dst_orgs_text": scan_dst_orgs_text,
+                # Scan WHAT-service triplet: protocol + port + dest IP — the "MS-SQL over 1433/TCP
+                # from src → dst" answer the inter-site / intra-lan operator needs to triage without
+                # opening the Raw Data page. None for non-scan rules.
+                "scan_protocols_text": scan_protocols_text,
+                "scan_ports_text": scan_ports_text,
+                "scan_dst_ips_text": scan_dst_ips_text,
                 # Scan recovery was→now (resolve only; known=False on fire / app fell out of top-N):
                 "scan_recovered_mbps": scan_recovered_mbps,
                 "scan_drop_mbps": scan_drop_mbps,
