@@ -119,48 +119,57 @@ async def active_ipsec_users_count(
     return len(names)
 
 
-async def active_ipsec_users_count_timeline(
-    client: AsyncOpenSearch | None = None,
-    gte_ms: int = 0,
-    lte_ms: int = 0,
-    interval: str = "1h",
-) -> dict[int, int]:
-    """
-    Q-05: date_histogram with cardinality sub-agg for user count over time.
-    Returns dict mapping timestamp (ms) -> user count.
-    """
-    if client is None:
-        client = get_ipsec_client()
-
+async def _ipsec_user_timeline_one(
+    client: AsyncOpenSearch, gte_ms: int, lte_ms: int, interval: str,
+) -> dict[int, set[str]]:
+    """Per-bucket SET of usernames on ONE cluster's ipsec-* — terms, not cardinality, so the
+    caller can UNION sets across clusters. Summing cardinalities would double-count a user
+    tunnelling on both endpoints."""
     body = {
         "size": 0,
         "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms)}},
         "aggs": {
             "over_time": {
                 "date_histogram": {"field": "@timestamp", "fixed_interval": interval},
-                "aggs": {"active_users": {"cardinality": {"field": "tag.username.keyword"}}},
+                "aggs": {"users": {"terms": {"field": "tag.username.keyword", "size": 1000}}},
             }
         },
     }
-
     resp = await safe_search(client, "ipsec-*", body)
     return {
-        int(bucket["key"]): int(bucket["active_users"]["value"])
-        for bucket in resp.get("aggregations", {}).get("over_time", {}).get("buckets", [])
+        int(b["key"]): {u["key"] for u in b.get("users", {}).get("buckets", [])}
+        for b in resp.get("aggregations", {}).get("over_time", {}).get("buckets", [])
     }
 
 
-async def active_ipsec_users_detail(
+async def active_ipsec_users_count_timeline(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,
     lte_ms: int = 0,
-) -> list[dict]:
-    """
-    Q-07: terms agg on tag.username.keyword with top_hits sub-agg. No N+1 loop.
-    """
-    if client is None:
-        client = get_ipsec_client()
+    interval: str = "1h",
+) -> dict[int, int]:
+    """Q-05: distinct IPsec users per time bucket. Unions usernames across BOTH clusters
+    (DC + DRC) so the timeline matches active_ipsec_users_count — a tunnel on either endpoint
+    is counted, and a user on both is counted once per bucket.
+    Returns dict mapping timestamp (ms) -> user count."""
+    if client is not None:
+        return {ts: len(s) for ts, s in
+                (await _ipsec_user_timeline_one(client, gte_ms, lte_ms, interval)).items()}
 
+    merged: dict[int, set[str]] = {}
+    for get_client in (get_ipsec_client, get_dc_client):
+        try:
+            for ts, s in (await _ipsec_user_timeline_one(get_client(), gte_ms, lte_ms, interval)).items():
+                merged.setdefault(ts, set()).update(s)
+        except Exception:  # a cluster without an ipsec-* index just contributes nothing
+            pass
+    return {ts: len(s) for ts, s in merged.items()}
+
+
+async def _ipsec_detail_one(
+    client: AsyncOpenSearch, gte_ms: int, lte_ms: int,
+) -> list[dict]:
+    """Active IPsec users on ONE cluster's ipsec-* (terms on tag.username + latest top_hit)."""
     body = {
         "size": 0,
         "query": {"bool": {"filter": _ipsec_filters(gte_ms, lte_ms)}},
@@ -225,6 +234,30 @@ async def active_ipsec_users_detail(
     return results
 
 
+async def active_ipsec_users_detail(
+    client: AsyncOpenSearch | None = None,
+    gte_ms: int = 0,
+    lte_ms: int = 0,
+) -> list[dict]:
+    """Per-user active IPsec sessions. Unions BOTH clusters (DC + DRC) so the VPN Sessions
+    page shows every active user — matching active_ipsec_users_count. A username seen on
+    both endpoints collapses to its most-recently-active record (dedupe by username, latest
+    last_seen wins), so the row count equals the distinct-user count."""
+    if client is not None:
+        return await _ipsec_detail_one(client, gte_ms, lte_ms)
+
+    by_user: dict[str, dict] = {}
+    for get_client in (get_ipsec_client, get_dc_client):
+        try:
+            for u in await _ipsec_detail_one(get_client(), gte_ms, lte_ms):
+                prev = by_user.get(u["username"])
+                if prev is None or (u.get("last_seen") or 0) > (prev.get("last_seen") or 0):
+                    by_user[u["username"]] = u
+        except Exception:  # a cluster without an ipsec-* index just contributes nothing
+            pass
+    return list(by_user.values())
+
+
 async def ipsec_session_history(
     client: AsyncOpenSearch | None = None,
     gte_ms: int = 0,
@@ -233,13 +266,35 @@ async def ipsec_session_history(
     gap_ms: int = SESSION_GAP_MS,
     bucket: str = "60s",
 ) -> list[dict]:
-    """Per-session IPsec history — same reconstruction as SSL (gap-split, day-bounded)."""
-    if client is None:
-        client = get_ipsec_client()
-    times, byb, durs = await fetch_session_buckets(
-        client, "ipsec-*", [], gte_ms, lte_ms,
-        "ipsec_normalized.bytes_in", "ipsec_normalized.bytes_out",
-        bucket=bucket, dur_field="ipsec_normalized.session_duration_seconds",
-    )
-    return sessionize(times, now_ms if now_ms is not None else lte_ms,
-                      gap_ms, _BUCKET_MS_OF.get(bucket, _BUCKET_MS), byb, durs)
+    """Per-session IPsec history — same reconstruction as SSL (gap-split, day-bounded).
+    Unions BOTH clusters (DC + DRC): fetch_session_buckets keys on (username, device) and
+    each cluster's devices are distinct, so merging keeps every endpoint's sessions and
+    never collides. Matches active_ipsec_users_count/_detail coverage."""
+    async def _fetch(c: AsyncOpenSearch):
+        return await fetch_session_buckets(
+            c, "ipsec-*", [], gte_ms, lte_ms,
+            "ipsec_normalized.bytes_in", "ipsec_normalized.bytes_out",
+            bucket=bucket, dur_field="ipsec_normalized.session_duration_seconds",
+        )
+
+    if client is not None:
+        times, byb, durs = await _fetch(client)
+        return sessionize(times, now_ms if now_ms is not None else lte_ms,
+                          gap_ms, _BUCKET_MS_OF.get(bucket, _BUCKET_MS), byb, durs)
+
+    m_times: dict[tuple[str, str], list[int]] = {}
+    m_byb: dict[tuple[str, str], dict[int, tuple[int, int]]] = {}
+    m_durs: dict[tuple[str, str], dict[int, int]] = {}
+    for get_client in (get_ipsec_client, get_dc_client):
+        try:
+            t2, b2, d2 = await _fetch(get_client())
+            for k, v in t2.items():
+                m_times.setdefault(k, []).extend(v)
+            for k, bv in b2.items():
+                m_byb.setdefault(k, {}).update(bv)
+            for k, dv in d2.items():
+                m_durs.setdefault(k, {}).update(dv)
+        except Exception:  # a cluster without an ipsec-* index just contributes nothing
+            pass
+    return sessionize(m_times, now_ms if now_ms is not None else lte_ms,
+                      gap_ms, _BUCKET_MS_OF.get(bucket, _BUCKET_MS), m_byb, m_durs)

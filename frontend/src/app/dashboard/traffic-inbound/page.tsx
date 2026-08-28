@@ -21,7 +21,7 @@ import { TagFilterField, splitChips } from "@/components/TagFilterField";
 
 import { AreaChart } from "@/components/charts/AreaChart";
 import { ChartHeader } from "@/components/charts/ChartHeader";
-import { useSvgDragSelect } from "@/lib/chartZoom";
+import { useSvgDragSelect, useElementWidth } from "@/lib/chartZoom";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
 
 // ── Constants ────────────────────────────────────────────────────
@@ -541,7 +541,10 @@ function formatStackTs(row: Record<string, any>, prevRow: Record<string, any> | 
 
 function StackedBarChart({ data, serviceNames, onRangeSelect, bucketMs = 60_000 }: { data: Record<string, any>[]; serviceNames: string[]; onRangeSelect?: (gteMs: number, lteMs: number) => void; bucketMs?: number }) {
   const [hoveredBar, setHoveredBar] = useState<{ barIndex: number; sBreakdown: { svc: string; mbps: number; color: string }[]; x: number } | null>(null);
-  const W = 800, H = 380, pad = { top: 10, right: 30, bottom: 50, left: 65 };
+  // Measure the card so the SVG renders at true pixel width — matches the
+  // Total Throughput chart above instead of scaling a fixed 800-unit canvas.
+  const [containerRef, measuredW] = useElementWidth<HTMLDivElement>();
+  const W = measuredW || 800, H = 380, pad = { top: 10, right: 30, bottom: 50, left: 65 };
   const plotW = W - pad.left - pad.right, plotH = H - pad.top - pad.bottom, barGap = 2;
   const { selRect, handlers } = useSvgDragSelect({ tsList: data.map((d) => Number(d.tsMs) || 0), viewW: W, padLeft: pad.left, plotW, bucketMs, onRangeSelect });
   if (!data.length || !serviceNames.length) return <EmptyState message="No service throughput data" />;
@@ -557,12 +560,12 @@ function StackedBarChart({ data, serviceNames, onRangeSelect, bucketMs = 60_000 
   const xLabelEvery = Math.max(1, Math.floor(data.length / 8));
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
         {serviceNames.slice(0, 25).map((svc) => <div key={svc} className="flex items-center gap-1.5 text-[11px]"><span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: colorMap[svc] }} /><span className="text-muted-foreground truncate max-w-[120px]">{svc}</span></div>)}
         {serviceNames.length > 25 && <span className="text-[11px] text-muted-foreground">+{serviceNames.length - 25} more</span>}
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420, cursor: onRangeSelect ? "crosshair" : undefined, touchAction: "none", userSelect: "none" }} {...handlers}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H, maxHeight: 420, cursor: onRangeSelect ? "crosshair" : undefined, touchAction: "none", userSelect: "none" }} {...handlers}>
         {yTickValues.map((v) => <g key={v}><line x1={pad.left} x2={W - pad.right} y1={yScale(v)} y2={yScale(v)} className="stroke-muted-foreground/15" strokeWidth={0.5} /><text x={pad.left - 6} y={yScale(v) + 4} textAnchor="end" className="text-[10px] fill-muted-foreground">{v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v >= 0.01 ? v.toFixed(2) : v.toFixed(4)}</text></g>)}
         {data.map((row, i) => {
           const x = xScale(i); let yOff = yScale(0);

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getAccessToken, setAccessToken, apiFetch, ensureValidToken, bootAuthFromCookie, hasMinRole } from "@/lib/api";
+import { getAccessToken, setAccessToken, apiFetch, ensureValidToken, bootAuthFromCookie, hasMinRole, logClient } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -133,6 +133,18 @@ export default function DashboardLayout({
     }
     initAuth();
   }, [router]);
+
+  // Global catch-all: unhandled promise rejections ship to the System Logs
+  // sink (ErrorBoundary only covers render errors; apiFetch only covers 5xx).
+  // Backend clamps level and redacts payloads — never include tokens here.
+  useEffect(() => {
+    const onReject = (e: PromiseRejectionEvent) => {
+      const reason = e.reason instanceof Error ? e.reason.message : String(e.reason ?? "unknown");
+      logClient("ERROR", "frontend.unhandled_rejection", reason);
+    };
+    window.addEventListener("unhandledrejection", onReject);
+    return () => window.removeEventListener("unhandledrejection", onReject);
+  }, []);
 
   // ponytail: removed WS push — backend /ws/alerts deleted, SSE handles real-time alerts.
   // 30s polling for notifications is sufficient (dashboard already polls).

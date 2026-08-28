@@ -160,6 +160,10 @@ export interface TrafficFlowServerItem { ip: string; total_bytes: number; upload
 export interface TrafficFlowProtocolItem { protocol: string; total_bytes: number; percentage: number; }
 export interface TrafficFlowEgressItem { interface: string; total_bytes: number; }
 export interface TrafficFlowSrcASOrgItem { org_name: string; total_bytes: number; }
+// AppID enrichment (parser v4.7.4+) — Internet path only.
+export interface TrafficFlowVendorItem { vendor: string; total_bytes: number; }
+export interface TrafficFlowTechItem { tech: string; total_bytes: number; }
+export interface TrafficFlowRiskItem { risk: string; total_bytes: number; }
 export interface TrafficFlowSummary {
   total_bytes: number;
   total_upload: number;
@@ -175,6 +179,9 @@ export interface TrafficFlowSummary {
   protocol_dist: TrafficFlowProtocolItem[];
   egress_breakdown: TrafficFlowEgressItem[];
   ingress_breakdown: TrafficFlowEgressItem[];
+  top_vendor?: TrafficFlowVendorItem[];
+  top_tech?: TrafficFlowTechItem[];
+  top_risk?: TrafficFlowRiskItem[];
 }
 export interface TrafficFlowChartData { chart_data: Record<string, any>[]; app_names: string[]; bucket_seconds?: number; global_speed_by_app?: Record<string, number>; }
 export interface TrafficFlowTableRecord { client_ip: string; server_ip: string; app_name: string; bytes: number; upload_bytes?: number; download_bytes?: number; packets: number; sessions: number; }
@@ -198,6 +205,12 @@ export interface RawFlowRecord {
   egress_interface: string;
   correlation_id?: string;
   correlation_direction?: string;
+  // AppID enrichment (parser v4.7.4+)
+  risk?: string;
+  vendor?: string;
+  tech?: string;
+  url?: string;
+  behavior?: string[];
 }
 
 // ── Interface Stats v2.0 ─────────────────────────────────────────
@@ -245,6 +258,8 @@ export interface DeviceAvailabilityItem {
   first_seen_ms: number | null;
   last_seen_ms: number | null;
   partial_history: boolean;        // onboarded mid-window — % clamped to its own span
+  site_moved_from?: string | null;   // tag.site changed in-window; prior era stitched (plan §5)
+  site_moved_at_ms?: number | null;  // era boundary: last doc under the old site tag
   wrap_risk: boolean;              // uptime near the ~497-day counter wrap
   availability_pct: number | null;
   expected_polls: number;

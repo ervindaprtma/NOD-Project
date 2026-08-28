@@ -255,6 +255,20 @@ async def distribute_report(
 # ─────────────────────────────────────────────────────────────────
 
 
+def _log_report_event(level: str, event: str, message: str) -> None:
+    """Best-effort mirror of report lifecycle into the System Logs sink.
+
+    Messages carry only job ids / statuses — never file paths, emails, or
+    recipient data (log_event redacts secrets, but we simply don't include any).
+    """
+    try:
+        from app.services.system_logger import log_event
+
+        log_event(level=level, category="report", event=event, message=message)
+    except Exception:
+        pass
+
+
 async def _generate_report_background(job_id: str, report_type: str, output_format: str):
     """
     Background task: generate report using report_generator service.
@@ -277,6 +291,7 @@ async def _generate_report_background(job_id: str, report_type: str, output_form
 
             job.status = "running"
             await session.commit()
+            _log_report_event("INFO", "report.generate_started", f"Report generation started for job {job_id}")
 
             try:
                 output_path = await generate_report(job)
@@ -288,6 +303,7 @@ async def _generate_report_background(job_id: str, report_type: str, output_form
                 job.expires_at = datetime.now(timezone.utc) + timedelta(hours=REPORT_TTL_HOURS)
                 await session.commit()
                 logger.info(f"Report {job_id} completed: {output_path}")
+                _log_report_event("INFO", "report.generate_completed", f"Report {job_id} generated successfully")
 
             except Exception as e:
                 job.status = "failed"
@@ -295,6 +311,7 @@ async def _generate_report_background(job_id: str, report_type: str, output_form
                 await session.commit()
                 logger.error(f"Report {job_id} failed: {e}")
                 logger.error(traceback.format_exc())
+                _log_report_event("ERROR", "report.generate_failed", f"Report {job_id} failed: {e}")
     except Exception as e:
         logger.error(f"BG task outer error for {job_id}: {e}")
         logger.error(traceback.format_exc())

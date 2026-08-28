@@ -233,6 +233,17 @@ async def logout(
                 action="logout",
                 source_ip=get_real_client_ip(request),
             )
+            try:
+                from app.services.system_logger import log_event
+
+                log_event(
+                    level="INFO", category="auth", event="auth.logout",
+                    message="User logged out", source="frontend",
+                    source_ip=get_real_client_ip(request),
+                    trace_id=getattr(request.state, "trace_id", None),
+                )
+            except Exception:
+                pass
 
     response_data = APIResponse.ok({"message": "Logged out"})
     response.delete_cookie(COOKIE_REFRESH_TOKEN, path="/")
@@ -304,6 +315,19 @@ async def refresh(
     )
 
     await db.commit()
+
+    try:
+        from app.services.system_logger import log_event
+
+        log_event(
+            level="INFO", category="auth", event="auth.token_refreshed",
+            message="Access token refreshed", source="frontend",
+            username=user.username, user_id=user.id,
+            source_ip=get_real_client_ip(request),
+            trace_id=getattr(request.state, "trace_id", None),
+        )
+    except Exception:
+        pass
 
     response_data = APIResponse.ok(TokenResponse(access_token=access_token))
     response.set_cookie(

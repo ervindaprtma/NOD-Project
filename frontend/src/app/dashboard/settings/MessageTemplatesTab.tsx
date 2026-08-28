@@ -16,6 +16,10 @@ const VARIABLES = [
   // Application Traffic Scan (metric_field "app.*"): offending app + who/where/whom + volume.
   // Wrap in {% if %} so they no-op on non-scan rules. Use {% if event == 'resolved' %} for recovery.
   "scan_apps_text", "scan_volume_text", "scan_src_ips_text", "scan_egress_text", "scan_dst_orgs_text",
+  // WHAT-service triplet (port / protocol / dst IP) — identifies the service on inter-site
+  // / intra-lan paths where the app name alone (SMB, MSSQL, WinRM) doesn't tell the operator
+  // which port / protocol / destination the breach ran on.
+  "scan_protocols_text", "scan_ports_text", "scan_dst_ips_text",
 ];
 
 interface EditorForm {

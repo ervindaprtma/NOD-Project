@@ -76,6 +76,22 @@ class TopSrcASOrgItem(BaseModel):
     total_bytes: int
 
 
+# AppID enrichment (parser v4.7.4+) — Internet path only.
+class TopVendorItem(BaseModel):
+    vendor: str
+    total_bytes: int
+
+
+class TopTechItem(BaseModel):
+    tech: str
+    total_bytes: int
+
+
+class TopRiskItem(BaseModel):
+    risk: str
+    total_bytes: int
+
+
 # ── SUMMARY RESPONSE ────────────────────────────────────────────
 
 
@@ -94,6 +110,10 @@ class TrafficSummaryResponse(BaseModel):
     protocol_dist: list[ProtocolDistItem]
     egress_breakdown: list[EgressBreakdownItem]
     ingress_breakdown: list[EgressBreakdownItem]
+    # AppID enrichment — default [] so non-internet paths and the error-fallback stay valid.
+    top_vendor: list[TopVendorItem] = []
+    top_tech: list[TopTechItem] = []
+    top_risk: list[TopRiskItem] = []
 
 
 # ── CHART RESPONSE ───────────────────────────────────────────────
@@ -145,6 +165,12 @@ class RawFlowRecord(BaseModel):
     path: str  # traffic path: internet, inbound-vip, inter-site, intra-lan
     correlation_id: Optional[str] = None
     correlation_direction: Optional[str] = None
+    # AppID enrichment (parser v4.7.4+) — default "" so pre-upgrade docs stay valid.
+    risk: str = ""
+    vendor: str = ""
+    tech: str = ""       # multi-valued in source; comma-joined
+    url: str = ""        # FortiGuard app-control URL; rendered as a "check via link" anchor
+    behavior: list[str] = []  # multi-valued; rendered as tags (absent when app has no behavior)
 
 
 # ── SANKEY RESPONSE ──────────────────────────────────────────────

@@ -154,6 +154,12 @@ def sample_render_ctx(
         "scan_src_ips_text": "192.168.1.200 (8.1 GB), 192.168.1.87 (2.4 GB)",
         "scan_egress_text": "WAN-LinkNet",
         "scan_dst_orgs_text": "Google LLC, Fastly, Inc.",
+        # WHAT-service triplet (port / protocol / dst IP) — preview parity with fire-time ctx.
+        # On internal paths the operator uses these to identify "MS-SQL over 1433/TCP",
+        # "SMB over 445/TCP" etc. without opening the Raw Data page.
+        "scan_protocols_text": "TCP",
+        "scan_ports_text": "443 (8.1 GB), 80 (1.2 GB)",
+        "scan_dst_ips_text": "142.250.190.78 (5.4 GB), 142.250.190.46 (2.7 GB)",
         "scan_recovered_mbps": 6.2, "scan_drop_mbps": 27.4, "scan_recovered_known": True,
         # SD-WAN composite full per-link report (2 links, mixed breached/ok, incl. a DOWN state)
         "sdwan_links": [
@@ -1409,7 +1415,13 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         _scan_apps = getattr(rule, "_scan_apps", None) or []
         _scan_detail = getattr(rule, "_scan_detail", None) or {}
         scan_apps_text = None
+        # All scan_* vars are always present (None for non-scan / no detail) so StrictUndefined
+        # never trips a template. Port + protocol + destination-IP are the "what service" pair the
+        # operationally-meaningful fields for internal-path alerts (SMB, MSSQL, WinRM traffic etc.)
+        # — they answer "MS-SQL over 1433/TCP from 192.168.1.10 → 10.10.10.5" without the operator
+        # having to open the Raw Data page.
         scan_volume_text = scan_src_ips_text = scan_egress_text = scan_dst_orgs_text = None
+        scan_protocols_text = scan_ports_text = scan_dst_ips_text = None
         if _scan_apps:
             scan_apps_text = ", ".join(
                 f'{a.get("app")} ({round(float(a.get(_scan_metric_key) or 0.0), 1)} Mbps)'
@@ -1421,8 +1433,22 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 scan_src_ips_text = ", ".join(
                     f'{s.get("ip")} ({_fmt_bytes(s.get("bytes") or 0)})'
                     for s in (_d.get("src_ips") or [])) or None
+                # dst_ips: same shape as src_ips (ip + bytes). Operator can see "where the traffic went".
+                scan_dst_ips_text = ", ".join(
+                    f'{s.get("ip")} ({_fmt_bytes(s.get("bytes") or 0)})'
+                    for s in (_d.get("dst_ips") or [])) or None
                 scan_egress_text = ", ".join(_d.get("egress") or []) or None
                 scan_dst_orgs_text = ", ".join(_d.get("dst_orgs") or []) or None
+                # protocols: protocol names (TCP/UDP/ICMP/...). One name covers most internal flows.
+                # Falls back to "—" only when the bucket key is genuinely missing — never to "0".
+                scan_protocols_text = ", ".join(_d.get("protos") or []) or None
+                # ports: list of {port: int|None, bytes: int}. Render as "443 (1.2 GB), 80 (240.0 MB)"
+                # so the operator sees "the high-volume port" first. None = unmapped (rare; missing_bucket).
+                _ports = _d.get("ports") or []
+                if _ports:
+                    scan_ports_text = ", ".join(
+                        f'{p["port"] if p.get("port") is not None else "—"}({_fmt_bytes(p.get("bytes") or 0)})'
+                        for p in _ports) or None
         # Recovery was→now: on a scan resolve, mv is the fire value ("was"); _scan_recovered is the
         # fired app's current speed ("now"), None if it fell out of the top-N. Drop = was − now.
         # Always present (StrictUndefined-safe): known=False for fire / non-scan / app-gone.
@@ -1532,6 +1558,12 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "scan_src_ips_text": scan_src_ips_text,
                 "scan_egress_text": scan_egress_text,
                 "scan_dst_orgs_text": scan_dst_orgs_text,
+                # Scan WHAT-service triplet: protocol + port + dest IP — the "MS-SQL over 1433/TCP
+                # from src → dst" answer the inter-site / intra-lan operator needs to triage without
+                # opening the Raw Data page. None for non-scan rules.
+                "scan_protocols_text": scan_protocols_text,
+                "scan_ports_text": scan_ports_text,
+                "scan_dst_ips_text": scan_dst_ips_text,
                 # Scan recovery was→now (resolve only; known=False on fire / app fell out of top-N):
                 "scan_recovered_mbps": scan_recovered_mbps,
                 "scan_drop_mbps": scan_drop_mbps,
@@ -2315,6 +2347,62 @@ async def _run_evaluation_cycle() -> None:
                 except Exception as e:
                     logger.error("Error evaluating reboot rule %s (%s): %s", rule.id, rule.name, e)
                     await db.rollback()
+
+            # ── 5b. Counter-wrap detector (independent of any rule — point-event, no resolve).
+            # A 32-bit SNMP sys_uptime rollover is currently just shown on the Resources
+            # page as a "possible counter wrap" note inside reboot[]. Persist each new wrap as
+            # an AlertLog row (event_type='wrap') so the Alert History reflects the event.
+            # De-dup is event_code = sha("{site}|{device_ip}|{wrap_at_ms}"); same wrap
+            # scanned twice → same code, idempotent on retry. Best-effort, never throw.
+            try:
+                from app.opensearch import device_uptime as du
+                now_ms_w = int(_time.time() * 1000)
+                gte_ms_w = now_ms_w - 6 * 3600 * 1000
+                wrap_count = 0
+                for site_name in list(du.SITE_TAG.keys()):
+                    try:
+                        result = await du.device_availability(
+                            site_name=site_name, gte_ms=gte_ms_w,
+                            lte_ms=now_ms_w, now_ms=now_ms_w,
+                        )
+                    except Exception as e:
+                        logger.warning("Wrap fetch failed for site %s: %s", site_name, e)
+                        continue
+                    for d in (result or {}).get("devices", []) or []:
+                        device_key = d.get("device_key") or ""
+                        hostname = d.get("hostname") or device_key or "?"
+                        for r in (d.get("reboots") or []):
+                            note = r.get("note") or ""
+                            if "wrap" not in note:
+                                continue
+                            at_ms = int(r.get("at_ms") or 0)
+                            if not at_ms:
+                                continue
+                            basis = f"{site_name}|{device_key}|{at_ms}"
+                            h = hashlib.sha256(basis.encode()).hexdigest()[:8]
+                            fired_at = datetime.fromtimestamp(at_ms / 1000, tz=timezone.utc)
+                            snap = {"site_name": site_name, "device": hostname,
+                                    "device_ip": str(device_key), "wrap_at_ms": at_ms,
+                                    "_code_key": f"wrap:{device_key}:{at_ms}"}
+                            db.add(AlertLog(
+                                rule_id=None, rule_name="Counter Wrap", severity="INFO",
+                                event_type="wrap", metric_value_at_firing=0.0,
+                                fired_at=fired_at, event_code=f"WRAP-{fired_at:%Y%m%d}-{h}",
+                                rule_snapshot=snap,
+                            ))
+                            wrap_count += 1
+                if wrap_count:
+                    try:
+                        await db.commit()
+                    except Exception as e:
+                        await db.rollback()
+                        logger.warning("Wrap commit failed, rolled back: %s", e)
+            except Exception as e:
+                logger.warning("Counter-wrap detection skipped: %s", e)
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
 
         except Exception as e:
             logger.error("Alert evaluation cycle failed: %s", e)

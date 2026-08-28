@@ -453,6 +453,7 @@ def shape_result(
     polls_by_device: dict[str, dict[int, int]] = {}
     first_seen_by_device: dict[str, Optional[int]] = {}
     raw: list[dict] = []
+    moved_in: dict[str, dict] = aggregations.get("_moved_in") or {}
 
     for bucket in device_buckets:
         key = bucket["key"]
@@ -539,11 +540,29 @@ def shape_result(
             ts > last_seen for ts in gap_bucket_ts
         )
 
+        # Site-migration metadata: when this device's prior era was stitched into
+        # the window, the device is NOT "partial" — we simply have more history.
+        move_info = moved_in.get(item["key"])
+        partial_history_flag = (
+            item["first_seen_ms"] is not None and item["first_seen_ms"] > gte_ms
+        )
+        if move_info:
+            # With the stitched pre-move era, first_seen ≤ gte unless the device
+            # genuinely came online mid-window (then still partial).
+            partial_history_flag = (
+                item["first_seen_ms"] is not None
+                and item["first_seen_ms"] > gte_ms
+                and item["first_seen_ms"] > move_info.get("moved_at_ms", 0)
+            )
+
         devices.append({
             "device_key": item["key"],
             "hostname": item["hostname"],
             "vendor": item["vendor"],
             "site": item["site"],
+            # Site-migration info (absent → null) — plan §5.
+            "site_moved_from": (move_info or {}).get("moved_from"),
+            "site_moved_at_ms": (move_info or {}).get("moved_at_ms"),
             "status": _status(item["last_seen_ms"], lte_ms, reboots, in_gap),
             "sys_uptime_ticks": int(ticks) if ticks is not None else 0,
             "uptime_seconds": seconds,
@@ -555,8 +574,11 @@ def shape_result(
             ),
             "first_seen_ms": item["first_seen_ms"],
             "last_seen_ms": item["last_seen_ms"],
+            # Stitched era explains the gap → not partial. Fallback mirrors the
+            # original rule for devices without migration info.
             "partial_history": (
-                item["first_seen_ms"] is not None and item["first_seen_ms"] > gte_ms
+                partial_history_flag if move_info else
+                (item["first_seen_ms"] is not None and item["first_seen_ms"] > gte_ms)
             ),
             "wrap_risk": ticks is not None and ticks >= WRAP_GUARD,
             "availability_pct": availability,
@@ -624,7 +646,15 @@ async def device_availability(
 
     `window` names the reporting range; explicit gte_ms/lte_ms override it, which
     is how drag-to-zoom asks for a sub-range.
+
+    Site-migration aware (two-phase): when a roster device's tag.site changed
+    inside the window, phase 2 re-queries including the OLD site tag so both eras
+    stitch into one continuous series — the device is never shown as vanishing /
+    not_reporting / partial_history due to the move alone. Phase 2 is skipped
+    entirely when no move exists (the common case).
     """
+    from app.opensearch import site_migration as sm   # local: avoids import cycles
+
     site_tag = SITE_TAG.get(site_name)
     if site_tag is None:
         return {"summary": {}, "devices": []}
@@ -632,11 +662,76 @@ async def device_availability(
     start_ms, end_ms, interval = resolve_range(window, gte_ms, lte_ms, now_ms)
     if client is None:
         client = _get_client_for_site(site_name)
+        endpoint_key = SITE_ENDPOINT.get(site_name, "dc")
+    else:
+        endpoint_key = "adhoc"
 
     response = await safe_search(
         client, INDEX_PATTERN, build_query(site_tag, start_ms, end_ms, interval)
     )
-    return shape_result(
-        response.get("aggregations", {}) or {},
+    aggregations = response.get("aggregations", {}) or {}
+
+    # ── Phase 2: stitch moved-in eras (no-op when nothing moved) ──
+    # The global map answers "did any roster IP previously live under another
+    # normalized site within this window?". If yes, re-run by_device with both
+    # tags; detect_moved_in supplies the metadata stamped onto each device dict.
+    try:
+        site_map = await sm.fetch_site_map(
+            client, endpoint_key,
+            max(end_ms - start_ms, 86_400_000),
+            safe_search,
+        )
+    except Exception:
+        site_map = None                      # degraded mode beats broken page
+
+    moved_in: dict[str, dict] = {}
+    moved_away: list[str] = []
+    if site_map:
+        roster = [b["key"] for b in
+                  ((aggregations.get("by_device") or {}).get("buckets") or [])]
+        moved_in, moved_away = sm.detect_moved_in(site_map, roster, site_tag, start_ms, end_ms)
+
+        if moved_in:
+            old_tags = sorted({m["moved_from"] for m in moved_in.values()})
+            tags_for_phase2 = list({site_tag, *old_tags})
+            body = build_query(site_tag, start_ms, end_ms, interval)
+            # Widen ONLY the site clause to include prior eras. Build once and
+            # mutate the filter list rather than duplicating the query builder.
+            for clause in body["query"]["bool"]["filter"]:
+                if "term" in clause and "tag.site.keyword" in clause["term"]:
+                    clause.clear()
+                    clause["terms"] = {"tag.site.keyword": tags_for_phase2}
+                    break
+            resp2 = await safe_search(client, INDEX_PATTERN, body)
+            agg2 = resp2.get("aggregations", {}) or {}
+            if agg2.get("by_device", {}).get("buckets"):
+                aggregations = agg2          # stitched view wins
+                aggregations["_moved_in"] = moved_in   # carried into shape_result
+
+        # Post-stitch roster correction (plan §4): the response may only contain
+        #  (a) devices whose newest era is THIS site (roster ∪ moved-in),
+        #  (b) minus moved-away devices (newest era elsewhere — never roster here),
+        #  (c) minus pure-other-site devices that the widened site clause pulled
+        #      in during stitching (e.g. the whole old site's fleet). Those are
+        #      not roster devices of this page under ANY era rule.
+        keep = None
+        if moved_away:
+            keep = {ip for ip in roster} - set(moved_away)
+        if moved_in:
+            keep = (keep if keep is not None else set(roster)) | set(moved_in.keys())
+        if keep is not None:
+            buckets = (aggregations.get("by_device") or {}).get("buckets") or []
+            filtered = [b for b in buckets if b["key"] in keep]
+            if len(filtered) != len(buckets):
+                aggregations["by_device"]["buckets"] = filtered
+
+    result = shape_result(
+        aggregations,
         start_ms, end_ms, _interval_seconds(interval), site_tag, window,
     )
+    if moved_in or moved_away:
+        summary = result.get("summary") or {}
+        summary["site_migrations"] = len(moved_in)
+        summary["site_migrations_out"] = len(moved_away)
+        result["summary"] = summary
+    return result

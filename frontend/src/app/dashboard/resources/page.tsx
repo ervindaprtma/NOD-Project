@@ -917,7 +917,17 @@ export default function ResourcesPage() {
                                 className="border-b border-border/40 dark:border-border/20 last:border-0 hover:bg-muted/30"
                               >
                                 <td className="px-4 py-2.5">
-                                  <div className="font-medium">{d.hostname}</div>
+                                  <div className="font-medium flex items-center gap-1.5">
+                                    {d.hostname}
+                                    {d.site_moved_from && (
+                                      <span
+                                        className="text-[11px] px-1.5 py-0.5 rounded-full border border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400"
+                                        title={`Device moved TO this site (tag.site "${d.site_moved_from}" → here) at ${d.site_moved_at_ms ? new Date(d.site_moved_at_ms).toLocaleString("en-GB", { timeZone: "Asia/Jakarta" }) + " WIB" : "?"}. History from both eras is stitched into this view — not a reporting error.`}
+                                      >
+                                        ↘ moved to this site from {d.site_moved_from}
+                                      </span>
+                                    )}
+                                  </div>
                                   <div className="text-xs text-muted-foreground">{d.device_key}</div>
                                 </td>
                                 <td className="px-4 py-2.5 text-muted-foreground">{d.vendor}</td>
@@ -940,9 +950,28 @@ export default function ResourcesPage() {
                                     </span>
                                   )}
                                   {d.wrap_risk && (
+                                    // Tooltip includes the predicted time-to-wrap so the
+                                    // operator knows whether this is a "schedule a reboot
+                                    // this month" item or a "fire now" item. Pure UI math;
+                                    // matches the same constant the engine uses (WRAP_MAX ≈
+                                    // 4.295B hundredths = ~497.1 days).
                                     <span
                                       className="ml-1 text-xs text-amber-600 dark:text-amber-400"
-                                      title="Uptime counter is approaching its 32-bit wrap (~497 days)"
+                                      title={
+                                        (() => {
+                                          const TICKS = 4294967295;
+                                          const up = Math.max(0, d.uptime_seconds || 0);
+                                          const ticks = up * 100;
+                                          const secTo = Math.max(0, (TICKS - ticks) / 100);
+                                          const fmt =
+                                            secTo >= 86400
+                                              ? `${(secTo / 86400).toFixed(1)}d`
+                                              : secTo >= 3600
+                                              ? `${(secTo / 3600).toFixed(1)}h`
+                                              : `${Math.round(secTo / 60)}m`;
+                                          return `SNMP sys_uptime 32-bit counter near wrap (~497 days). Device uptime ${(up / 86400).toFixed(1)}d → wrap in ≈${fmt}. Counter overflow logs as a wrap event in Alert History; safe to ignore as a reboot.`;
+                                        })()
+                                      }
                                     >
                                       ⚠
                                     </span>

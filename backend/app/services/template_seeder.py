@@ -83,9 +83,12 @@ SEED_TEMPLATES: list[dict] = [
             "(limit {{ condition }} {{ threshold_value }} {{ metric_unit }})"
             "{% if scan_volume_text %}\nVolume: {{ scan_volume_text }}{% endif %}"
             "{% if scan_apps_text %}\nTop apps: {{ scan_apps_text }}{% endif %}"
+            "{% if scan_protocols_text %}\nProtocol: {{ scan_protocols_text }}{% endif %}"
+            "{% if scan_ports_text %}\nPort/service: {{ scan_ports_text }}{% endif %}"
             "{% if scan_src_ips_text %}\nFrom: {{ scan_src_ips_text }}{% endif %}"
+            "{% if scan_dst_ips_text %}\nTo: {{ scan_dst_ips_text }}{% endif %}"
             "{% if scan_egress_text %}\nOut via: {{ scan_egress_text }}{% endif %}"
-            "{% if scan_dst_orgs_text %}\nTo: {{ scan_dst_orgs_text }}{% endif %}"
+            "{% if scan_dst_orgs_text %}\nDestination: {{ scan_dst_orgs_text }}{% endif %}"
             "\nFired: {{ fired_at }}{% endif %}"
         ),
         "underlying_kind": "single",

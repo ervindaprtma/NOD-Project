@@ -45,6 +45,9 @@ async def traffic_flow_summary(
     dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
     ingress_interface: str = Query("", description="Filter: ingress interface"),
     egress_interface: str = Query("", description="Filter: egress interface"),
+    risk_filter: str = Query("", description="Filter: application risk"),
+    vendor_filter: str = Query("", description="Filter: application vendor"),
+    tech_filter: str = Query("", description="Filter: application technology"),
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
@@ -55,6 +58,7 @@ async def traffic_flow_summary(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
+        risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter,
         ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -88,6 +92,9 @@ async def traffic_flow_chart(
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
     dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
+    risk_filter: str = Query("", description="Filter: application risk"),
+    vendor_filter: str = Query("", description="Filter: application vendor"),
+    tech_filter: str = Query("", description="Filter: application technology"),
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
@@ -99,6 +106,7 @@ async def traffic_flow_chart(
         bucket_seconds=bucket_seconds,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
+        risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)
@@ -126,6 +134,9 @@ async def traffic_flow_table(
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
     dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
+    risk_filter: str = Query("", description="Filter: application risk"),
+    vendor_filter: str = Query("", description="Filter: application vendor"),
+    tech_filter: str = Query("", description="Filter: application technology"),
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
@@ -140,6 +151,7 @@ async def traffic_flow_table(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, after=after_key, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
+        risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)
@@ -167,6 +179,9 @@ async def traffic_flow_sankey(
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: Optional[int] = Query(None, description="Filter: destination port"),
     dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
+    risk_filter: str = Query("", description="Filter: application risk"),
+    vendor_filter: str = Query("", description="Filter: application vendor"),
+    tech_filter: str = Query("", description="Filter: application technology"),
     current_user=Depends(get_current_user),
 ):
     t0 = time.monotonic()
@@ -178,6 +193,7 @@ async def traffic_flow_sankey(
         direction=direction,
         app_filter=app_filter, category_filter=category_filter,
         client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
+        risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)

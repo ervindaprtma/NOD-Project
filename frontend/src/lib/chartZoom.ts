@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Map a pair of bucket indices to a real time range.
@@ -85,4 +85,24 @@ export function useSvgDragSelect(opts: {
     : {};
 
   return { selRect, dragging: start != null, handlers };
+}
+
+/**
+ * Measure a container element's CSS-pixel width (ResizeObserver-backed) so
+ * viewBox-coordinate charts can render at true size instead of scaling a
+ * fixed logical canvas. Falls back to 0 until first paint.
+ */
+export function useElementWidth<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      setWidth(entries[0]?.contentRect.width ?? 0);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width] as const;
 }

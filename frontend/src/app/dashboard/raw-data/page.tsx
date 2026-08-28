@@ -18,6 +18,10 @@ interface FilterState {
   server_ip: string[];
   application: string[];
   category: string[];
+  risk: string[];
+  vendor: string[];
+  tech: string[];
+  behavior: string[];
   protocol: string[];
   dst_port: string[];
   ingress_interface: string[];
@@ -30,6 +34,10 @@ const defaultFilters: FilterState = {
   server_ip: [],
   application: [],
   category: [],
+  risk: [],
+  vendor: [],
+  tech: [],
+  behavior: [],
   protocol: [],
   dst_port: [],
   ingress_interface: [],
@@ -68,6 +76,7 @@ export default function RawDataPage() {
     category: true, classification: true, protocol: true, dst_port: true, total_bytes: true,
     packets: true, ingress_interface: true, egress_interface: true,
     correlation_id: true, correlation_direction: true, path: false,
+    risk: true, vendor: true, tech: true, url: true, behavior: true,
   });
 
   // ── Build query params ────────────────────────────────────────
@@ -97,6 +106,10 @@ export default function RawDataPage() {
     push("server_ip", filters.server_ip);
     push("application", filters.application);
     push("category", filters.category);
+    push("risk", filters.risk);
+    push("vendor", filters.vendor);
+    push("tech", filters.tech);
+    push("behavior", filters.behavior);
     push("protocol", filters.protocol);
     push("dst_port", filters.dst_port);
     push("ingress_interface", filters.ingress_interface);
@@ -196,6 +209,11 @@ export default function RawDataPage() {
     { key: "server_ip", label: "Server IP", visible: visibleColumns.server_ip, sortable: false },
     { key: "application", label: "Application", visible: visibleColumns.application, sortable: false },
     { key: "category", label: "Category", visible: visibleColumns.category, sortable: false },
+    { key: "risk", label: "Risk", visible: visibleColumns.risk, sortable: false },
+    { key: "vendor", label: "Vendor", visible: visibleColumns.vendor, sortable: false },
+    { key: "tech", label: "Technology", visible: visibleColumns.tech, sortable: false },
+    { key: "url", label: "App URL", visible: visibleColumns.url, sortable: false },
+    { key: "behavior", label: "Behavior", visible: visibleColumns.behavior, sortable: false },
     { key: "classification", label: "Classification", visible: visibleColumns.classification, sortable: false },
     { key: "protocol", label: "Protocol", visible: visibleColumns.protocol, sortable: false },
     { key: "dst_port", label: "Dst Port", visible: visibleColumns.dst_port, sortable: false },
@@ -365,6 +383,18 @@ export default function RawDataPage() {
             <TagFilterField label="Category" values={draftFilters.category}
               onChange={(v) => setDraftFilters({ ...draftFilters, category: v })}
               placeholder="e.g. Web.Client" />
+            <TagFilterField label="Risk" values={draftFilters.risk}
+              onChange={(v) => setDraftFilters({ ...draftFilters, risk: v })}
+              placeholder="e.g. Elevated" />
+            <TagFilterField label="Vendor" values={draftFilters.vendor}
+              onChange={(v) => setDraftFilters({ ...draftFilters, vendor: v })}
+              placeholder="e.g. Microsoft" />
+            <TagFilterField label="Technology" values={draftFilters.tech}
+              onChange={(v) => setDraftFilters({ ...draftFilters, tech: v })}
+              placeholder="e.g. Browser-Based" />
+            <TagFilterField label="Behavior" values={draftFilters.behavior}
+              onChange={(v) => setDraftFilters({ ...draftFilters, behavior: v })}
+              placeholder="e.g. Cloud" />
             <TagFilterField label="Protocol" values={draftFilters.protocol}
               onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })}
               placeholder="e.g. tcp" />
@@ -497,6 +527,44 @@ export default function RawDataPage() {
                             <span className="break-all" title={String(val || "")}>
                               {String(val || "—")}
                             </span>
+                          </td>
+                        );
+                      }
+                      if (col.key === "url") {
+                        const u = String(val || "");
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap">
+                            {u ? (
+                              <a
+                                href={u}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 dark:text-blue-400 hover:underline"
+                                title={u}
+                              >
+                                check via link
+                              </a>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                        );
+                      }
+                      if (col.key === "behavior") {
+                        const arr = Array.isArray(val) ? (val as string[]) : [];
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap">
+                            {arr.length === 0 ? (
+                              <span className="text-muted-foreground">—</span>
+                            ) : (
+                              <span className="flex flex-wrap gap-1">
+                                {arr.map((b, bi) => (
+                                  <span key={bi} className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400">
+                                    {b}
+                                  </span>
+                                ))}
+                              </span>
+                            )}
                           </td>
                         );
                       }

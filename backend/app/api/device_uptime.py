@@ -76,6 +76,10 @@ class DeviceAvailabilityItem(BaseModel):
     first_seen_ms: Optional[int] = None
     last_seen_ms: Optional[int] = None
     partial_history: bool = False          # onboarded mid-window — % is clamped to its own span
+    # Site migration (plan §5): set when the device's tag.site changed inside the
+    # window and the prior era was stitched into this response. Null otherwise.
+    site_moved_from: Optional[str] = None  # normalized previous site_tag (e.g. "dc")
+    site_moved_at_ms: Optional[int] = None # era boundary — last doc in the old site
     wrap_risk: bool = False                # uptime near the 497-day counter wrap
     availability_pct: Optional[float] = None   # None = unknown, never a fabricated estimate
     expected_polls: int = 0

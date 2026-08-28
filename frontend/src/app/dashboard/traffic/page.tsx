@@ -30,7 +30,7 @@ import { TagFilterField, splitChips } from "@/components/TagFilterField";
 
 import { AreaChart } from "@/components/charts/AreaChart";
 import { ChartHeader } from "@/components/charts/ChartHeader";
-import { useSvgDragSelect } from "@/lib/chartZoom";
+import { useSvgDragSelect, useElementWidth } from "@/lib/chartZoom";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
 
 // ── Constants ────────────────────────────────────────────────────
@@ -54,6 +54,9 @@ interface FilterState {
   dst_as_org: string[];
   ingress_interface: string[];
   egress_interface: string[];
+  risk: string[];
+  vendor: string[];
+  tech: string[];
 }
 
 const defaultFilters: FilterState = {
@@ -66,6 +69,9 @@ const defaultFilters: FilterState = {
   dst_as_org: [],
   ingress_interface: [],
   egress_interface: [],
+  risk: [],
+  vendor: [],
+  tech: [],
 };
 
 function countActiveFilters(f: FilterState): number {
@@ -79,6 +85,9 @@ function countActiveFilters(f: FilterState): number {
   if (f.dst_as_org.length > 0) n++;
   if (f.ingress_interface.length > 0) n++;
   if (f.egress_interface.length > 0) n++;
+  if (f.risk.length > 0) n++;
+  if (f.vendor.length > 0) n++;
+  if (f.tech.length > 0) n++;
   return n;
 }
 
@@ -160,6 +169,9 @@ export default function TrafficPage() {
     push("dst_as_org", filters.dst_as_org);
     push("ingress_interface", filters.ingress_interface);
     push("egress_interface", filters.egress_interface);
+    push("risk_filter", filters.risk);
+    push("vendor_filter", filters.vendor);
+    push("tech_filter", filters.tech);
     return parts.length > 0 ? "&" + parts.join("&") : "";
   }, [filters]);
 
@@ -455,6 +467,12 @@ export default function TrafficPage() {
                 onChange={(v) => setDraftFilters({ ...draftFilters, ingress_interface: v })} mono />
               <TagFilterField label="Egress Interface" values={draftFilters.egress_interface}
                 onChange={(v) => setDraftFilters({ ...draftFilters, egress_interface: v })} mono />
+              <TagFilterField label="Risk" values={draftFilters.risk}
+                onChange={(v) => setDraftFilters({ ...draftFilters, risk: v })} />
+              <TagFilterField label="Vendor" values={draftFilters.vendor}
+                onChange={(v) => setDraftFilters({ ...draftFilters, vendor: v })} />
+              <TagFilterField label="Technology" values={draftFilters.tech}
+                onChange={(v) => setDraftFilters({ ...draftFilters, tech: v })} />
             </div>
             <div className="flex items-center gap-2 mt-3">
               <button onClick={applyFilters}
@@ -539,7 +557,36 @@ export default function TrafficPage() {
               />
             </div>
 
-            {/* ═══ ROW 3 — Ingress + Egress ═══ */}
+            {/* ═══ ROW 3 — AppID Enrichment (Risk / Vendor / Tech) ═══ */}
+            {/* Full-row trio: 3 equal fluid (1fr) columns, always 3-across (desktop→phone).
+                Cards dynamically divide the whole row (~1/3 each); grid align-items:stretch
+                keeps them equal height. Bars are max-normalised + clamped in RankedCard, so
+                the Risk (severity-sorted) bars stay inside the card. */}
+            <div className="grid grid-cols-3 gap-4 mb-6">
+              <RankedCard
+                title="Application Risk"
+                loading={summaryLoading}
+                error={!!summaryError}
+                items={(summary?.top_risk || []).map(r => ({ name: r.risk, value: r.total_bytes }))}
+                color="rose"
+              />
+              <RankedCard
+                title="Top Vendors"
+                loading={summaryLoading}
+                error={!!summaryError}
+                items={(summary?.top_vendor || []).slice(0, 10).map(v => ({ name: v.vendor, value: v.total_bytes }))}
+                color="sky"
+              />
+              <RankedCard
+                title="Top Technologies"
+                loading={summaryLoading}
+                error={!!summaryError}
+                items={(summary?.top_tech || []).slice(0, 10).map(t => ({ name: t.tech, value: t.total_bytes }))}
+                color="teal"
+              />
+            </div>
+
+            {/* ═══ ROW 4 — Ingress + Egress ═══ */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
               <RankedCard
                 title="Ingress Interfaces"
@@ -557,7 +604,7 @@ export default function TrafficPage() {
               />
             </div>
 
-            {/* ═══ ROW 4 — Protocol ═══ */}
+            {/* ═══ ROW 5 — Protocol ═══ */}
             <div className="mb-6">
               <RankedCard
                 title="Protocol Distribution"
@@ -883,6 +930,8 @@ const RANK_COLORS: Record<string, { bg: string; bar: string; text: string }> = {
   cyan:    { bg: "bg-cyan-50 dark:bg-cyan-950/20", bar: "bg-cyan-500", text: "text-cyan-700 dark:text-cyan-300" },
   orange:  { bg: "bg-orange-50 dark:bg-orange-950/20", bar: "bg-orange-500", text: "text-orange-700 dark:text-orange-300" },
   teal:    { bg: "bg-teal-50 dark:bg-teal-950/20", bar: "bg-teal-500", text: "text-teal-700 dark:text-teal-300" },
+  rose:    { bg: "bg-rose-50 dark:bg-rose-950/20", bar: "bg-rose-500", text: "text-rose-700 dark:text-rose-300" },
+  sky:     { bg: "bg-sky-50 dark:bg-sky-950/20", bar: "bg-sky-500", text: "text-sky-700 dark:text-sky-300" },
 };
 
 interface RankedItem {
@@ -891,19 +940,23 @@ interface RankedItem {
   mono?: boolean;
 }
 
-function RankedCard({ title, loading, error, items, color, wide }: {
+function RankedCard({ title, loading, error, items, color, wide, className }: {
   title: string;
   loading: boolean;
   error: boolean;
   items: RankedItem[];
   color: string;
   wide?: boolean;
+  className?: string;
 }) {
   const c = RANK_COLORS[color] || RANK_COLORS.blue;
-  const maxVal = items.length > 0 ? items[0].value : 1;
+  // True max, NOT items[0]: the Risk card is sorted by SEVERITY (Critical→Low), so its first
+  // row isn't the largest value — using items[0] let a bigger later bar (e.g. Medium) compute
+  // >100% and overflow the card. Bars are also clamped to 100% below as a backstop.
+  const maxVal = items.length > 0 ? Math.max(...items.map(i => i.value), 1) : 1;
 
   return (
-    <div className="bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6">
+    <div className={`bg-card border border-border/60 dark:border-border/40 rounded-lg shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20 p-6 ${className || ""}`}>
       <h2 className="text-lg font-semibold mb-3">{title}</h2>
       {loading ? (
         <SkeletonBars count={wide ? 10 : 5} />
@@ -912,7 +965,7 @@ function RankedCard({ title, loading, error, items, color, wide }: {
       ) : items.length > 0 ? (
         <div className="space-y-1.5">
           {items.slice(0, wide ? 10 : 10).map((item, i) => {
-            const pct = Math.max(2, (item.value / maxVal) * 100);
+            const pct = Math.max(2, Math.min(100, (item.value / maxVal) * 100));
             const opacity = 1 - i * 0.06;
             return (
               <div key={i} className="flex items-center gap-2 text-xs">
@@ -924,7 +977,7 @@ function RankedCard({ title, loading, error, items, color, wide }: {
                     </span>
                     <span className="ml-2 text-muted-foreground shrink-0">{formatBytes(item.value)}</span>
                   </div>
-                  <div className={`h-1.5 rounded-full ${c.bg}`}>
+                  <div className={`h-1.5 rounded-full overflow-hidden ${c.bg}`}>
                     <div className={`h-full rounded-full ${c.bar}`} style={{ width: `${pct}%`, opacity }} />
                   </div>
                 </div>
@@ -1055,7 +1108,10 @@ function StackedBarChart({
     x: number;
   } | null>(null);
 
-  const W = 800;
+  // Measure the card so the SVG renders at true pixel width — matches the
+  // Total Throughput chart above instead of scaling a fixed 800-unit canvas.
+  const [containerRef, measuredW] = useElementWidth<HTMLDivElement>();
+  const W = measuredW || 800; // ponytail: 800 fallback = pre-resize logical width
   const H = 380;
   const pad = { top: 10, right: 30, bottom: 50, left: 65 };
   const plotW = W - pad.left - pad.right;
@@ -1092,7 +1148,7 @@ function StackedBarChart({
   const xLabelEvery = Math.max(1, Math.floor(data.length / 8));
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       {/* Legend */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
         {appNames.slice(0, 25).map((app) => (
@@ -1106,7 +1162,7 @@ function StackedBarChart({
         )}
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420, cursor: onRangeSelect ? "crosshair" : undefined, touchAction: "none", userSelect: "none" }} {...handlers}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H, maxHeight: 420, cursor: onRangeSelect ? "crosshair" : undefined, touchAction: "none", userSelect: "none" }} {...handlers}>
         {/* Grid lines */}
         {yTickValues.map((v) => (
           <g key={v}>

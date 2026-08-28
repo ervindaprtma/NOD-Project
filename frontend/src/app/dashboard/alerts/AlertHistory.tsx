@@ -29,6 +29,9 @@ const EVENT_LABEL: Record<string, { text: string; cls: string }> = {
   connected: { text: "🟢 Connected", cls: "text-emerald-600" },
   disconnected: { text: "⚪ Disconnected", cls: "text-slate-500" },
   rebooted: { text: "🔁 Rebooted", cls: "text-amber-600" },
+  // Counter wrap (32-bit SNMP sys_uptime rollover) — informational, not an outage.
+  // Matches device_uptime.scan_reboots' "possible counter wrap" note.
+  wrap: { text: "⟲ Counter wrap", cls: "text-blue-600" },
 };
 
 interface LogDetail extends LogRow {
@@ -87,6 +90,7 @@ export function AlertHistory({ ruleId }: { ruleId?: string }) {
           <option value="connected">VPN Connected</option>
           <option value="disconnected">VPN Disconnected</option>
           <option value="rebooted">Rebooted</option>
+          <option value="wrap">Counter wrap</option>
         </select>
         <select value={severity} onChange={(e) => { setSeverity(e.target.value); reset(); }}
           className="px-2.5 py-1.5 text-sm border rounded-md bg-background">
