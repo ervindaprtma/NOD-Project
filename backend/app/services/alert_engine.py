@@ -2348,6 +2348,62 @@ async def _run_evaluation_cycle() -> None:
                     logger.error("Error evaluating reboot rule %s (%s): %s", rule.id, rule.name, e)
                     await db.rollback()
 
+            # ── 5b. Counter-wrap detector (independent of any rule — point-event, no resolve).
+            # A 32-bit SNMP sys_uptime rollover is currently just shown on the Resources
+            # page as a "possible counter wrap" note inside reboot[]. Persist each new wrap as
+            # an AlertLog row (event_type='wrap') so the Alert History reflects the event.
+            # De-dup is event_code = sha("{site}|{device_ip}|{wrap_at_ms}"); same wrap
+            # scanned twice → same code, idempotent on retry. Best-effort, never throw.
+            try:
+                from app.opensearch import device_uptime as du
+                now_ms_w = int(_time.time() * 1000)
+                gte_ms_w = now_ms_w - 6 * 3600 * 1000
+                wrap_count = 0
+                for site_name in list(du.SITE_TAG.keys()):
+                    try:
+                        result = await du.device_availability(
+                            site_name=site_name, gte_ms=gte_ms_w,
+                            lte_ms=now_ms_w, now_ms=now_ms_w,
+                        )
+                    except Exception as e:
+                        logger.warning("Wrap fetch failed for site %s: %s", site_name, e)
+                        continue
+                    for d in (result or {}).get("devices", []) or []:
+                        device_key = d.get("device_key") or ""
+                        hostname = d.get("hostname") or device_key or "?"
+                        for r in (d.get("reboots") or []):
+                            note = r.get("note") or ""
+                            if "wrap" not in note:
+                                continue
+                            at_ms = int(r.get("at_ms") or 0)
+                            if not at_ms:
+                                continue
+                            basis = f"{site_name}|{device_key}|{at_ms}"
+                            h = hashlib.sha256(basis.encode()).hexdigest()[:8]
+                            fired_at = datetime.fromtimestamp(at_ms / 1000, tz=timezone.utc)
+                            snap = {"site_name": site_name, "device": hostname,
+                                    "device_ip": str(device_key), "wrap_at_ms": at_ms,
+                                    "_code_key": f"wrap:{device_key}:{at_ms}"}
+                            db.add(AlertLog(
+                                rule_id=None, rule_name="Counter Wrap", severity="INFO",
+                                event_type="wrap", metric_value_at_firing=0.0,
+                                fired_at=fired_at, event_code=f"WRAP-{fired_at:%Y%m%d}-{h}",
+                                rule_snapshot=snap,
+                            ))
+                            wrap_count += 1
+                if wrap_count:
+                    try:
+                        await db.commit()
+                    except Exception as e:
+                        await db.rollback()
+                        logger.warning("Wrap commit failed, rolled back: %s", e)
+            except Exception as e:
+                logger.warning("Counter-wrap detection skipped: %s", e)
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error("Alert evaluation cycle failed: %s", e)
             await db.rollback()
