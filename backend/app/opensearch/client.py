@@ -11,14 +11,55 @@ from __future__ import annotations
 from functools import lru_cache
 
 from opensearchpy import AsyncOpenSearch
+from opensearchpy.exceptions import OpenSearchException
 import logging
 
 from app.core.config import get_settings
 
 settings = get_settings()
 
+# Methods we consider "query" for System-Logs purposes: errors on these
+# usually mean the dashboard request itself failed. Admin/health methods
+# (`ping`, `cluster.health`, `indices.*`) are already covered by health events.
+_QUERY_METHODS = ("search", "count", "msearch", "explain", "get", "bulk")
 
-def _build_client(hosts: str) -> AsyncOpenSearch:
+
+def _wrap_query_errors(client: AsyncOpenSearch, cluster: str) -> AsyncOpenSearch:
+    """Wrap every query method: on error, mirror to System Logs sink, then re-raise.
+
+    Captures exception type + message only — never the request body, which can
+    contain filter clauses referencing authenticated indexes. `log_event` already
+    scrubs JWTs, basic-auth URLs, and `token=`/`password=` substrings.
+    """
+    from app.services.system_logger import log_event  # local import: avoid cycles at import time
+
+    for method_name in _QUERY_METHODS:
+        original = getattr(client, method_name)
+
+        async def wrapped(*args, __name=method_name, __orig=original, **kwargs):
+            try:
+                return await __orig(*args, **kwargs)
+            except OpenSearchException as exc:
+                # str(exc) already contains the sanitized error from opensearch-py;
+                # any embedded credentials (basic-auth URL, bearer, body params)
+                # pass through `_redact` inside `log_event`.
+                log_event(
+                    level="ERROR",
+                    category="query",
+                    event="query.opensearch_error",
+                    message=f"OpenSearch {__name} failed on {cluster}: {type(exc).__name__}: {exc}",
+                    method=__name,
+                    details={"cluster": cluster, "error_type": type(exc).__name__},
+                )
+                raise
+
+        wrapped.__name__ = method_name
+        setattr(client, method_name, wrapped)
+
+    return client
+
+
+def _build_client(hosts: str, cluster: str = "unknown") -> AsyncOpenSearch:
     """Create an AsyncOpenSearch client for a given endpoint."""
     use_ssl = hosts.startswith("https://")
     kwargs: dict = {
@@ -38,25 +79,25 @@ def _build_client(hosts: str) -> AsyncOpenSearch:
     if use_ssl and not settings.OPENSEARCH_VERIFY_CERTS:
         logger = logging.getLogger("nod.opensearch")
         logger.warning("OpenSearch TLS cert verification disabled — set OPENSEARCH_VERIFY_CERTS=true for production")
-    return AsyncOpenSearch(**kwargs)
+    return _wrap_query_errors(AsyncOpenSearch(**kwargs), cluster)
 
 
 @lru_cache()
 def get_dc_client() -> AsyncOpenSearch:
     """Client for DC OpenSearch cluster (10.80.150.108:9200)."""
-    return _build_client(settings.OPENSEARCH_DC_URL)
+    return _build_client(settings.OPENSEARCH_DC_URL, cluster="opensearch-dc")
 
 
 @lru_cache()
 def get_drc_client() -> AsyncOpenSearch:
     """Client for DRC OpenSearch cluster (10.90.150.108:9200)."""
-    return _build_client(settings.OPENSEARCH_DRC_URL)
+    return _build_client(settings.OPENSEARCH_DRC_URL, cluster="opensearch-drc")
 
 
 @lru_cache()
 def get_ipsec_client() -> AsyncOpenSearch:
     """Client for ipsec-* index."""
-    return _build_client(settings.OPENSEARCH_IPSEC_URL)
+    return _build_client(settings.OPENSEARCH_IPSEC_URL, cluster="opensearch-ipsec")
 
 
 async def check_opensearch_health(client: AsyncOpenSearch) -> bool:

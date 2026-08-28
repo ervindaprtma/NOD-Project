@@ -109,12 +109,26 @@ async def _run_schedule(session, schedule: ReportSchedule, now: datetime):
             )
 
         logger.info(f"Scheduled report {job.id} completed and distributed to {channels}")
+        try:
+            from app.services.system_logger import log_event
+
+            log_event(level="INFO", category="report", event="report.scheduled_completed",
+                      message=f"Scheduled report {job.id} ({schedule.report_type}) completed")
+        except Exception:
+            pass
 
     except Exception as e:
         job.status = "failed"
         job.error_message = str(e)
         await session.commit()
         logger.error(f"Scheduled report {job.id} failed: {e}")
+        try:
+            from app.services.system_logger import log_event
+
+            log_event(level="ERROR", category="report", event="report.scheduled_failed",
+                      message=f"Scheduled report {schedule.id} ({schedule.report_type}) failed: {e}")
+        except Exception:
+            pass
         raise
 
     # Update schedule timing

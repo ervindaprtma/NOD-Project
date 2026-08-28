@@ -30,7 +30,7 @@ import { TagFilterField, splitChips } from "@/components/TagFilterField";
 
 import { AreaChart } from "@/components/charts/AreaChart";
 import { ChartHeader } from "@/components/charts/ChartHeader";
-import { useSvgDragSelect } from "@/lib/chartZoom";
+import { useSvgDragSelect, useElementWidth } from "@/lib/chartZoom";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
 
 // ── Constants ────────────────────────────────────────────────────
@@ -1108,7 +1108,10 @@ function StackedBarChart({
     x: number;
   } | null>(null);
 
-  const W = 800;
+  // Measure the card so the SVG renders at true pixel width — matches the
+  // Total Throughput chart above instead of scaling a fixed 800-unit canvas.
+  const [containerRef, measuredW] = useElementWidth<HTMLDivElement>();
+  const W = measuredW || 800; // ponytail: 800 fallback = pre-resize logical width
   const H = 380;
   const pad = { top: 10, right: 30, bottom: 50, left: 65 };
   const plotW = W - pad.left - pad.right;
@@ -1145,7 +1148,7 @@ function StackedBarChart({
   const xLabelEvery = Math.max(1, Math.floor(data.length / 8));
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       {/* Legend */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
         {appNames.slice(0, 25).map((app) => (
@@ -1159,7 +1162,7 @@ function StackedBarChart({
         )}
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420, cursor: onRangeSelect ? "crosshair" : undefined, touchAction: "none", userSelect: "none" }} {...handlers}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H, maxHeight: 420, cursor: onRangeSelect ? "crosshair" : undefined, touchAction: "none", userSelect: "none" }} {...handlers}>
         {/* Grid lines */}
         {yTickValues.map((v) => (
           <g key={v}>
