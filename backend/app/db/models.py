@@ -671,3 +671,23 @@ class MaintenanceWindow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
+
+
+class DeviceIpAlias(Base):
+    """Re-IPed device mapping: old tag.source IP → current tag.source IP.
+
+    Availability identity is tag.source (IP); when a device is re-IPed the old
+    era's docs would orphan and the new IP would show as a fresh device with
+    partial_history. An explicit alias row lets the roster query include both
+    IPs so eras stitch under one device card. Superadmin-managed (explicit
+    mapping, never auto-inferred from hostname).
+    """
+    __tablename__ = "device_ip_aliases"
+
+    old_ip: Mapped[str] = mapped_column(String(45), primary_key=True)
+    current_ip: Mapped[str] = mapped_column(String(45), nullable=False, index=True)
+    hostname: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
