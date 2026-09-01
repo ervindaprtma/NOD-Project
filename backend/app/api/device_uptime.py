@@ -80,6 +80,10 @@ class DeviceAvailabilityItem(BaseModel):
     # window and the prior era was stitched into this response. Null otherwise.
     site_moved_from: Optional[str] = None  # normalized previous site_tag (e.g. "dc")
     site_moved_at_ms: Optional[int] = None # era boundary — last doc in the old site
+    # Re-IP (device_ip_aliases): set when the device's tag.source changed inside
+    # the window and the old-IP era was merged into this card. Null otherwise.
+    reip_from: Optional[list[str]] = None  # old source IP(s) now aliasing to this card
+    reip_at_ms: Optional[int] = None       # era boundary — first doc under the current IP
     wrap_risk: bool = False                # uptime near the 497-day counter wrap
     availability_pct: Optional[float] = None   # None = unknown, never a fabricated estimate
     expected_polls: int = 0

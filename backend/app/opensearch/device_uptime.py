@@ -16,7 +16,7 @@ without a cluster (see tests/test_device_uptime.py).
 from __future__ import annotations
 
 import time
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from opensearchpy import AsyncOpenSearch
 
@@ -486,6 +486,36 @@ def shape_result(
             "series": series,
         })
 
+    # Pass 1.5: re-IP stitching — merge old-IP era buckets into the current-IP
+    # card. Pure dict fold; every downstream calc (series, reboots, availability)
+    # then sees one continuous device. Aliased cards are stamped for the UI.
+    ip_aliases: Dict[str, Dict] = aggregations.get("_ip_aliases") or {}
+    if ip_aliases:
+        by_current: Dict[str, list[dict]] = {}
+        for item in raw:
+            current_key = ip_aliases.get(item["key"], item["key"])
+            by_current.setdefault(current_key, []).append(item)
+        merged_raw: list[dict] = []
+        for current, items in by_current.items():
+            if len(items) == 1:
+                merged_raw.append(items[0])
+                continue
+            items_sorted = sorted(items, key=lambda i: i["key"] == current, reverse=True)
+            base = next(i for i in items_sorted if i["key"] == current)   # current era wins metadata
+            olds = [i for i in items if i["key"] != current]
+            # Era boundary BEFORE mutating base (shared dict): first doc of the current era.
+            reip_at = base["first_seen_ms"]
+            series = [p for i in olds for p in i["series"]] + base["series"]
+            series.sort(key=lambda p: p["ts_ms"])
+            base["series"] = series
+            base["first_seen_ms"] = min(
+                (i["first_seen_ms"] for i in items if i["first_seen_ms"] is not None),
+                default=base["first_seen_ms"])
+            base["polls"] = sum(i["polls"] for i in items)
+            base["_reip"] = {"from": sorted(i["key"] for i in olds), "at_ms": reip_at}
+            merged_raw.append(base)
+        raw = merged_raw
+
     # Pass 2: collector gaps are a cross-device fact, so they need every device first.
     gaps = find_collector_gaps(polls_by_device, first_seen_by_device, bucket_ms)
     gap_seconds = sum(gap["duration_seconds"] for gap in gaps)
@@ -543,6 +573,7 @@ def shape_result(
         # Site-migration metadata: when this device's prior era was stitched into
         # the window, the device is NOT "partial" — we simply have more history.
         move_info = moved_in.get(item["key"])
+        reip_info = item.get("_reip")
         partial_history_flag = (
             item["first_seen_ms"] is not None and item["first_seen_ms"] > gte_ms
         )
@@ -554,6 +585,10 @@ def shape_result(
                 and item["first_seen_ms"] > gte_ms
                 and item["first_seen_ms"] > move_info.get("moved_at_ms", 0)
             )
+        elif reip_info:
+            # Re-IP: old era merged, so first_seen reflects the OLD IP's first
+            # doc — full history unless the box genuinely came online mid-window.
+            partial_history_flag = False
 
         devices.append({
             "device_key": item["key"],
@@ -563,6 +598,9 @@ def shape_result(
             # Site-migration info (absent → null) — plan §5.
             "site_moved_from": (move_info or {}).get("moved_from"),
             "site_moved_at_ms": (move_info or {}).get("moved_at_ms"),
+            # Re-IP info (absent → null): old source IP(s) stitched into this card.
+            "reip_from": (item.get("_reip") or {}).get("from"),
+            "reip_at_ms": (item.get("_reip") or {}).get("at_ms"),
             "status": _status(item["last_seen_ms"], lte_ms, reboots, in_gap),
             "sys_uptime_ticks": int(ticks) if ticks is not None else 0,
             "uptime_seconds": seconds,
@@ -574,11 +612,12 @@ def shape_result(
             ),
             "first_seen_ms": item["first_seen_ms"],
             "last_seen_ms": item["last_seen_ms"],
-            # Stitched era explains the gap → not partial. Fallback mirrors the
-            # original rule for devices without migration info.
+            # Stitched era explains the gap → not partial. Re-IP same: the old
+            # era's docs are merged, so first_seen reflects full history.
             "partial_history": (
                 partial_history_flag if move_info else
-                (item["first_seen_ms"] is not None and item["first_seen_ms"] > gte_ms)
+                (False if reip_info else
+                 (item["first_seen_ms"] is not None and item["first_seen_ms"] > gte_ms))
             ),
             "wrap_risk": ticks is not None and ticks >= WRAP_GUARD,
             "availability_pct": availability,
@@ -666,6 +705,15 @@ async def device_availability(
     else:
         endpoint_key = "adhoc"
 
+    # ── Re-IP stitching setup: alias map (old source IP → current IP) ──
+    # A re-IPed device's history lives under the old IP — but under the SAME
+    # site tag (verified: 10.10.10.10 docs are tag.site=office, 105k docs), so
+    # build_query already returns both eras; no source-clause widening needed.
+    # The alias map only drives the bucket MERGE in shape_result (pass 1.5).
+    # Degraded mode (no map) = today's behavior.
+    from app.opensearch import ip_aliases as ia   # local: avoids import cycles
+    alias_map = await ia.fetch_alias_map()
+
     response = await safe_search(
         client, INDEX_PATTERN, build_query(site_tag, start_ms, end_ms, interval)
     )
@@ -694,26 +742,20 @@ async def device_availability(
         if moved_in:
             old_tags = sorted({m["moved_from"] for m in moved_in.values()})
             tags_for_phase2 = list({site_tag, *old_tags})
-            body = build_query(site_tag, start_ms, end_ms, interval)
+            body2 = build_query(site_tag, start_ms, end_ms, interval)
             # Widen ONLY the site clause to include prior eras. Build once and
             # mutate the filter list rather than duplicating the query builder.
-            for clause in body["query"]["bool"]["filter"]:
+            for clause in body2["query"]["bool"]["filter"]:
                 if "term" in clause and "tag.site.keyword" in clause["term"]:
                     clause.clear()
                     clause["terms"] = {"tag.site.keyword": tags_for_phase2}
                     break
-            resp2 = await safe_search(client, INDEX_PATTERN, body)
+            resp2 = await safe_search(client, INDEX_PATTERN, body2)
             agg2 = resp2.get("aggregations", {}) or {}
             if agg2.get("by_device", {}).get("buckets"):
                 aggregations = agg2          # stitched view wins
                 aggregations["_moved_in"] = moved_in   # carried into shape_result
 
-        # Post-stitch roster correction (plan §4): the response may only contain
-        #  (a) devices whose newest era is THIS site (roster ∪ moved-in),
-        #  (b) minus moved-away devices (newest era elsewhere — never roster here),
-        #  (c) minus pure-other-site devices that the widened site clause pulled
-        #      in during stitching (e.g. the whole old site's fleet). Those are
-        #      not roster devices of this page under ANY era rule.
         keep = None
         if moved_away:
             keep = {ip for ip in roster} - set(moved_away)
@@ -724,6 +766,13 @@ async def device_availability(
             filtered = [b for b in buckets if b["key"] in keep]
             if len(filtered) != len(buckets):
                 aggregations["by_device"]["buckets"] = filtered
+
+    # Re-IP era buckets: tag the agg with the alias info so shape_result's
+    # pass 1.5 can fold old-IP buckets into the current-IP card. Applied
+    # OUTSIDE the site_map block — a re-IP must stitch even when the
+    # site-migration map is unavailable.
+    if alias_map:
+        aggregations["_ip_aliases"] = alias_map
 
     result = shape_result(
         aggregations,

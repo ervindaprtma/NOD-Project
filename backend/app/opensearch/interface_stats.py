@@ -16,10 +16,12 @@ from app.opensearch.client import get_dc_client, get_drc_client
 from app.opensearch.query import safe_search
 
 # ── Site-to-source-IP mapping ────────────────────────────────────
+# FGT-OFFICE re-IPed 2026-08-28: 10.10.10.10 → 10.70.150.1 (same box, same
+# ifIndexes 16/17/38/39 — verified live). Historical docs stay under the old IP.
 SITE_SOURCE_MAP: dict[str, str] = {
     "Site_FGT-DC": "10.80.150.1",
     "Site_FGT-DRC": "10.90.150.1",
-    "Site_FGT_Office": "10.10.10.10",
+    "Site_FGT_Office": "10.70.150.1",
 }
 
 # ── Site-to-OpenSearch-endpoint routing ──────────────────────────

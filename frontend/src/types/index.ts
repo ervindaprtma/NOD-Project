@@ -260,6 +260,8 @@ export interface DeviceAvailabilityItem {
   partial_history: boolean;        // onboarded mid-window — % clamped to its own span
   site_moved_from?: string | null;   // tag.site changed in-window; prior era stitched (plan §5)
   site_moved_at_ms?: number | null;  // era boundary: last doc under the old site tag
+  reip_from?: string[] | null;       // device re-IPed: old tag.source IP(s) stitched into this card
+  reip_at_ms?: number | null;        // first doc under the current IP (era boundary)
   wrap_risk: boolean;              // uptime near the ~497-day counter wrap
   availability_pct: number | null;
   expected_polls: number;

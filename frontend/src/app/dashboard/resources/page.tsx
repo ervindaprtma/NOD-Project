@@ -927,6 +927,14 @@ export default function ResourcesPage() {
                                         ↘ moved to this site from {d.site_moved_from}
                                       </span>
                                     )}
+                                    {d.reip_from && d.reip_from.length > 0 && (
+                                      <span
+                                        className="text-[11px] px-1.5 py-0.5 rounded-full border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400"
+                                        title={`Device re-IPed: ${d.reip_from.join(", ")} → current IP at ${d.reip_at_ms ? new Date(d.reip_at_ms).toLocaleString("en-GB", { timeZone: "Asia/Jakarta" }) + " WIB" : "?"}. History from both IPs is stitched into this view — not a reporting error.`}
+                                      >
+                                        IP changes from {d.reip_from.join(", ")}
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="text-xs text-muted-foreground">{d.device_key}</div>
                                 </td>
