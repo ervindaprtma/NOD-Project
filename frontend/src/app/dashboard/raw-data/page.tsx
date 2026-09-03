@@ -72,7 +72,7 @@ export default function RawDataPage() {
 
   // ── Column visibility ─────────────────────────────────────────
   const [visibleColumns, setVisibleColumns] = useState({
-    timestamp: true, client_ip: true, server_ip: true, application: true,
+    timestamp: true, client_ip: true, server_ip: true, app_id: true, application: true,
     category: true, classification: true, protocol: true, dst_port: true, total_bytes: true,
     packets: true, ingress_interface: true, egress_interface: true,
     correlation_id: true, correlation_direction: true, path: false,
@@ -208,6 +208,7 @@ export default function RawDataPage() {
     { key: "client_ip", label: "Client IP", visible: visibleColumns.client_ip, sortable: false },
     { key: "server_ip", label: "Server IP", visible: visibleColumns.server_ip, sortable: false },
     { key: "application", label: "Application", visible: visibleColumns.application, sortable: false },
+    { key: "app_id", label: "App ID", visible: visibleColumns.app_id, sortable: false },
     { key: "category", label: "Category", visible: visibleColumns.category, sortable: false },
     { key: "risk", label: "Risk", visible: visibleColumns.risk, sortable: false },
     { key: "vendor", label: "Vendor", visible: visibleColumns.vendor, sortable: false },

@@ -193,6 +193,7 @@ export interface RawFlowRecord {
   timestamp: string;
   client_ip: string;
   server_ip: string;
+  app_id?: number | null;
   application: string;
   category: string;
   classification?: string;
