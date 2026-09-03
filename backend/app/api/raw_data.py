@@ -144,6 +144,7 @@ async def get_raw_flows(
             timestamp=r["timestamp"],
             client_ip=r["client_ip"],
             server_ip=r["server_ip"],
+            app_id=r.get("app_id"),
             application=r["application"],
             category=r["category"],
             protocol=r["protocol"],

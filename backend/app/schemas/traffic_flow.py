@@ -152,6 +152,7 @@ class RawFlowRecord(BaseModel):
     timestamp: str  # ISO 8601
     client_ip: str
     server_ip: str
+    app_id: Optional[int] = None  # FortiGate App ID (flow.application.id); None for unclassified flows
     application: str
     category: str
     protocol: str
