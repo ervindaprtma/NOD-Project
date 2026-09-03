@@ -87,6 +87,7 @@ SEED_TEMPLATES: list[dict] = [
             "{% if scan_ports_text %}\nPort/service: {{ scan_ports_text }}{% endif %}"
             "{% if scan_src_ips_text %}\nFrom: {{ scan_src_ips_text }}{% endif %}"
             "{% if scan_dst_ips_text %}\nTo: {{ scan_dst_ips_text }}{% endif %}"
+            "{% if scan_ingress_text %}\nIn via: {{ scan_ingress_text }}{% endif %}"
             "{% if scan_egress_text %}\nOut via: {{ scan_egress_text }}{% endif %}"
             "{% if scan_dst_orgs_text %}\nDestination: {{ scan_dst_orgs_text }}{% endif %}"
             "\nFired: {{ fired_at }}{% endif %}"
@@ -455,6 +456,7 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "{% if scan_volume_text %}\n📦 <b>Volume:</b> {{ scan_volume_text|e }}{% endif %}"
         "{% if scan_apps_text %}\n🏆 <b>Top apps:</b> {{ scan_apps_text|e }}{% endif %}"
         "{% if scan_src_ips_text %}\n👥 <b>From:</b> {{ scan_src_ips_text|e }}{% endif %}"
+        "{% if scan_ingress_text %}\n🚪 <b>In via:</b> {{ scan_ingress_text|e }}{% endif %}"
         "{% if scan_egress_text %}\n🚪 <b>Out via:</b> {{ scan_egress_text|e }}{% endif %}"
         "{% if scan_dst_orgs_text %}\n🌍 <b>To:</b> {{ scan_dst_orgs_text|e }}{% endif %}",
         # Resolve: NOW as the headline, WAS in parentheses with the drop — the fired app's current
