@@ -13,6 +13,7 @@ from typing import Optional
 from opensearchpy import AsyncOpenSearch
 
 from app.opensearch.client import get_dc_client, get_drc_client
+from app.opensearch.ip_aliases import fetch_alias_map
 from app.opensearch.query import safe_search
 
 # ── Site-to-source-IP mapping ────────────────────────────────────
@@ -115,6 +116,21 @@ def _get_client_for_site(site_name: str) -> AsyncOpenSearch:
     return get_dc_client()
 
 
+async def _sources_for_site(site_name: str) -> list[str]:
+    """Current source IP + any old IPs that re-IPed into it (device_ip_aliases).
+
+    fgt_iface_stats identity is tag.source (IP), so a re-IP orphans pre-cutover
+    history under the old IP. Filtering on both eras' IPs at once stitches the
+    timeline across the cutover — same alias map Availability uses. Degrades to
+    just the current IP if the alias map is unavailable.
+    """
+    source_ip = SITE_SOURCE_MAP.get(site_name)
+    if not source_ip:
+        raise ValueError(f"Unknown site_name: {site_name}")
+    alias_map = await fetch_alias_map()  # {old_ip: current_ip}, 15-min cached
+    return [source_ip] + [old for old, cur in alias_map.items() if cur == source_ip]
+
+
 # ─────────────────────────────────────────────────────────────────
 # Interface Stats Timeline (Q-07: single query, hardcoded interfaces)
 # ─────────────────────────────────────────────────────────────────
@@ -137,9 +153,7 @@ async def interface_stats_timeline(
     Q-06: exact measurement_name term filter.
     Q-05: aggregation in OpenSearch, not Python.
     """
-    source_ip = SITE_SOURCE_MAP.get(site_name)
-    if not source_ip:
-        raise ValueError(f"Unknown site_name: {site_name}")
+    sources = await _sources_for_site(site_name)
 
     iface_map = SITE_IFINDEX_MAP.get(site_name, {})
     if not iface_map:
@@ -160,7 +174,7 @@ async def interface_stats_timeline(
                 "filter": [
                     _time_range(gte_ms, lte_ms),
                     {"term": {"measurement_name.keyword": "fgt_iface_stats"}},
-                    {"term": {"tag.source.keyword": source_ip}},
+                    {"terms": {"tag.source.keyword": sources}},
                     {"terms": {"tag.ifIndex.keyword": if_indexes}},
                 ]
             }
@@ -224,9 +238,7 @@ async def interface_stats_summary(
       { "3": {"rx_mbps": {"avg":.., "max":..}, "tx_mbps": {...},
               "utilization_pct": {...}, "oper_status": 1, "label": "WAN LinkNet"}, ... }
     """
-    source_ip = SITE_SOURCE_MAP.get(site_name)
-    if not source_ip:
-        raise ValueError(f"Unknown site_name: {site_name}")
+    sources = await _sources_for_site(site_name)
     iface_map = SITE_IFINDEX_MAP.get(site_name, {})
     if not iface_map:
         raise ValueError(f"No interface mapping for site: {site_name}")
@@ -240,7 +252,7 @@ async def interface_stats_summary(
         "query": {"bool": {"filter": [
             _time_range(gte_ms, lte_ms),
             {"term": {"measurement_name.keyword": "fgt_iface_stats"}},
-            {"term": {"tag.source.keyword": source_ip}},
+            {"terms": {"tag.source.keyword": sources}},
             {"terms": {"tag.ifIndex.keyword": if_indexes}},
         ]}},
         "aggs": {"by_interface": {

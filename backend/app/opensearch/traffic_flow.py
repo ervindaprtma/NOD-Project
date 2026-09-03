@@ -870,12 +870,19 @@ async def appid_flow_app_detail(
                     # WinRM) but the port + protocol answer "MS-SQL over 1433/TCP" — same shape
                     # the destination bytes are ordered on. Includes 0 buckets so the template
                     # can show "(port 0)" when the field is unmapped instead of dropping the row.
+                    # `missing` (terms-agg param) buckets docs lacking the field under a sentinel;
+                    # NOT `missing_bucket`, which is composite-agg-only and makes OpenSearch reject
+                    # the whole query with 400 → safe_search swallows it → empty enrichment.
                     "ports": {"terms": {"field": "flow.server.l4.port.id", "size": top, "order": BYTES_DESC,
-                                        "missing_bucket": True},
+                                        "missing": 0},
                               "aggs": _bytes_sum()},
                     "protos": {"terms": {"field": "l4.proto.name", "size": top, "order": BYTES_DESC,
-                                         "missing_bucket": True},
+                                         "missing": "—"},
                                "aggs": _bytes_sum()},
+                    # ingress = LAN-side interface the app entered on (flow.in.netif.alias). Plain
+                    # terms (no zone scope): the ingress leg is the internal VLAN, not the WAN link.
+                    "ingress": {"terms": {"field": "flow.in.netif.alias", "size": top, "order": BYTES_DESC},
+                                "aggs": _bytes_sum()},
                     "egress": egress_agg,
                 },
             }
@@ -898,8 +905,10 @@ async def appid_flow_app_detail(
         eg = ab.get("egress", {})
         eg_buckets = eg.get("ifaces", {}).get("buckets", []) if internet_path else eg.get("buckets", [])
         egress = [x["key"] for x in eg_buckets]
+        ingress = [x["key"] for x in ab.get("ingress", {}).get("buckets", [])]
         out[ab["key"]] = {"total_bytes": t, "src_ips": src_ips, "dst_ips": dst_ips,
-                          "dst_orgs": dst_orgs, "ports": ports, "protos": protos, "egress": egress}
+                          "dst_orgs": dst_orgs, "ports": ports, "protos": protos,
+                          "ingress": ingress, "egress": egress}
     return out
 
 
