@@ -44,7 +44,7 @@ def _site_filter(site_name: str) -> dict:
 def _base_filters(
     gte_ms: int, lte_ms: int, site_name: str, path_filter: str = "inbound-vip",
     direction: str = "", app_filter: str = "", client_ip: str = "",
-    server_ip: str = "", protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
+    server_ip: str = "", protocol: str = "", dst_port: int | list[int] | None = None, src_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
     app_filter_not: str = "", client_ip_not: str = "", server_ip_not: str = "",
@@ -81,7 +81,8 @@ def _base_filters(
         if exc: excl.append(exc)
     if dst_port is not None:
         # Role-based (stable across both legs) — see traffic_flow._base_filters.
-        filters.append({"term": {"flow.server.l4.port.id": dst_port}})
+        filters.append({"terms": {"flow.server.l4.port.id": dst_port}} if isinstance(dst_port, list)
+                       else {"term": {"flow.server.l4.port.id": dst_port}})
     if dst_port_not is not None:
         # int → term, list (multi-port exclude) → terms
         excl.append({"terms": {"flow.server.l4.port.id": dst_port_not}} if isinstance(dst_port_not, list)
@@ -98,7 +99,7 @@ async def flow_summary(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT-DRC", path_filter: str = "inbound-vip",
     app_filter: str = "", client_ip: str = "", server_ip: str = "",
-    protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
+    protocol: str = "", dst_port: int | list[int] | None = None, src_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
     exclude: dict | None = None,
@@ -237,7 +238,8 @@ async def flow_chart(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT-DRC", top_n: int = 20, path_filter: str = "inbound-vip",
     bucket_seconds: int = 60, app_filter: str = "", client_ip: str = "",
-    server_ip: str = "", protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
+    server_ip: str = "", protocol: str = "", dst_port: int | list[int] | None = None, src_as_org: str = "",
+    ingress_interface: str = "", egress_interface: str = "",
     exclude: dict | None = None,
 ) -> dict:
     if client is None:
@@ -245,7 +247,7 @@ async def flow_chart(
 
     interval_str = f"{bucket_seconds}s"
     # base_filter stays the include list (reused by spread/anomaly on the post-exclude set).
-    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, **(exclude or {}))
+    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, **(exclude or {}))
 
     # Pass A: global top-N resolved services over the whole range (AppID name first,
     # port fallback for unclassified) → the stable series set for the timeline.
@@ -306,7 +308,8 @@ async def sankey_data(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT-DRC", path_filter: str = "inbound-vip",
     direction: str = "", app_filter: str = "", client_ip: str = "",
-    server_ip: str = "", protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
+    server_ip: str = "", protocol: str = "", dst_port: int | list[int] | None = None, src_as_org: str = "",
+    ingress_interface: str = "", egress_interface: str = "",
     exclude: dict | None = None,
 ) -> dict:
     """Sankey for inbound VIP traffic.
@@ -348,7 +351,7 @@ async def sankey_data(
     # slice (BUG-1). ponytail: service_port + as_org make this composite very high cardinality,
     # so coverage stays bounded at the helper's max_pages ceiling (top flows by key). Upgrade
     # path = nested terms-by-bytes. See Documentation/SANKEY_BUGS_ANALYSIS.md.
-    q = _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, **(exclude or {})))
+    q = _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, **(exclude or {})))
     buckets = await composite_all_buckets(client, FLOW_INDEX, q, sources, _bytes_sum())
 
     # direction selects the byte counter: upload=client.bytes, download=server.bytes,
@@ -430,7 +433,8 @@ async def flow_table(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT-DRC", after: Optional[dict] = None, page_size: int = 100,
     path_filter: str = "inbound-vip", app_filter: str = "", client_ip: str = "",
-    server_ip: str = "", protocol: str = "", dst_port: int | None = None, src_as_org: str = "",
+    server_ip: str = "", protocol: str = "", dst_port: int | list[int] | None = None, src_as_org: str = "",
+    ingress_interface: str = "", egress_interface: str = "",
     exclude: dict | None = None,
 ) -> dict:
     if client is None:
@@ -450,7 +454,7 @@ async def flow_table(
 
     body = {
         "size": 0,
-        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, **(exclude or {}))),
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, src_as_org=src_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, **(exclude or {}))),
         "aggs": {
             "flow_table": {
                 "composite": composite_body,

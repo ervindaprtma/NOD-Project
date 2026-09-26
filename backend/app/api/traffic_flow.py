@@ -15,7 +15,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from app.api._safe import build_meta, safe_query, pack_excludes
+from app.api._safe import build_meta, safe_query, pack_excludes, parse_ports
 from app.api.auth import get_current_user
 from app.opensearch.query import track_degradation
 from app.opensearch import traffic_flow as tf_qb
@@ -41,7 +41,7 @@ async def traffic_flow_summary(
     client_ip: str = Query("", description="Filter: client IP"),
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
     ingress_interface: str = Query("", description="Filter: ingress interface"),
     egress_interface: str = Query("", description="Filter: egress interface"),
@@ -57,7 +57,7 @@ async def traffic_flow_summary(
         exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
-        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
+        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=parse_ports(dst_port), dst_as_org=dst_as_org,
         risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter,
         ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
@@ -90,7 +90,7 @@ async def traffic_flow_chart(
     client_ip: str = Query("", description="Filter: client IP"),
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
     risk_filter: str = Query("", description="Filter: application risk"),
     vendor_filter: str = Query("", description="Filter: application vendor"),
@@ -105,7 +105,7 @@ async def traffic_flow_chart(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         bucket_seconds=bucket_seconds,
         app_filter=app_filter, category_filter=category_filter,
-        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
+        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=parse_ports(dst_port), dst_as_org=dst_as_org,
         risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -132,8 +132,10 @@ async def traffic_flow_table(
     client_ip: str = Query("", description="Filter: client IP"),
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     risk_filter: str = Query("", description="Filter: application risk"),
     vendor_filter: str = Query("", description="Filter: application vendor"),
     tech_filter: str = Query("", description="Filter: application technology"),
@@ -150,7 +152,8 @@ async def traffic_flow_table(
         exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, after=after_key, path_filter=path_filter,
         app_filter=app_filter, category_filter=category_filter,
-        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
+        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=parse_ports(dst_port), dst_as_org=dst_as_org,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
         risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -177,7 +180,7 @@ async def traffic_flow_sankey(
     client_ip: str = Query("", description="Filter: client IP"),
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     dst_as_org: str = Query("", description="Filter: destination AS org (comma-separated)"),
     risk_filter: str = Query("", description="Filter: application risk"),
     vendor_filter: str = Query("", description="Filter: application vendor"),
@@ -192,7 +195,7 @@ async def traffic_flow_sankey(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter=path_filter,
         direction=direction,
         app_filter=app_filter, category_filter=category_filter,
-        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org,
+        client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=parse_ports(dst_port), dst_as_org=dst_as_org,
         risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter,
     )
     elapsed = int((time.monotonic() - t0) * 1000)

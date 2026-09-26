@@ -58,7 +58,7 @@ def _internal_path_filter(traffic_path: str = "all") -> dict:
 def _base_filters(
     gte_ms: int, lte_ms: int, site_name: str,
     service_filter: str = "", client_ip: str = "", server_ip: str = "",
-    protocol: str = "", dst_port: int | None = None,
+    protocol: str = "", dst_port: int | list[int] | None = None,
     traffic_path: str = "all",
     ingress_interface: str = "",
     egress_interface: str = "",
@@ -85,7 +85,9 @@ def _base_filters(
     ):
         if inc: filters.append(inc)
         if exc: excl.append(exc)
-    if dst_port is not None:
+    if isinstance(dst_port, list):
+        filters.append({"terms": {"flow.server.l4.port.id": dst_port}})
+    elif dst_port is not None:
         # Role-based, and consistent with the service_filter above which already
         # resolves to flow.server.l4.port.id — see traffic_flow._base_filters.
         filters.append({"term": {"flow.server.l4.port.id": dst_port}})
@@ -104,7 +106,7 @@ async def flow_summary(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT_Office", app_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None, traffic_path: str = "all",
+    dst_port: int | list[int] | None = None, traffic_path: str = "all",
     ingress_interface: str = "",
     egress_interface: str = "",
     exclude: dict | None = None,
@@ -204,7 +206,8 @@ async def flow_chart(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT_Office", top_n: int = 20, bucket_seconds: int = 60,
     app_filter: str = "", client_ip: str = "", server_ip: str = "",
-    protocol: str = "", dst_port: int | None = None, traffic_path: str = "all",
+    protocol: str = "", dst_port: int | list[int] | None = None, traffic_path: str = "all",
+    ingress_interface: str = "", egress_interface: str = "",
     exclude: dict | None = None,
 ) -> dict:
     if client is None:
@@ -221,7 +224,7 @@ async def flow_chart(
         bucket_seconds = -(-span_s // MAX_DATE_BUCKETS)  # ceil division
 
     # base_filter stays the include list (reused by spread/anomaly on the post-exclude set).
-    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path, **(exclude or {}))
+    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path, ingress_interface=ingress_interface, egress_interface=egress_interface, **(exclude or {}))
 
     # Pass A: global top-N resolved services over the whole range (AppID name first,
     # port fallback for unclassified). This is the STABLE series set for the timeline.
@@ -292,7 +295,8 @@ async def sankey_data(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT_Office",
     app_filter: str = "", client_ip: str = "", server_ip: str = "",
-    protocol: str = "", dst_port: int | None = None, traffic_path: str = "all",
+    protocol: str = "", dst_port: int | list[int] | None = None, traffic_path: str = "all",
+    ingress_interface: str = "", egress_interface: str = "",
     direction: str = "",
     exclude: dict | None = None,
 ) -> dict:
@@ -303,7 +307,7 @@ async def sankey_data(
     if client is None:
         client = _get_client(site_name)
 
-    filters, filters_excl = _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path, **(exclude or {}))
+    filters, filters_excl = _base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path, ingress_interface=ingress_interface, egress_interface=egress_interface, **(exclude or {}))
     composite_sources = [
         {"ingress": {"terms": {"field": "flow.in.netif.alias"}}},
         {"service_app": {"terms": {"field": "flow.application.name", "missing_bucket": True}}},
@@ -397,7 +401,8 @@ async def flow_table(
     client: AsyncOpenSearch | None = None, gte_ms: int = 0, lte_ms: int = 0,
     site_name: str = "Site_FGT_Office", after: Optional[dict] = None, page_size: int = 100,
     app_filter: str = "", client_ip: str = "", server_ip: str = "",
-    protocol: str = "", dst_port: int | None = None, traffic_path: str = "all",
+    protocol: str = "", dst_port: int | list[int] | None = None, traffic_path: str = "all",
+    ingress_interface: str = "", egress_interface: str = "",
     exclude: dict | None = None,
 ) -> dict:
     if client is None:
@@ -417,7 +422,7 @@ async def flow_table(
 
     body = {
         "size": 0,
-        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path, **(exclude or {}))),
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, service_filter=app_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, traffic_path=traffic_path, ingress_interface=ingress_interface, egress_interface=egress_interface, **(exclude or {}))),
         "aggs": {
             "flow_table": {
                 "composite": composite_body,

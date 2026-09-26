@@ -43,7 +43,7 @@ def _base_filters(
     gte_ms: int, lte_ms: int, site_name: str, path_filter: str = "internet",
     direction: str = "", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None, dst_as_org: str = "",
+    dst_port: int | list[int] | None = None, dst_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
     risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
@@ -103,8 +103,9 @@ def _base_filters(
         # Role-based, not direction-based: flow.dst.l4.port.id is the destination of
         # each leg, so it only matches the request leg and drops the (much larger)
         # response leg. flow.server.l4.port.id is stable across both legs and matches
-        # what the top_services agg buckets on.
-        filters.append({"term": {"flow.server.l4.port.id": dst_port}})
+        # what the top_services agg buckets on. int → term, list (multi-port) → terms.
+        filters.append({"terms": {"flow.server.l4.port.id": dst_port}} if isinstance(dst_port, list)
+                       else {"term": {"flow.server.l4.port.id": dst_port}})
     if dst_port_not is not None:
         # int → term, list (multi-port exclude) → terms
         excl.append({"terms": {"flow.server.l4.port.id": dst_port_not}} if isinstance(dst_port_not, list)
@@ -122,7 +123,7 @@ async def flow_summary(
     site_name: str = "Site_FGT-DC", path_filter: str = "internet",
     app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None, dst_as_org: str = "",
+    dst_port: int | list[int] | None = None, dst_as_org: str = "",
     ingress_interface: str = "",
     egress_interface: str = "",
     risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
@@ -321,7 +322,8 @@ async def flow_chart(
     site_name: str = "Site_FGT-DC", top_n: int = 50, path_filter: str = "internet",
     bucket_seconds: int = 60, app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None, dst_as_org: str = "",
+    dst_port: int | list[int] | None = None, dst_as_org: str = "",
+    ingress_interface: str = "", egress_interface: str = "",
     risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
     exclude: dict | None = None,
 ) -> dict:
@@ -331,7 +333,7 @@ async def flow_chart(
     interval_str = f"{bucket_seconds}s"
     # base_filter stays the include list (reused by spread_long_sessions / anomaly logging,
     # which already operate on the post-exclude charted app set); excludes apply to the main query.
-    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {}))
+    base_filter, base_excl = _base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {}))
     body = {
         "size": 0,
         "query": _bool_query(base_filter, base_excl),
@@ -400,7 +402,8 @@ async def sankey_data(
     site_name: str = "Site_FGT-DC", path_filter: str = "internet",
     direction: str = "", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None, dst_as_org: str = "",
+    dst_port: int | list[int] | None = None, dst_as_org: str = "",
+    ingress_interface: str = "", egress_interface: str = "",
     risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
     exclude: dict | None = None,
 ) -> dict:
@@ -439,7 +442,7 @@ async def sankey_data(
     # Paginate the composite so the top-byte flows are never lost to a 1000-bucket
     # key-order slice (BUG-1); _bytes_sum() gives a server-side total_bytes so the
     # empty-direction case needs no special branch. See Documentation/SANKEY_BUGS_ANALYSIS.md.
-    q = _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {})))
+    q = _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, "", app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {})))
     buckets = await composite_all_buckets(client, FLOW_INDEX, q, sources, _bytes_sum())
 
     # direction selects the byte counter: upload=client.bytes, download=server.bytes,
@@ -520,7 +523,8 @@ async def flow_table(
     site_name: str = "Site_FGT-DC", after: Optional[dict] = None, page_size: int = 100,
     path_filter: str = "internet", app_filter: str = "", category_filter: str = "",
     client_ip: str = "", server_ip: str = "", protocol: str = "",
-    dst_port: int | None = None, dst_as_org: str = "",
+    dst_port: int | list[int] | None = None, dst_as_org: str = "",
+    ingress_interface: str = "", egress_interface: str = "",
     risk_filter: str = "", vendor_filter: str = "", tech_filter: str = "",
     exclude: dict | None = None,
 ) -> dict:
@@ -540,7 +544,7 @@ async def flow_table(
 
     body = {
         "size": 0,
-        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {}))),
+        "query": _bool_query(*_base_filters(gte_ms, lte_ms, site_name, path_filter, app_filter=app_filter, category_filter=category_filter, client_ip=client_ip, server_ip=server_ip, protocol=protocol, dst_port=dst_port, dst_as_org=dst_as_org, ingress_interface=ingress_interface, egress_interface=egress_interface, risk_filter=risk_filter, vendor_filter=vendor_filter, tech_filter=tech_filter, **(exclude or {}))),
         "aggs": {
             "flow_table": {
                 "composite": composite_body,
@@ -686,7 +690,7 @@ async def appid_flow_alert_summary(
     site_name: str = "Site_FGT-DC",
     app_filter: str = "",
     protocol: str = "",
-    dst_port: int | None = None,
+    dst_port: int | list[int] | None = None,
     app_not: str = "",
     protocol_not: str = "",
     port_not: int | None = None,
