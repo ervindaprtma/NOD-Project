@@ -91,6 +91,8 @@ async def traffic_internal_chart(
     protocol: str = Query("", description="Filter: protocol"),
     dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     if site_name not in ALL_SITES:
@@ -104,6 +106,7 @@ async def traffic_internal_chart(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, bucket_seconds=bucket_seconds,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=parse_ports(dst_port), traffic_path=traffic_path,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)
@@ -174,6 +177,8 @@ async def traffic_internal_sankey(
     dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
     direction: str = Query("", description="Byte direction: upload, download, or empty for total"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     if site_name not in ALL_SITES:
@@ -188,6 +193,7 @@ async def traffic_internal_sankey(
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=parse_ports(dst_port), traffic_path=traffic_path,
         direction=direction,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)

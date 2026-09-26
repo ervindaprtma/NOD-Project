@@ -105,6 +105,8 @@ async def traffic_inbound_chart(
     protocol: str = Query("", description="Filter: protocol name"),
     dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     """Returns stacked bar chart for service throughput (port-based)."""
@@ -120,6 +122,7 @@ async def traffic_inbound_chart(
         path_filter="inbound-vip", bucket_seconds=bucket_seconds,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=parse_ports(dst_port), src_as_org=src_as_org,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)
@@ -204,6 +207,8 @@ async def traffic_inbound_sankey(
     protocol: str = Query("", description="Filter: protocol name"),
     dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     """Returns Sankey diagram nodes+links. direction='' for unfiltered, 'upload' or 'download' for zone-based direction."""
@@ -219,6 +224,7 @@ async def traffic_inbound_sankey(
         direction=direction,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
         protocol=protocol, dst_port=parse_ports(dst_port), src_as_org=src_as_org,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)
