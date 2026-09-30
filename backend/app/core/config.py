@@ -61,12 +61,19 @@ class Settings(BaseSettings):
     OPENSEARCH_POOL_SIZE: int = 10
     OPENSEARCH_REQUEST_TIMEOUT: int = 30
     OPENSEARCH_QUERY_TIMEOUT: int = 120  # per-query timeout for aggregations (120s for 24h+ ranges)
-    # Endpoint watchdog: ping each cluster on this interval; a ping slower than the timeout
-    # counts as a failure; alert once after FAIL_THRESHOLD consecutive failures. Defaults:
-    # 30s × 6 = alert after 3 min sustained down. Tune per environment.
+    # Endpoint watchdog: run a "last-data" trial query per data source on this interval; a
+    # query error/timeout counts as a failure; alert once after FAIL_THRESHOLD consecutive
+    # failures. Defaults: 30s × 6 = alert after 3 min sustained down. Tune per environment.
     OPENSEARCH_HEALTH_PROBE_INTERVAL_SECONDS: int = 30
     OPENSEARCH_HEALTH_PING_TIMEOUT_SECONDS: int = 10
     OPENSEARCH_HEALTH_FAIL_THRESHOLD: int = 6
+    # Freshness budgets: a source is "stale" if its newest doc is older than these. SNMP
+    # (telegraf ~30s poll) is deterministic → tight; NetFlow is bursty/quiet at night → wide.
+    OPENSEARCH_HEALTH_FRESH_SNMP_SECONDS: int = 180
+    OPENSEARCH_HEALTH_FRESH_NETFLOW_SECONDS: int = 900
+    # Page ops on SNMP staleness too (deterministic collector-stall signal). Off by default —
+    # only reachability failures page; staleness shows on the System Health tab.
+    OPENSEARCH_HEALTH_ALERT_ON_STALE: bool = False
     OPENSEARCH_VERIFY_CERTS: bool = False  # set True + mount CA cert for production
     OPENSEARCH_CA_CERT_PATH: str = ""  # path to CA cert inside container when verify=True
 

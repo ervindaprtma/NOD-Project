@@ -50,7 +50,7 @@ async def health_status(current_user=Depends(require_role("admin"))):
     return APIResponse.ok(data={
         "api": "ok",
         "db": "ok" if db_ok else "error",
-        "clusters": wd["clusters"],
+        "sources": wd["sources"],
         "watchdog_started_at": wd["started_at"],
         "schedulers": schedulers,
         "log_queue": queue_stats(),

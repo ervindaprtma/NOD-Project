@@ -5,9 +5,13 @@ import { swrFetcher } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // ── Types (endpoint is admin-only; shapes are small, keep them local) ──
-interface ClusterHealth {
+interface SourceHealth {
   name: string;
-  status: "healthy" | "degraded" | "down";
+  kind: string | null;
+  status: "healthy" | "stale" | "no_data" | "down";
+  last_doc_ms: number | null;
+  last_age_seconds: number | null;
+  reachable: boolean;
   consecutive_fails: number;
   alerted: boolean;
   last_change: string | null;
@@ -17,7 +21,7 @@ interface LogQueue { depth: number; capacity: number; dropped: number; written: 
 interface HealthStatus {
   api: string;
   db: string;
-  clusters: ClusterHealth[];
+  sources: SourceHealth[];
   watchdog_started_at: string;
   schedulers: SchedulerHealth[];
   log_queue: LogQueue;
@@ -40,15 +44,20 @@ function relTime(iso: string | null): string {
 function prettyJob(id: string): string {
   return id.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+const AMBER = "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400";
 const STATUS_PILL: Record<string, string> = {
   healthy: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
-  degraded: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
+  stale: AMBER,
+  no_data: AMBER,
   down: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
   ok: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
   error: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
 };
 const STATUS_DOT: Record<string, string> = {
-  healthy: "🟢", degraded: "🟠", down: "🔴", ok: "🟢", error: "🔴",
+  healthy: "🟢", stale: "🟠", no_data: "🟠", down: "🔴", ok: "🟢", error: "🔴",
+};
+const STATUS_LABEL: Record<string, string> = {
+  healthy: "fresh", stale: "stale", no_data: "no data", down: "down",
 };
 
 function Pill({ status, label }: { status: string; label?: string }) {
@@ -95,28 +104,28 @@ export function SystemHealthTab() {
         </p>
       </div>
 
-      {/* ── OpenSearch Endpoints ── */}
+      {/* ── OpenSearch Data Sources ── */}
       <section>
-        <h3 className="text-xs font-semibold uppercase text-muted-foreground mb-2">OpenSearch Endpoints</h3>
+        <h3 className="text-xs font-semibold uppercase text-muted-foreground mb-2">OpenSearch Data Sources</h3>
         <div className="border rounded-lg overflow-hidden">
-          {h.clusters.length === 0 ? (
-            <div className="p-4 text-sm text-muted-foreground">No clusters reported yet.</div>
-          ) : h.clusters.map((c) => {
-            const sinceStart = c.last_change && c.last_change <= h.watchdog_started_at;
+          {h.sources.length === 0 ? (
+            <div className="p-4 text-sm text-muted-foreground">No sources reported yet.</div>
+          ) : h.sources.map((c) => {
+            const age = c.last_age_seconds;
+            const lastData = age == null ? "no matching data"
+              : age < 60 ? `${age}s ago`
+              : age < 3600 ? `${Math.floor(age / 60)}m ago`
+              : `${Math.floor(age / 3600)}h${Math.floor((age % 3600) / 60)}m ago`;
             return (
               <div key={c.name} className="flex items-center justify-between px-4 py-3 border-b last:border-0">
                 <div className="flex items-center gap-2">
                   <span aria-hidden>{STATUS_DOT[c.status]}</span>
                   <span className="font-medium text-sm">{c.name}</span>
-                  <Pill status={c.status} />
+                  <Pill status={c.status} label={STATUS_LABEL[c.status]} />
                 </div>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <span>fails {c.consecutive_fails}</span>
                   {c.alerted && <span className="text-red-600 dark:text-red-400">⚠ alert sent</span>}
-                  <span title={c.last_change || ""}>
-                    {c.status === "healthy" ? "stable" : "since"} {relTime(c.last_change)}
-                    {sinceStart && " (since start)"}
-                  </span>
+                  <span>last data {lastData}</span>
                 </div>
               </div>
             );
