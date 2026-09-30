@@ -295,6 +295,8 @@ app.include_router(notifications.router)
 app.include_router(config_notifications_router)
 app.include_router(config_maintenance_router)
 app.include_router(config_notification_templates_router)
+from app.api.health_status import router as health_status_router
+app.include_router(health_status_router)
 
 
 # ─────────────────────────────────────────────────────────────────

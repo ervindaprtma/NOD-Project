@@ -88,6 +88,12 @@ _writer_task: Optional[asyncio.Task] = None
 _stop = asyncio.Event()
 
 
+def queue_stats() -> dict:
+    """Snapshot of the log sink for the System Health page: current depth, capacity,
+    and the running totals of dropped (overflow) and written rows."""
+    return {"depth": len(_queue), "capacity": _QUEUE_MAX, "dropped": _dropped, "written": _written}
+
+
 def _new_id() -> str:
     import uuid
     return uuid.uuid4().hex

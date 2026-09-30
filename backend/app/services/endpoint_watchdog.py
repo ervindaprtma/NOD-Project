@@ -34,8 +34,36 @@ _CLUSTERS = {
     "OpenSearch IPsec": get_ipsec_client,
 }
 
-# label -> {"fails": consecutive failed probes, "alerted": down-alert already sent}
+# label -> {"fails": consecutive failed probes, "alerted": down-alert already sent,
+#           "status": healthy|degraded|down, "last_change": ISO ts of the last status flip}
 _state: dict[str, dict] = {}
+
+# Process start — the UI flags "since backend start" when a status hasn't flipped since.
+_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _derive_status(fails: int, alerted: bool) -> str:
+    """healthy = answering; down = alert fired; degraded = failing but below threshold."""
+    if fails == 0:
+        return "healthy"
+    return "down" if alerted else "degraded"
+
+
+def get_state() -> dict:
+    """Read-only snapshot for the System Health page. Copies so callers can't mutate."""
+    return {
+        "started_at": _STARTED_AT,
+        "clusters": [
+            {
+                "name": label,
+                "status": st.get("status", "healthy"),
+                "consecutive_fails": st.get("fails", 0),
+                "alerted": st.get("alerted", False),
+                "last_change": st.get("last_change"),
+            }
+            for label, st in _state.items()
+        ],
+    }
 
 _SEVERITY = "CRITICAL"  # down + recovery share it so both hit the same channel set
 
@@ -86,7 +114,8 @@ async def probe_endpoints() -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     for label, ok in zip(labels, results):
-        st = _state.setdefault(label, {"fails": 0, "alerted": False})
+        st = _state.setdefault(label, {"fails": 0, "alerted": False, "status": "healthy",
+                                       "last_change": _STARTED_AT})
         if ok:
             if st["alerted"]:
                 msg = f"✅ {label} recovered — answering health pings again at {now}."
@@ -98,30 +127,40 @@ async def probe_endpoints() -> None:
                 logger.warning("%s recovered after %d failed probes", label, st["fails"])
             st["fails"] = 0
             st["alerted"] = False
-            continue
-
-        st["fails"] += 1
-        if st["fails"] >= threshold and not st["alerted"]:
-            down_s = st["fails"] * interval
-            msg = (f"🚨 {label} is not responding — health ping has failed/timed out "
-                   f"{st['fails']} times (~{down_s}s). Dashboards backed by this endpoint "
-                   f"will show 'Data unavailable'.")
-            msg_html = (f"🚨 <b>{html.escape(label)} DOWN</b> — health ping has failed/timed "
-                        f"out <b>{st['fails']}</b> times (~{down_s}s). Dashboards backed by "
-                        f"this endpoint will show 'Data unavailable'.")
-            await _dispatch(f"{label} DOWN", msg, msg_html)
-            log_event(level="ERROR", category="system", event="endpoint_down", message=msg,
-                      details={"cluster": label, "consecutive_fails": st["fails"], "down_seconds": down_s})
-            st["alerted"] = True
-            logger.error("%s DOWN — %d consecutive failed probes", label, st["fails"])
         else:
-            # Interim failure below threshold: log line only, no System Logs spam every 30s.
-            logger.warning("%s health ping failed (%d/%d)", label, st["fails"], threshold)
+            st["fails"] += 1
+            if st["fails"] >= threshold and not st["alerted"]:
+                down_s = st["fails"] * interval
+                msg = (f"🚨 {label} is not responding — health ping has failed/timed out "
+                       f"{st['fails']} times (~{down_s}s). Dashboards backed by this endpoint "
+                       f"will show 'Data unavailable'.")
+                msg_html = (f"🚨 <b>{html.escape(label)} DOWN</b> — health ping has failed/timed "
+                            f"out <b>{st['fails']}</b> times (~{down_s}s). Dashboards backed by "
+                            f"this endpoint will show 'Data unavailable'.")
+                await _dispatch(f"{label} DOWN", msg, msg_html)
+                log_event(level="ERROR", category="system", event="endpoint_down", message=msg,
+                          details={"cluster": label, "consecutive_fails": st["fails"], "down_seconds": down_s})
+                st["alerted"] = True
+                logger.error("%s DOWN — %d consecutive failed probes", label, st["fails"])
+            else:
+                # Interim failure below threshold: log line only, no System Logs spam every 30s.
+                logger.warning("%s health ping failed (%d/%d)", label, st["fails"], threshold)
+
+        # Stamp the transition time whenever the derived status flips (for the UI).
+        new_status = _derive_status(st["fails"], st["alerted"])
+        if new_status != st.get("status"):
+            st["status"] = new_status
+            st["last_change"] = now
 
 
 def start_endpoint_watchdog() -> None:
     """Register the probe on the already-running alert scheduler (no extra infra)."""
     from app.services.alert_engine import scheduler
+
+    # Pre-seed so the System Health page lists every cluster before the first probe lands.
+    for label in _CLUSTERS:
+        _state.setdefault(label, {"fails": 0, "alerted": False, "status": "healthy",
+                                  "last_change": _STARTED_AT})
 
     s = get_settings()
     scheduler.add_job(
@@ -129,6 +168,7 @@ def start_endpoint_watchdog() -> None:
         seconds=s.OPENSEARCH_HEALTH_PROBE_INTERVAL_SECONDS,
         id="endpoint_watchdog", replace_existing=True,
         misfire_grace_time=s.OPENSEARCH_HEALTH_PROBE_INTERVAL_SECONDS, max_instances=1,
+        next_run_time=datetime.now(timezone.utc),  # first probe now, not after one interval
     )
     logger.info(
         "Endpoint watchdog started (interval=%ss, ping_timeout=%ss, fail_threshold=%s → alert after ~%ss down)",
