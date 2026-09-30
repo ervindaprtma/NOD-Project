@@ -130,9 +130,13 @@ async def get_vpn_sessions_history(
         hour=0, minute=0, second=0, microsecond=0)
     fetch_gte = int(day_start.timestamp() * 1000)
     now_ms = int(datetime.now(wib).timestamp() * 1000)
-    # 60s ≤ 24h span keeps minute precision; wider ranges use 2m to cap bucket count
-    # (still fine for the 5min gap threshold), never coarser or reconnects blur.
-    bucket = "60s" if (lte_ms - fetch_gte) <= 86_400_000 else "2m"
+    # Bucket widens with span to cap composite pages (each user×bucket is one row the
+    # session fetch must paginate): 60s ≤24h keeps minute precision, 2m ≤7d, 5m beyond.
+    # 5m is the coarsest allowed — at the 5-min reconnect threshold it can merge a
+    # borderline 5–10min gap on a multi-week view, an acceptable trade for keeping the
+    # fetch well under the 500-page cap on wide ranges.
+    span_ms = lte_ms - fetch_gte
+    bucket = "60s" if span_ms <= 86_400_000 else "2m" if span_ms <= 7 * 86_400_000 else "5m"
 
     ssl_hist, ipsec_hist = await asyncio.gather(
         sslvpn_qb.sslvpn_session_history(
