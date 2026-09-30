@@ -2,10 +2,16 @@
 
 import { useState, useRef, useEffect } from "react";
 import useSWR from "swr";
-import { swrFetcher, getAccessToken } from "@/lib/api";
+import { swrFetcherLong, getAccessToken } from "@/lib/api";
 import { cn, matchTextFilter } from "@/lib/utils";
-import { TIME_PRESETS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS, formatBytes, getDefaultTimeRange } from "@/lib/constants";
+import { TIME_PRESETS, REFRESH_INTERVALS, formatBytes, getDefaultTimeRange } from "@/lib/constants";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
+import { DegradedBanner } from "@/components/panels/DegradedBanner";
+import type { ResponseMeta } from "@/types";
+
+// VPN default refresh: 30s to match the ~30s Telegraf scrape (was the global 60s) — polling
+// faster just re-fetches unchanged data; slower makes live connect/disconnect feel laggy.
+const VPN_REFRESH_MS = 30_000;
 
 interface SSLVPNUser {
   username: string; remote_ip: string; vpn_ip: string;
@@ -48,11 +54,11 @@ export default function VPNPage() {
   const [lteMs, setLteMs] = useState(defaultRange.lte_ms);
   const [selectedPreset, setSelectedPreset] = useState("15m");
   const [activePresetSeconds, setActivePresetSeconds] = useState(TIME_PRESETS[0].seconds);
-  const [refreshInterval, setRefreshInterval] = useState(DEFAULT_REFRESH_MS);
+  const [refreshInterval, setRefreshInterval] = useState(VPN_REFRESH_MS);
   const [expanded, setExpanded] = useState<SectionId | null>(null);
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);
-  const prevIntervalRef = useRef(DEFAULT_REFRESH_MS);
+  const prevIntervalRef = useRef(VPN_REFRESH_MS);
 
   // Session History filters (client-side over the fetched rows)
   const [fUser, setFUser] = useState("");
@@ -92,14 +98,16 @@ export default function VPNPage() {
     ? `/api/v1/vpn/sessions-history?gte_ms=${currentGteMs}&lte_ms=${currentLteMs}`
     : null;
 
-  const { data: sslData, error: sslErr, isLoading: sslLoading } = useSWR<{ data: SSLVPNUser[] }>(
-    sslKey, swrFetcher, { refreshInterval: 0 }
+  // swrFetcherLong (120s client timeout) outlasts the backend's 120s query budget, so a
+  // slow-but-successful query is never aborted client-side as a false "Failed to load".
+  const { data: sslData, error: sslErr, isLoading: sslLoading } = useSWR<{ data: SSLVPNUser[]; meta: ResponseMeta | null }>(
+    sslKey, swrFetcherLong, { refreshInterval: 0 }
   );
-  const { data: ipsecData, error: ipsecErr, isLoading: ipsecLoading } = useSWR<{ data: IPsecUser[] }>(
-    ipsecKey, swrFetcher, { refreshInterval: 0 }
+  const { data: ipsecData, error: ipsecErr, isLoading: ipsecLoading } = useSWR<{ data: IPsecUser[]; meta: ResponseMeta | null }>(
+    ipsecKey, swrFetcherLong, { refreshInterval: 0 }
   );
-  const { data: historyData, error: historyErr, isLoading: historyLoading } = useSWR<{ data: VPNSessionHistoryItem[] }>(
-    historyKey, swrFetcher, { refreshInterval: 0 }
+  const { data: historyData, error: historyErr, isLoading: historyLoading } = useSWR<{ data: VPNSessionHistoryItem[]; meta: ResponseMeta | null }>(
+    historyKey, swrFetcherLong, { refreshInterval: 0 }
   );
 
   const sslUsers = sslData?.data || [];
@@ -135,7 +143,7 @@ export default function VPNPage() {
     setLteMs(range.lte_ms);
     setActivePresetSeconds(0);
     setSelectedPreset("custom");
-    prevIntervalRef.current = refreshInterval > 0 ? refreshInterval : DEFAULT_REFRESH_MS;
+    prevIntervalRef.current = refreshInterval > 0 ? refreshInterval : VPN_REFRESH_MS;
     setRefreshInterval(0);
     setShowCustomPicker(false);
     const from = new Date(range.gte_ms);
@@ -239,6 +247,8 @@ export default function VPNPage() {
           </select>
         </div>
       </div>
+
+      <DegradedBanner metas={[sslData?.meta, ipsecData?.meta, historyData?.meta]} />
 
       {/* SSL VPN Section */}
       <div className="space-y-3 group">

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.auth import get_current_user
 from app.opensearch.query import track_degradation
-from app.api._safe import build_meta, safe_query, pack_excludes
+from app.api._safe import build_meta, safe_query, pack_excludes, parse_ports
 from app.opensearch import traffic_internal as ti_qb
 from app.schemas.common import APIResponse
 from app.schemas.traffic_internal import (
@@ -46,7 +46,7 @@ async def traffic_internal_summary(
     client_ip: str = Query("", description="Filter: client IP"),
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
     ingress_interface: str = Query("", description="Filter: ingress interface"),
     egress_interface: str = Query("", description="Filter: egress interface"),
@@ -62,7 +62,7 @@ async def traffic_internal_summary(
         exclude=pack_excludes(request, _EXCLUDE_RENAME),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
+        protocol=protocol, dst_port=parse_ports(dst_port), traffic_path=traffic_path,
         ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -89,8 +89,10 @@ async def traffic_internal_chart(
     client_ip: str = Query("", description="Filter: client IP"),
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     if site_name not in ALL_SITES:
@@ -103,7 +105,8 @@ async def traffic_internal_chart(
         exclude=pack_excludes(request, _EXCLUDE_RENAME),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, bucket_seconds=bucket_seconds,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
+        protocol=protocol, dst_port=parse_ports(dst_port), traffic_path=traffic_path,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)
@@ -127,8 +130,10 @@ async def traffic_internal_table(
     client_ip: str = Query("", description="Filter: client IP"),
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     if site_name not in ALL_SITES:
@@ -145,7 +150,8 @@ async def traffic_internal_table(
         exclude=pack_excludes(request, _EXCLUDE_RENAME),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, after=after_key,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
+        protocol=protocol, dst_port=parse_ports(dst_port), traffic_path=traffic_path,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)
@@ -168,9 +174,11 @@ async def traffic_internal_sankey(
     client_ip: str = Query("", description="Filter: client IP"),
     server_ip: str = Query("", description="Filter: server IP"),
     protocol: str = Query("", description="Filter: protocol"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     traffic_path: str = Query("all", description="Traffic path filter: all, intra-lan, inter-site"),
     direction: str = Query("", description="Byte direction: upload, download, or empty for total"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     if site_name not in ALL_SITES:
@@ -183,8 +191,9 @@ async def traffic_internal_sankey(
         exclude=pack_excludes(request, _EXCLUDE_RENAME),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port, traffic_path=traffic_path,
+        protocol=protocol, dst_port=parse_ports(dst_port), traffic_path=traffic_path,
         direction=direction,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)

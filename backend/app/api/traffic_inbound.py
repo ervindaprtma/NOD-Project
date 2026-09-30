@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.auth import get_current_user
 from app.opensearch.query import track_degradation
-from app.api._safe import build_meta, safe_query, pack_excludes
+from app.api._safe import build_meta, safe_query, pack_excludes, parse_ports
 from app.opensearch import traffic_inbound as ti_qb
 from app.schemas.common import APIResponse
 from app.schemas.traffic_inbound import (
@@ -53,7 +53,7 @@ async def traffic_inbound_summary(
     client_ip: str = Query("", description="Filter: client IP address"),
     server_ip: str = Query("", description="Filter: server IP address"),
     protocol: str = Query("", description="Filter: protocol name"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port number"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
     ingress_interface: str = Query("", description="Filter: ingress interface"),
     egress_interface: str = Query("", description="Filter: egress interface"),
@@ -70,7 +70,7 @@ async def traffic_inbound_summary(
         exclude=pack_excludes(request),
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter="inbound-vip",
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
+        protocol=protocol, dst_port=parse_ports(dst_port), src_as_org=src_as_org,
         ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -103,8 +103,10 @@ async def traffic_inbound_chart(
     client_ip: str = Query("", description="Filter: client IP address"),
     server_ip: str = Query("", description="Filter: server IP address"),
     protocol: str = Query("", description="Filter: protocol name"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port number"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     """Returns stacked bar chart for service throughput (port-based)."""
@@ -119,7 +121,8 @@ async def traffic_inbound_chart(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         path_filter="inbound-vip", bucket_seconds=bucket_seconds,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
+        protocol=protocol, dst_port=parse_ports(dst_port), src_as_org=src_as_org,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)
@@ -148,8 +151,10 @@ async def traffic_inbound_table(
     client_ip: str = Query("", description="Filter: client IP address"),
     server_ip: str = Query("", description="Filter: server IP address"),
     protocol: str = Query("", description="Filter: protocol name"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port number"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     """Returns paginated inbound flow records with composite aggregation."""
@@ -170,7 +175,8 @@ async def traffic_inbound_table(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name,
         after=after_key, path_filter="inbound-vip",
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
+        protocol=protocol, dst_port=parse_ports(dst_port), src_as_org=src_as_org,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)
@@ -199,8 +205,10 @@ async def traffic_inbound_sankey(
     client_ip: str = Query("", description="Filter: client IP address"),
     server_ip: str = Query("", description="Filter: server IP address"),
     protocol: str = Query("", description="Filter: protocol name"),
-    dst_port: Optional[int] = Query(None, description="Filter: destination port number"),
+    dst_port: str = Query("", description="Filter: destination port(s), comma-separated"),
     src_as_org: str = Query("", description="Filter: source AS org (comma-separated)"),
+    ingress_interface: str = Query("", description="Filter: ingress interface"),
+    egress_interface: str = Query("", description="Filter: egress interface"),
     current_user=Depends(get_current_user),
 ):
     """Returns Sankey diagram nodes+links. direction='' for unfiltered, 'upload' or 'download' for zone-based direction."""
@@ -215,7 +223,8 @@ async def traffic_inbound_sankey(
         gte_ms=gte_ms, lte_ms=lte_ms, site_name=site_name, path_filter="inbound-vip",
         direction=direction,
         app_filter=app_filter, client_ip=client_ip, server_ip=server_ip,
-        protocol=protocol, dst_port=dst_port, src_as_org=src_as_org,
+        protocol=protocol, dst_port=parse_ports(dst_port), src_as_org=src_as_org,
+        ingress_interface=ingress_interface, egress_interface=egress_interface,
     )
     elapsed = int((time.monotonic() - t0) * 1000)
     meta = build_meta(elapsed, degraded, err)

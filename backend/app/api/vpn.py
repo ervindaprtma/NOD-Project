@@ -9,10 +9,13 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
+from app.api._safe import build_meta
 from app.api.auth import get_current_user
 from app.core.config import get_settings
 from app.opensearch import ipsec as ipsec_qb
 from app.opensearch import sslvpn as sslvpn_qb
+from app.opensearch.sslvpn import SESSION_GAP_MS
+from app.opensearch.query import track_degradation
 from app.schemas.common import APIResponse
 from app.schemas.sdwan_resource_vpn import IPsecVPNUser, SSLVPNUser, VPNSessionHistoryItem
 
@@ -32,13 +35,15 @@ def _fmt(n: int) -> str:
 
 
 def _active_window(gte_ms: int, lte_ms: int) -> tuple[int, int]:
-    """Clamp query window to last 60 seconds for 'currently active' VPN users.
+    """Clamp the window to the 'currently active' threshold for the live VPN tables.
 
-    ponytail: If a user's latest document is older than 60s, they're
-    considered disconnected. Data stores every 30s (Telegraf), so 60s
-    = 2x scrape interval — catches at least one fresh document reliably.
+    Uses SESSION_GAP_MS (5 min) — the SAME threshold the Sessions History table uses to
+    mark a session 'active' (last activity within the gap). Keeping them identical means a
+    user shown Active in history always appears in the live SSL/IPsec table; a tighter 60s
+    window here made connected users (whose last ~30s scrape jittered past 60s) vanish from
+    the live table while still Active in history.
     """
-    return (max(gte_ms, lte_ms - 60_000), lte_ms)
+    return (max(gte_ms, lte_ms - SESSION_GAP_MS), lte_ms)
 
 
 @router.get("/ssl", response_model=APIResponse[list[SSLVPNUser]])
@@ -56,6 +61,7 @@ async def get_sslvpn_sessions(
         )
 
     t0 = time.monotonic()
+    degraded = track_degradation()
     ag, al = _active_window(gte_ms, lte_ms)
     users = await sslvpn_qb.active_sslvpn_users(
         gte_ms=ag, lte_ms=al, site_name=site_name
@@ -75,7 +81,7 @@ async def get_sslvpn_sessions(
         )
         for u in users
     ]
-    return APIResponse.ok(data=result, meta={"query_took_ms": elapsed})
+    return APIResponse.ok(data=result, meta=build_meta(elapsed, degraded))
 
 
 @router.get("/ipsec", response_model=APIResponse[list[IPsecVPNUser]])
@@ -86,6 +92,7 @@ async def get_ipsec_sessions(
 ):
     """FR-01 P01-B detail: Active IPsec VPN user sessions."""
     t0 = time.monotonic()
+    degraded = track_degradation()
     ag, al = _active_window(gte_ms, lte_ms)
     users = await ipsec_qb.active_ipsec_users_detail(gte_ms=ag, lte_ms=al)
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -104,7 +111,7 @@ async def get_ipsec_sessions(
         )
         for u in users
     ]
-    return APIResponse.ok(data=result, meta={"query_took_ms": elapsed})
+    return APIResponse.ok(data=result, meta=build_meta(elapsed, degraded))
 
 
 @router.get("/sessions-history", response_model=APIResponse[list[VPNSessionHistoryItem]])
@@ -124,15 +131,20 @@ async def get_vpn_sessions_history(
     so each session's TRUE start is visible; buckets coarsen on wide ranges for speed.
     """
     t0 = time.monotonic()
+    degraded = track_degradation()
 
     wib = timezone(timedelta(hours=7))
     day_start = datetime.fromtimestamp(gte_ms / 1000, wib).replace(
         hour=0, minute=0, second=0, microsecond=0)
     fetch_gte = int(day_start.timestamp() * 1000)
     now_ms = int(datetime.now(wib).timestamp() * 1000)
-    # 60s ≤ 24h span keeps minute precision; wider ranges use 2m to cap bucket count
-    # (still fine for the 5min gap threshold), never coarser or reconnects blur.
-    bucket = "60s" if (lte_ms - fetch_gte) <= 86_400_000 else "2m"
+    # Bucket widens with span to cap composite pages (each user×bucket is one row the
+    # session fetch must paginate): 60s ≤24h keeps minute precision, 2m ≤7d, 5m beyond.
+    # 5m is the coarsest allowed — at the 5-min reconnect threshold it can merge a
+    # borderline 5–10min gap on a multi-week view, an acceptable trade for keeping the
+    # fetch well under the 500-page cap on wide ranges.
+    span_ms = lte_ms - fetch_gte
+    bucket = "60s" if span_ms <= 86_400_000 else "2m" if span_ms <= 7 * 86_400_000 else "5m"
 
     ssl_hist, ipsec_hist = await asyncio.gather(
         sslvpn_qb.sslvpn_session_history(
@@ -173,4 +185,4 @@ async def get_vpn_sessions_history(
 
     merged.sort(key=lambda x: x.session_started, reverse=True)
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=merged, meta={"query_took_ms": elapsed})
+    return APIResponse.ok(data=merged, meta=build_meta(elapsed, degraded))

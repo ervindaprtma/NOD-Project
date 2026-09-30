@@ -8,6 +8,7 @@ import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import type { NotificationChannelRead, MaintenanceWindow } from "@/types";
 import { MessageTemplatesTab } from "./MessageTemplatesTab";
+import { SystemHealthTab } from "./SystemHealthTab";
 
 // All tabs are visible to all roles — but the admin-only tabs
 // (notifications, maintenance) only render their forms if the
@@ -19,7 +20,8 @@ type Tab =
   | "appearance"
   | "notifications"
   | "templates"
-  | "maintenance";
+  | "maintenance"
+  | "health";
 
 const ALL_TABS: { id: Tab; label: string; adminOnly: boolean }[] = [
   { id: "password", label: "Change Password", adminOnly: false },
@@ -28,6 +30,7 @@ const ALL_TABS: { id: Tab; label: string; adminOnly: boolean }[] = [
   { id: "notifications", label: "Notification Channels", adminOnly: true },
   { id: "templates", label: "Message Templates", adminOnly: true },
   { id: "maintenance", label: "Maintenance Windows", adminOnly: true },
+  { id: "health", label: "System Health", adminOnly: true },
 ];
 
 export default function SettingsPage() {
@@ -76,6 +79,7 @@ export default function SettingsPage() {
         {safeActive === "notifications" && isAdmin && <NotificationChannelsTab showToast={setToast} />}
         {safeActive === "templates" && isAdmin && <MessageTemplatesTab showToast={setToast} />}
         {safeActive === "maintenance" && isAdmin && <MaintenanceWindowsTab showToast={setToast} />}
+        {safeActive === "health" && isAdmin && <SystemHealthTab />}
       </div>
 
       {/* ── Status Toast (Reports/Distribute pattern) ───────── */}

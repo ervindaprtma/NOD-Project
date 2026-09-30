@@ -25,6 +25,7 @@ from app.opensearch import ha as ha_qb
 from app.opensearch import ipsec as ipsec_qb
 from app.opensearch import sdwan as sdwan_qb
 from app.opensearch import sslvpn as sslvpn_qb
+from app.opensearch.sslvpn import SESSION_GAP_MS
 from app.opensearch import traffic_flow as tf_qb
 from app.opensearch import traffic_inbound as ti_qb
 from app.opensearch import interface_stats as iface_qb
@@ -84,8 +85,9 @@ async def get_overview(
     errors: list[str] = []
 
     # Run all independent sub-queries in parallel for speed
-    # ponytail: VPN count queries use last 60s only — "currently active" users.
-    _vpn_gte, _vpn_lte = max(gte_ms, lte_ms - 60_000), lte_ms
+    # VPN "currently active" = last SESSION_GAP_MS (5 min) — same threshold the VPN page's
+    # live tables and Sessions History use, so the Overview badge can't disagree with them.
+    _vpn_gte, _vpn_lte = max(gte_ms, lte_ms - SESSION_GAP_MS), lte_ms
     ssl_task = safe_query(
         sslvpn_qb.all_sslvpn_users_count, "overview.sslvpn_users_count",
         gte_ms=_vpn_gte, lte_ms=_vpn_lte, site_names=settings.sslvpn_sites_list,
