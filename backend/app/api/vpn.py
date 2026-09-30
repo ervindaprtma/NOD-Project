@@ -14,6 +14,7 @@ from app.api.auth import get_current_user
 from app.core.config import get_settings
 from app.opensearch import ipsec as ipsec_qb
 from app.opensearch import sslvpn as sslvpn_qb
+from app.opensearch.sslvpn import SESSION_GAP_MS
 from app.opensearch.query import track_degradation
 from app.schemas.common import APIResponse
 from app.schemas.sdwan_resource_vpn import IPsecVPNUser, SSLVPNUser, VPNSessionHistoryItem
@@ -34,13 +35,15 @@ def _fmt(n: int) -> str:
 
 
 def _active_window(gte_ms: int, lte_ms: int) -> tuple[int, int]:
-    """Clamp query window to last 60 seconds for 'currently active' VPN users.
+    """Clamp the window to the 'currently active' threshold for the live VPN tables.
 
-    ponytail: If a user's latest document is older than 60s, they're
-    considered disconnected. Data stores every 30s (Telegraf), so 60s
-    = 2x scrape interval — catches at least one fresh document reliably.
+    Uses SESSION_GAP_MS (5 min) — the SAME threshold the Sessions History table uses to
+    mark a session 'active' (last activity within the gap). Keeping them identical means a
+    user shown Active in history always appears in the live SSL/IPsec table; a tighter 60s
+    window here made connected users (whose last ~30s scrape jittered past 60s) vanish from
+    the live table while still Active in history.
     """
-    return (max(gte_ms, lte_ms - 60_000), lte_ms)
+    return (max(gte_ms, lte_ms - SESSION_GAP_MS), lte_ms)
 
 
 @router.get("/ssl", response_model=APIResponse[list[SSLVPNUser]])
