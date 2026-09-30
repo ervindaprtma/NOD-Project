@@ -70,6 +70,10 @@ async def lifespan(app: FastAPI):
     from app.services.alert_engine import start_alert_scheduler
     start_alert_scheduler()
 
+    # Endpoint watchdog: ping each OpenSearch cluster and alert on sustained timeout/outage
+    from app.services.endpoint_watchdog import start_endpoint_watchdog
+    start_endpoint_watchdog()
+
     # Daily prune of the system_logs table (per-level retention). Reuses the
     # already-running alert scheduler — no extra infra.
     from app.services.alert_engine import scheduler as _alert_scheduler
