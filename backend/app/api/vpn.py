@@ -9,10 +9,12 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
+from app.api._safe import build_meta
 from app.api.auth import get_current_user
 from app.core.config import get_settings
 from app.opensearch import ipsec as ipsec_qb
 from app.opensearch import sslvpn as sslvpn_qb
+from app.opensearch.query import track_degradation
 from app.schemas.common import APIResponse
 from app.schemas.sdwan_resource_vpn import IPsecVPNUser, SSLVPNUser, VPNSessionHistoryItem
 
@@ -56,6 +58,7 @@ async def get_sslvpn_sessions(
         )
 
     t0 = time.monotonic()
+    degraded = track_degradation()
     ag, al = _active_window(gte_ms, lte_ms)
     users = await sslvpn_qb.active_sslvpn_users(
         gte_ms=ag, lte_ms=al, site_name=site_name
@@ -75,7 +78,7 @@ async def get_sslvpn_sessions(
         )
         for u in users
     ]
-    return APIResponse.ok(data=result, meta={"query_took_ms": elapsed})
+    return APIResponse.ok(data=result, meta=build_meta(elapsed, degraded))
 
 
 @router.get("/ipsec", response_model=APIResponse[list[IPsecVPNUser]])
@@ -86,6 +89,7 @@ async def get_ipsec_sessions(
 ):
     """FR-01 P01-B detail: Active IPsec VPN user sessions."""
     t0 = time.monotonic()
+    degraded = track_degradation()
     ag, al = _active_window(gte_ms, lte_ms)
     users = await ipsec_qb.active_ipsec_users_detail(gte_ms=ag, lte_ms=al)
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -104,7 +108,7 @@ async def get_ipsec_sessions(
         )
         for u in users
     ]
-    return APIResponse.ok(data=result, meta={"query_took_ms": elapsed})
+    return APIResponse.ok(data=result, meta=build_meta(elapsed, degraded))
 
 
 @router.get("/sessions-history", response_model=APIResponse[list[VPNSessionHistoryItem]])
@@ -124,6 +128,7 @@ async def get_vpn_sessions_history(
     so each session's TRUE start is visible; buckets coarsen on wide ranges for speed.
     """
     t0 = time.monotonic()
+    degraded = track_degradation()
 
     wib = timezone(timedelta(hours=7))
     day_start = datetime.fromtimestamp(gte_ms / 1000, wib).replace(
@@ -177,4 +182,4 @@ async def get_vpn_sessions_history(
 
     merged.sort(key=lambda x: x.session_started, reverse=True)
     elapsed = int((time.monotonic() - t0) * 1000)
-    return APIResponse.ok(data=merged, meta={"query_took_ms": elapsed})
+    return APIResponse.ok(data=merged, meta=build_meta(elapsed, degraded))
