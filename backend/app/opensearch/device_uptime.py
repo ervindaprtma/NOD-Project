@@ -52,11 +52,12 @@ SITE_TAG: dict[str, str] = {
     "Site_FGT_Office": "office",
 }
 
-# Same telegraf routing as interface_stats: DC + Office -> dc cluster, DRC -> drc.
+# Same telegraf routing as interface_stats: DC -> dc cluster, DRC + Office -> drc
+# (Office moved dc → drc 2026-10 with its SNMP output re-point to 10.90).
 SITE_ENDPOINT: dict[str, str] = {
     "Site_FGT-DC": "dc",
     "Site_FGT-DRC": "drc",
-    "Site_FGT_Office": "dc",
+    "Site_FGT_Office": "drc",
 }
 
 WINDOW_SECONDS: dict[str, int] = {

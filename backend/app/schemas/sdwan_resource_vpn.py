@@ -48,10 +48,11 @@ SITE_LINK_COUNT: dict[str, int] = {
 # Which OpenSearch endpoint each site's SD-WAN data lives on.
 # "dc"  = OPENSEARCH_DC_URL  (10.80.150.108)
 # "drc" = OPENSEARCH_DRC_URL  (10.90.150.108)
+# Office moved dc → drc 2026-10 when its telegraf SNMP output was re-pointed to 10.90.
 SITE_OS_ENDPOINT: dict[str, str] = {
     "Site_FGT-DC": "dc",
     "Site_FGT-DRC": "drc",
-    "Site_FGT_Office": "dc",
+    "Site_FGT_Office": "drc",
 }
 # Dashboard grouping key (WAN vs overlay). Kept as WAN/MPLS so the existing SD-WAN page
 # tabs/colors keep working — link3+ (IPsec/ADVPN tunnels) group under the "MPLS" tab.
