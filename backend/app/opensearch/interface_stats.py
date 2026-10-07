@@ -26,12 +26,14 @@ SITE_SOURCE_MAP: dict[str, str] = {
 }
 
 # ── Site-to-OpenSearch-endpoint routing ──────────────────────────
-# DC + Office → dc cluster (10.80.150.108:9200)
-# DRC → drc cluster (10.90.150.108:9200)
+# DC → dc cluster (10.80.150.108:9200)
+# DRC + Office → drc cluster (10.90.150.108:9200)
+# Office moved dc → drc 2026-10 when its telegraf SNMP output was re-pointed to the
+# new endpoint (10.90). telegraf tags/measurements are unchanged — only the cluster.
 SITE_ENDPOINT: dict[str, str] = {
     "Site_FGT-DC": "dc",
     "Site_FGT-DRC": "drc",
-    "Site_FGT_Office": "dc",
+    "Site_FGT_Office": "drc",
 }
 
 # ── Hardcoded ifIndex per site + friendly labels ─────────────────

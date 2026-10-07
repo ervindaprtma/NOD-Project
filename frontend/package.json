@@ -31,7 +31,6 @@
     "recharts": "^2.15.4",
     "swr": "^2.4.1",
     "tailwind-merge": "^2.3.0",
-    "tailwindcss-animate": "^1.0.7",
     "zod": "^3.23.0"
   },
   "devDependencies": {
@@ -45,6 +44,7 @@
     "postcss": "^8.5.12",
     "prettier": "^3.3.0",
     "tailwindcss": "^3.4.0",
+    "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.5.0"
   },
   "overrides": {
@@ -53,6 +53,9 @@
     "brace-expansion": "^5.0.12",
     "js-yaml": "^4.3.2",
     "nanoid": "^3.3.17",
-    "browserslist": "^4.28.8"
+    "browserslist": "^4.28.8",
+    "source-map-js": "^1.2.2",
+    "braces": "^3.0.3",
+    "micromatch": "^4.0.8"
   }
 }

@@ -355,10 +355,11 @@ async def ha_cluster_status(site_name: str = "Site_FGT-DC") -> dict:
 # ─────────────────────────────────────────────────────────────────
 
 # Site → (client_factory, measurement_name)
-# Office telegraf data IS on DC cluster (10.80.150.108:9200) — the flow data is on DRC
+# Office telegraf (SNMP) data moved DC → DRC (10.90.150.108:9200) in 2026-10 — the flow
+# data was already on DRC. Measurement name is unchanged; only the cluster changed.
 SITE_RESOURCE_MAP: dict[str, tuple] = {
     "Site_FGT-DRC": (get_drc_client, "Resource_FGT-DRC"),
-    "Site_FGT_Office": (get_dc_client, "Resource_FGT-Office"),
+    "Site_FGT_Office": (get_drc_client, "Resource_FGT-Office"),
 }
 
 
