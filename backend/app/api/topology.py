@@ -59,8 +59,14 @@ class TopologyLinkRead(BaseModel):
     link_type: str
     a_oper: str | None = None   # per-end interface oper (support end → None)
     b_oper: str | None = None
-    rx_mbps: float = 0.0        # data-bearing end's live rate
+    rx_mbps: float = 0.0        # data-bearing end's live rate (carrier; back-compat)
     tx_mbps: float = 0.0
+    # Per-end interface rates (None = support/no-data end). rx = IN/download, tx = OUT/upload,
+    # from THAT device's perspective — lets the canvas label each interface separately.
+    a_rx_mbps: float | None = None
+    a_tx_mbps: float | None = None
+    b_rx_mbps: float | None = None
+    b_tx_mbps: float | None = None
 
 
 class TopologyRead(BaseModel):
@@ -124,6 +130,10 @@ async def get_topology(db: AsyncSession = Depends(get_db), current_user=Depends(
             b_node_id=lk.b_node_id, b_if_name=lk.b_if_name, link_type=lk.link_type,
             a_oper=(a or {}).get("oper"), b_oper=(b or {}).get("oper"),
             rx_mbps=carrier.get("rx_mbps", 0.0), tx_mbps=carrier.get("tx_mbps", 0.0),
+            a_rx_mbps=(a or {}).get("rx_mbps") if a else None,
+            a_tx_mbps=(a or {}).get("tx_mbps") if a else None,
+            b_rx_mbps=(b or {}).get("rx_mbps") if b else None,
+            b_tx_mbps=(b or {}).get("tx_mbps") if b else None,
         ))
 
     return APIResponse.ok(data=TopologyRead(nodes=out_nodes, links=out_links))

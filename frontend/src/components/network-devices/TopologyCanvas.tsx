@@ -29,8 +29,18 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const [draftNodes, setDraftNodes] = useState<DraftNode[]>([]);
   const [draftLinks, setDraftLinks] = useState<DraftLink[]>([]);
   const [activeLink, setActiveLink] = useState<string | null>(null);
-  const [modal, setModal] = useState<null | "device" | "link">(null);
+  const [modal, setModal] = useState<null | "device">(null);
   const [saving, setSaving] = useState(false);
+  // Right-click context menu + edit flows (edit mode only).
+  const [ctx, setCtx] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
+  const [editNode, setEditNode] = useState<DraftNode | null>(null);   // Edit Device modal
+  const [linksForNode, setLinksForNode] = useState<string | null>(null); // Edit Links manager (node id)
+  const [linkEdit, setLinkEdit] = useState<null | { initial?: DraftLink; lockA?: string }>(null); // LinkModal
+
+  const updateNode = (id: string, patch: Partial<DraftNode>) =>
+    setDraftNodes((p) => p.map((n) => (n.id === id ? { ...n, ...patch } : n)));
+  const upsertLink = (l: DraftLink) =>
+    setDraftLinks((p) => (p.some((x) => x.id === l.id) ? p.map((x) => (x.id === l.id ? l : x)) : [...p, l]));
 
   const topo = data?.data;
   // live map (read mode) vs. draft (edit mode)
@@ -105,6 +115,15 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   };
   const deleteLink = (id: string) => setDraftLinks((p) => p.filter((l) => l.id !== id));
 
+  // Right-click: superadmin only. Read mode offers "Edit Layout"; edit mode offers the
+  // add/edit actions (empty canvas → add; on a node → edit).
+  const openCtx = (e: React.MouseEvent, nodeId: string | null) => {
+    if (!canEdit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setCtx({ x: e.clientX, y: e.clientY, nodeId });
+  };
+
   if (isLoading) return <p className="text-sm text-muted-foreground py-8 text-center">Loading topology…</p>;
   if (error) return <p className="text-sm text-red-500 py-8 text-center">Failed to load topology.</p>;
 
@@ -125,7 +144,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
           editing ? (
             <div className="flex gap-2">
               <ToolbarBtn onClick={() => setModal("device")}>+ Device</ToolbarBtn>
-              <ToolbarBtn onClick={() => setModal("link")}>+ Link</ToolbarBtn>
+              <ToolbarBtn onClick={() => setLinkEdit({})}>+ Link</ToolbarBtn>
               <ToolbarBtn onClick={save} disabled={saving} primary>{saving ? "Saving…" : "Save"}</ToolbarBtn>
               <ToolbarBtn onClick={cancelEdit}>Cancel</ToolbarBtn>
             </div>
@@ -147,6 +166,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
           style={{ minHeight: 420 }}
           onPointerMove={onCanvasPointerMove}
           onPointerUp={onCanvasPointerUp}
+          onContextMenu={(e) => openCtx(e, null)}
         >
           <div className="relative" style={{ width: w, height: h }}>
             <svg className="absolute inset-0" width={w} height={h}>
@@ -154,9 +174,15 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 const a = nodeById[lk.a_node_id], b = nodeById[lk.b_node_id];
                 if (!a || !b) return null;
                 const ca = center(a), cb = center(b), style = LINK_STYLE[lk.link_type] || LINK_STYLE.lan;
-                const mid = { x: (ca.cx + cb.cx) / 2, y: (ca.cy + cb.cy) / 2 };
                 const ea = endPoint(a, b), eb = endPoint(b, a);
                 const lkR = lk as TopologyLink;
+                // Label anchors: nudge each end's rate inward (toward midpoint) and off the
+                // line (perpendicular) so the ↓/↑ text isn't jammed against the node or the line.
+                const vx = cb.cx - ca.cx, vy = cb.cy - ca.cy, vlen = Math.hypot(vx, vy) || 1;
+                const ux = vx / vlen, uy = vy / vlen, nx = -uy, ny = ux;
+                const IN_OFF = 22, PERP_OFF = 13;
+                const aLbl = { x: ea.x + ux * IN_OFF + nx * PERP_OFF, y: ea.y + uy * IN_OFF + ny * PERP_OFF };
+                const bLbl = { x: eb.x - ux * IN_OFF + nx * PERP_OFF, y: eb.y - uy * IN_OFF + ny * PERP_OFF };
                 return (
                   <g key={lk.id} className="cursor-pointer" onClick={() => setActiveLink(activeLink === lk.id ? null : lk.id)}>
                     <line x1={ca.cx} y1={ca.cy} x2={cb.cx} y2={cb.cy} stroke="currentColor"
@@ -165,10 +191,13 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                       stroke={a.support ? "#a1a1aa" : "none"} strokeDasharray={a.support ? "2 2" : undefined} />
                     <circle cx={eb.x} cy={eb.y} r={5} fill={dotColor(lkR.b_oper, b.support)}
                       stroke={b.support ? "#a1a1aa" : "none"} strokeDasharray={b.support ? "2 2" : undefined} />
-                    {!editing ? (
-                      <text x={mid.x} y={mid.y - 4} textAnchor="middle" className="fill-foreground text-[10px]">
-                        ↓{fmtRate(lkR.rx_mbps || 0)} ↑{fmtRate(lkR.tx_mbps || 0)}
-                      </text>
+                    {/* Per-interface speed near each data end: ↓ IN blue, ↑ OUT orange
+                        (same colours as the Interface Bandwidth tab). Support ends have no rate. */}
+                    {!editing && lkR.a_rx_mbps != null ? (
+                      <LinkEndRate x={aLbl.x} y={aLbl.y} rx={lkR.a_rx_mbps} tx={lkR.a_tx_mbps ?? 0} />
+                    ) : null}
+                    {!editing && lkR.b_rx_mbps != null ? (
+                      <LinkEndRate x={bLbl.x} y={bLbl.y} rx={lkR.b_rx_mbps} tx={lkR.b_tx_mbps ?? 0} />
                     ) : null}
                   </g>
                 );
@@ -180,6 +209,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 key={n.id}
                 onPointerDown={(e) => onNodePointerDown(e, n as DraftNode)}
                 onClick={() => !editing && n.source_ip && onOpenDevice(n.source_ip)}
+                onContextMenu={(e) => openCtx(e, n.id)}
                 title={n.display_name || n.source_ip || ""}
                 className={`absolute flex flex-col items-center justify-center rounded-md border-2 bg-background text-center px-2 ${
                   n.support ? "border-zinc-400/50" : n.online ? "border-emerald-500" : "border-red-500"
@@ -220,13 +250,86 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
           onAdd={(node) => { setDraftNodes((p) => [...p, node]); setModal(null); }}
         />
       ) : null}
-      {modal === "link" ? (
-        <AddLinkModal
-          nodes={draftNodes}
-          onClose={() => setModal(null)}
-          onAdd={(link) => { setDraftLinks((p) => [...p, link]); setModal(null); }}
+
+      {/* Right-click context menu */}
+      {ctx ? (
+        <ContextMenu
+          x={ctx.x}
+          y={ctx.y}
+          onClose={() => setCtx(null)}
+          items={
+            !editing
+              ? [{ label: "✎ Edit Layout", on: startEdit }]
+              : ctx.nodeId == null
+              ? [
+                  { label: "➕ Add Device", on: () => setModal("device") },
+                  { label: "🔗 Add Link", on: () => setLinkEdit({}) },
+                ]
+              : [
+                  { label: "✎ Edit Device", on: () => setEditNode((draftNodes.find((n) => n.id === ctx.nodeId) as DraftNode) || null) },
+                  { label: "🔗 Edit Link", on: () => setLinksForNode(ctx.nodeId) },
+                  { label: "🗑 Delete Device", on: () => deleteNode(ctx.nodeId as string), danger: true },
+                ]
+          }
         />
       ) : null}
+
+      {editNode ? (
+        <EditDeviceModal
+          node={editNode}
+          onClose={() => setEditNode(null)}
+          onSave={(patch) => { updateNode(editNode.id, patch); setEditNode(null); }}
+        />
+      ) : null}
+
+      {linksForNode ? (
+        <EditLinksModal
+          nodeId={linksForNode}
+          nodes={draftNodes}
+          links={draftLinks}
+          onClose={() => setLinksForNode(null)}
+          onEditLink={(l) => { setLinksForNode(null); setLinkEdit({ initial: l }); }}
+          onNewLink={(a) => { setLinksForNode(null); setLinkEdit({ lockA: a }); }}
+          onDeleteLink={(id) => deleteLink(id)}
+        />
+      ) : null}
+
+      {linkEdit ? (
+        <LinkModal
+          nodes={draftNodes}
+          initial={linkEdit.initial}
+          lockA={linkEdit.lockA}
+          onClose={() => setLinkEdit(null)}
+          onSave={(link) => { upsertLink(link); setLinkEdit(null); }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ContextMenu({ x, y, items, onClose }: {
+  x: number; y: number;
+  items: { label: string; on: () => void; danger?: boolean }[];
+  onClose: () => void;
+}) {
+  return (
+    // Full-screen backdrop closes the menu on any click / right-click elsewhere.
+    <div className="fixed inset-0 z-50" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
+      <div
+        className="absolute min-w-[160px] rounded-md border border-border bg-background shadow-lg py-1 text-sm"
+        style={{ left: x, top: y }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {items.map((it) => (
+          <button
+            key={it.label}
+            onClick={() => { it.on(); onClose(); }}
+            className={`block w-full text-left px-3 py-1.5 hover:bg-muted/60 ${it.danger ? "text-red-500" : ""}`}
+          >
+            {it.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -247,6 +350,19 @@ function ToolbarBtn({ children, onClick, primary, disabled }: { children: React.
       className={`px-2.5 py-1 text-xs rounded-md border transition disabled:opacity-50 ${
         primary ? "bg-foreground text-background border-foreground" : "border-border hover:bg-muted/50"
       }`}>{children}</button>
+  );
+}
+
+// Per-interface rate label on a link end: ↓ IN blue, ↑ OUT orange (Interface Bandwidth colours).
+// A background-coloured stroke behind the glyphs keeps them readable over the link line.
+function LinkEndRate({ x, y, rx, tx }: { x: number; y: number; rx: number; tx: number }) {
+  return (
+    <text textAnchor="middle" className="text-[10px] font-semibold"
+      style={{ paintOrder: "stroke" }} stroke="hsl(var(--background))" strokeWidth={3.5}>
+      {/* Stacked, not inline — IN over OUT, so neither direction is cramped on the line. */}
+      <tspan x={x} y={y} fill="#3b82f6">↓ {fmtRate(rx)}</tspan>
+      <tspan x={x} y={y} dy={12} fill="#f97316">↑ {fmtRate(tx)}</tspan>
+    </text>
   );
 }
 
@@ -288,7 +404,13 @@ function LinkPanel({ link, nodeById, editing, onClose, onDelete }: {
       <div className="mt-1.5 space-y-0.5">
         <div>{nm(a, link.a_if_name)} — {link.a_oper ?? "support"}</div>
         <div>{nm(b, link.b_if_name)} — {link.b_oper ?? "support"}</div>
-        {!editing ? <div className="text-muted-foreground">↓{fmtRate(link.rx_mbps)} ↑{fmtRate(link.tx_mbps)} Mbps</div> : null}
+        {!editing ? (
+          <div>
+            <span className="text-blue-600 dark:text-blue-400">↓ IN {fmtRate(link.rx_mbps)}</span>
+            {" · "}
+            <span className="text-orange-600 dark:text-orange-400">↑ OUT {fmtRate(link.tx_mbps)}</span>
+          </div>
+        ) : null}
       </div>
       {editing ? <button onClick={onDelete} className="mt-2 text-red-500 hover:underline">Delete link</button> : null}
     </div>
@@ -370,31 +492,34 @@ function AddDeviceModal({ placed, onClose, onAdd }: {
   );
 }
 
-function AddLinkModal({ nodes, onClose, onAdd }: {
-  nodes: DraftNode[]; onClose: () => void; onAdd: (l: DraftLink) => void;
+// Create a link, or edit an existing one (initial), or start a link from a fixed node (lockA).
+function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
+  nodes: DraftNode[]; initial?: DraftLink; lockA?: string; onClose: () => void; onSave: (l: DraftLink) => void;
 }) {
-  const [aId, setAId] = useState("");
-  const [aIf, setAIf] = useState("");
-  const [bId, setBId] = useState("");
-  const [bIf, setBIf] = useState("");
-  const [type, setType] = useState<"lan" | "wan" | "mpls" | "wireless">("lan");
+  const [aId, setAId] = useState(initial?.a_node_id || lockA || "");
+  const [aIf, setAIf] = useState(initial?.a_if_name || "");
+  const [bId, setBId] = useState(initial?.b_node_id || "");
+  const [bIf, setBIf] = useState(initial?.b_if_name || "");
+  const [type, setType] = useState<"lan" | "wan" | "mpls" | "wireless">(initial?.link_type || "lan");
 
   const aNode = nodes.find((n) => n.id === aId);
   const bNode = nodes.find((n) => n.id === bId);
   const aIfaces = useDeviceIfaces(aNode?.support ? null : aNode?.source_ip || null);
   const bIfaces = useDeviceIfaces(bNode?.support ? null : bNode?.source_ip || null);
+  const editing = !!initial;
 
-  const add = () => {
+  const save = () => {
     if (!aId || !bId || aId === bId) return;
-    onAdd({
-      id: newId(), a_node_id: aId, a_if_name: aNode?.support ? null : aIf || null,
+    onSave({
+      id: initial?.id || newId(), a_node_id: aId, a_if_name: aNode?.support ? null : aIf || null,
       b_node_id: bId, b_if_name: bNode?.support ? null : bIf || null, link_type: type,
-      a_oper: null, b_oper: null, rx_mbps: 0, tx_mbps: 0,
+      a_oper: initial?.a_oper ?? null, b_oper: initial?.b_oper ?? null,
+      rx_mbps: initial?.rx_mbps ?? 0, tx_mbps: initial?.tx_mbps ?? 0,
     });
   };
 
   return (
-    <Modal title="Create Link" onClose={onClose}>
+    <Modal title={editing ? "Edit Link" : "Create Link"} onClose={onClose}>
       <div className="space-y-2 text-sm">
         <EndPicker label="From" nodes={nodes} nodeId={aId} setNodeId={setAId} ifaces={aIfaces} iff={aIf} setIff={setAIf} support={!!aNode?.support} />
         <EndPicker label="To" nodes={nodes} nodeId={bId} setNodeId={setBId} ifaces={bIfaces} iff={bIf} setIff={setBIf} support={!!bNode?.support} />
@@ -409,7 +534,81 @@ function AddLinkModal({ nodes, onClose, onAdd }: {
           </div>
         </div>
       </div>
-      <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={add}>Create Link</ToolbarBtn></div>
+      <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={save}>{editing ? "Save Link" : "Create Link"}</ToolbarBtn></div>
+    </Modal>
+  );
+}
+
+// Edit a node's label + icon (display_name overrides SNMP; support nodes are identified by name).
+function EditDeviceModal({ node, onClose, onSave }: {
+  node: DraftNode; onClose: () => void; onSave: (patch: Partial<DraftNode>) => void;
+}) {
+  const [name, setName] = useState(node.display_name || "");
+  const [icon, setIcon] = useState<IconData | null>(
+    node.icon_kind === "custom" && node.icon_url ? { id: node.icon_id || "", name: "", url: node.icon_url } : null,
+  );
+  const save = () => {
+    onSave({
+      display_name: name.trim() || node.display_name,
+      // A newly-picked icon → custom; untouched → keep the node's existing icon.
+      ...(icon
+        ? { icon_kind: "custom", icon_id: icon.id, icon_url: icon.url }
+        : { icon_kind: node.icon_kind, icon_id: node.icon_id, icon_url: node.icon_url }),
+    });
+  };
+  return (
+    <Modal title="Edit Device" onClose={onClose}>
+      <label className="text-xs text-muted-foreground">Display name</label>
+      <input value={name} onChange={(e) => setName(e.target.value)}
+        placeholder={node.source_ip || "Name"}
+        className="w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background mt-1" />
+      {node.source_ip ? (
+        <p className="text-[11px] text-muted-foreground mt-1">Monitored device {node.source_ip} — the name is a display override.</p>
+      ) : (
+        <p className="text-[11px] text-muted-foreground mt-1">Icon-only (support) node — no SNMP data.</p>
+      )}
+      <div className="mt-3">
+        <span className="text-xs text-muted-foreground">Icon</span>
+        <IconPicker selectedId={icon?.id ?? null} onSelect={setIcon} />
+      </div>
+      <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={save}>Save</ToolbarBtn></div>
+    </Modal>
+  );
+}
+
+// Manage the links attached to one node: edit / delete each, or add a new one from here.
+function EditLinksModal({ nodeId, nodes, links, onClose, onEditLink, onNewLink, onDeleteLink }: {
+  nodeId: string; nodes: DraftNode[]; links: DraftLink[]; onClose: () => void;
+  onEditLink: (l: DraftLink) => void; onNewLink: (nodeId: string) => void; onDeleteLink: (id: string) => void;
+}) {
+  const [rows, setRows] = useState<DraftLink[]>(links.filter((l) => l.a_node_id === nodeId || l.b_node_id === nodeId));
+  const nameOf = (id: string, iff: string | null) => {
+    const n = nodes.find((x) => x.id === id);
+    return `${n?.display_name || n?.source_ip || "?"}${iff ? ` · ${iff}` : ""}`;
+  };
+  const del = (id: string) => { onDeleteLink(id); setRows((p) => p.filter((l) => l.id !== id)); };
+
+  return (
+    <Modal title="Edit Links" onClose={onClose}>
+      {rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No links on this device yet.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {rows.map((l) => (
+            <li key={l.id} className="flex items-center justify-between gap-2 text-xs rounded-md border border-border px-2 py-1.5">
+              <span className="truncate">
+                <span className="uppercase text-muted-foreground mr-1">{l.link_type}</span>
+                {nameOf(l.a_node_id, l.a_if_name)} — {nameOf(l.b_node_id, l.b_if_name)}
+              </span>
+              <span className="flex gap-2 shrink-0">
+                <button onClick={() => onEditLink(l)} className="hover:underline">Edit</button>
+                <button onClick={() => del(l.id)} className="text-red-500 hover:underline">Delete</button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={() => onNewLink(nodeId)}>+ New link from here</ToolbarBtn></div>
     </Modal>
   );
 }

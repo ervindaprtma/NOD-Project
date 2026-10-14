@@ -141,6 +141,11 @@ export interface TopologyLink {
   b_oper: string | null;
   rx_mbps: number;
   tx_mbps: number;
+  // Per-end interface rates (null = support/no-data end). rx = IN/download, tx = OUT/upload.
+  a_rx_mbps?: number | null;
+  a_tx_mbps?: number | null;
+  b_rx_mbps?: number | null;
+  b_tx_mbps?: number | null;
 }
 
 export interface TopologyData {
@@ -161,10 +166,10 @@ export const LINK_STYLE: Record<string, { width: number; dash?: string }> = {
 };
 
 export function fmtRate(mbps: number): string {
-  if (!mbps || mbps <= 0) return "0";
-  if (mbps >= 1000) return `${(mbps / 1000).toFixed(1)}G`;
-  if (mbps >= 1) return `${mbps.toFixed(0)}M`;
-  return `${(mbps * 1000).toFixed(0)}K`;
+  if (!mbps || mbps <= 0) return "0 Mbps";
+  if (mbps >= 1000) return `${(mbps / 1000).toFixed(1)} Gbps`;
+  if (mbps >= 1) return `${mbps.toFixed(0)} Mbps`;
+  return `${(mbps * 1000).toFixed(0)} Kbps`;
 }
 
 export function fmtDuration(ms: number): string {
