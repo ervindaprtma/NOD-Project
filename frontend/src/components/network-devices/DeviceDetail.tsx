@@ -13,7 +13,7 @@ import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeR
 
 const WINDOWS = ["12h", "24h", "7d", "30d"];
 
-export function DeviceDetail({ source, onBack }: { source: string; onBack: () => void }) {
+export function DeviceDetail({ source, onBack, refreshMs = 0 }: { source: string; onBack: () => void; refreshMs?: number }) {
   const [window, setWindow] = useState("24h");
   // Single expanded interface: its chart + state history render inline under the row.
   const [selected, setSelected] = useState<string | null>(null);
@@ -28,7 +28,7 @@ export function DeviceDetail({ source, onBack }: { source: string; onBack: () =>
   const { data, error, isLoading } = useSWR<Envelope<DeviceDetailData>>(
     `/api/v1/network-devices/devices/${encodeURIComponent(source)}/interfaces`,
     swrFetcherLong,
-    { refreshInterval: 60_000 },
+    { refreshInterval: refreshMs },
   );
 
   const dev = data?.data;
@@ -82,7 +82,7 @@ export function DeviceDetail({ source, onBack }: { source: string; onBack: () =>
         <p className="text-sm text-red-500 py-8 text-center">Device not found or no current data.</p>
       ) : (
         <>
-          {dev.vendor === "fortigate" ? <FortiGateBoxHealth site={dev.site} window={window} gteMs={gteMs} lteMs={lteMs} /> : null}
+          {dev.vendor === "fortigate" ? <FortiGateBoxHealth site={dev.site} window={window} gteMs={gteMs} lteMs={lteMs} refreshMs={refreshMs} /> : null}
 
           <div className="flex items-center gap-3 text-xs text-muted-foreground mb-2">
             <span className="flex items-center gap-1"><i className={`w-2 h-2 rounded-full ${STATE_DOT.up}`} /> {dev.counts.up} up</span>
@@ -96,8 +96,8 @@ export function DeviceDetail({ source, onBack }: { source: string; onBack: () =>
             onToggle={toggleIface}
             renderDetail={(i) => (
               <>
-                <InterfaceCharts source={source} iface={i} window={window} gteMs={gteMs} lteMs={lteMs} />
-                <StateHistory source={source} window={window} gteMs={gteMs} lteMs={lteMs} ifName={i.if_name} />
+                <InterfaceCharts source={source} iface={i} window={window} gteMs={gteMs} lteMs={lteMs} refreshMs={refreshMs} />
+                <StateHistory source={source} window={window} gteMs={gteMs} lteMs={lteMs} ifName={i.if_name} refreshMs={refreshMs} />
               </>
             )}
           />

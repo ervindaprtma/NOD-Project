@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import useSWR from "swr";
 import { swrFetcher } from "@/lib/api";
-import { TAB_TRIGGER_CLASS } from "@/lib/constants";
+import { TAB_TRIGGER_CLASS, REFRESH_INTERVALS, DEFAULT_REFRESH_MS } from "@/lib/constants";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@radix-ui/react-tabs";
 import type { DeviceRow, Envelope, SummaryData } from "@/components/network-devices/types";
 import { OverviewCards } from "@/components/network-devices/OverviewCards";
@@ -44,6 +44,8 @@ function translateLegacy(p: URLSearchParams): { tab: TabKey; device: string | nu
 export default function NetworkDevicesPage() {
   const [tab, setTab] = useState<TabKey>("overview");
   const [device, setDevice] = useState<string | null>(null);
+  // Auto-refresh cadence for every tab (Off/15s/30s/60s), same control as the Traffic pages.
+  const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
 
   // Hydrate from URL after mount (reading it in a useState initializer mismatches SSR).
   useEffect(() => {
@@ -87,12 +89,12 @@ export default function NetworkDevicesPage() {
   const { data: summaryResp, isLoading: summaryLoading } = useSWR<Envelope<SummaryData>>(
     "/api/v1/network-devices/summary",
     swrFetcher,
-    { refreshInterval: 60_000 },
+    { refreshInterval: refreshMs },
   );
   const { data: devicesResp, isLoading: devicesLoading } = useSWR<Envelope<DeviceRow[]>>(
     "/api/v1/network-devices/devices",
     swrFetcher,
-    { refreshInterval: 60_000 },
+    { refreshInterval: refreshMs },
   );
 
   const summary = summaryResp?.data;
@@ -100,7 +102,22 @@ export default function NetworkDevicesPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-[1400px] mx-auto">
-      <h1 className="text-xl font-semibold mb-4">Network Devices</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-semibold">Network Devices</h1>
+        {/* Auto-refresh selector — applies to every tab (same control as Traffic pages). */}
+        <select
+          value={refreshMs}
+          onChange={(e) => setRefreshMs(Number(e.target.value))}
+          title="Auto-refresh interval"
+          className="h-7 px-2 text-xs border border-border/60 dark:border-border/40 rounded-md bg-card text-muted-foreground cursor-pointer shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20"
+        >
+          {REFRESH_INTERVALS.map((ri) => (
+            <option key={ri.value} value={ri.value}>
+              {ri.label === "Off" ? "⏸ Off" : `↻ ${ri.label}`}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <Tabs value={tab} onValueChange={(v) => go(v as TabKey, v === "devices" ? device : null)}>
         <TabsList className="mb-4 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex">
@@ -112,8 +129,8 @@ export default function NetworkDevicesPage() {
 
         <TabsContent value="overview">
           {/* Device Availability pinned to the top, then FortiGate resources, then fleet cards */}
-          <AvailabilityCards />
-          <FortiGateResources />
+          <AvailabilityCards refreshMs={refreshMs} />
+          <FortiGateResources refreshMs={refreshMs} />
           {summaryLoading ? (
             <p className="text-sm text-muted-foreground py-8 text-center">Loading fleet…</p>
           ) : summary ? (
@@ -125,7 +142,7 @@ export default function NetworkDevicesPage() {
 
         <TabsContent value="devices">
           {device ? (
-            <DeviceDetail source={device} onBack={() => go("devices", null)} />
+            <DeviceDetail source={device} onBack={() => go("devices", null)} refreshMs={refreshMs} />
           ) : devicesLoading ? (
             <p className="text-sm text-muted-foreground py-8 text-center">Loading devices…</p>
           ) : (
@@ -134,11 +151,11 @@ export default function NetworkDevicesPage() {
         </TabsContent>
 
         <TabsContent value="bandwidth">
-          <InterfaceBandwidth />
+          <InterfaceBandwidth refreshMs={refreshMs} />
         </TabsContent>
 
         <TabsContent value="topology">
-          <TopologyCanvas onOpenDevice={openDevice} />
+          <TopologyCanvas onOpenDevice={openDevice} refreshMs={refreshMs} />
         </TabsContent>
       </Tabs>
     </div>

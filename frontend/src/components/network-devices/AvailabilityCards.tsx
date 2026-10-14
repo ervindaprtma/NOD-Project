@@ -39,7 +39,7 @@ function fmtDur(seconds: number): string {
   return `${s}s`;
 }
 
-export function AvailabilityCards() {
+export function AvailabilityCards({ refreshMs = 0 }: { refreshMs?: number }) {
   const [site, setSite] = useState(SITES[0].key);
   const [win, setWin] = useState("24h");
   const label = SITES.find((s) => s.key === site)?.label ?? site;
@@ -47,7 +47,7 @@ export function AvailabilityCards() {
   const { data, error, isLoading, isValidating, mutate } = useSWR<Envelope<DeviceAvailabilityData>>(
     `/api/v1/device-uptime?site_name=${site}&window=${win}`,
     swrFetcherLong,
-    { revalidateOnFocus: false },
+    { revalidateOnFocus: false, refreshInterval: refreshMs },
   );
   const sum = data?.data?.summary;
   const devices = data?.data?.devices ?? [];

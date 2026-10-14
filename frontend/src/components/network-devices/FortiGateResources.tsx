@@ -16,20 +16,20 @@ const SITES: { key: string; label: string }[] = [
   { key: "Office", label: "Office" },
 ];
 
-export function FortiGateResources() {
+export function FortiGateResources({ refreshMs = 60_000 }: { refreshMs?: number }) {
   return (
     <div className="mt-6">
       <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
         FortiGate Resources (CPU · RAM · Sessions)
       </h3>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        {SITES.map((s) => <SiteResources key={s.key} siteLabel={s.label} />)}
+        {SITES.map((s) => <SiteResources key={s.key} siteLabel={s.label} refreshMs={refreshMs} />)}
       </div>
     </div>
   );
 }
 
-function SiteResources({ siteLabel }: { siteLabel: string }) {
+function SiteResources({ siteLabel, refreshMs }: { siteLabel: string; refreshMs: number }) {
   const siteName = FGT_SITE_NAME[siteLabel];
   // /resources requires gte_ms/lte_ms (no window param); last 15 min for a current read.
   // Round to the minute: a raw Date.now() recomputes every render, changing the SWR
@@ -39,7 +39,7 @@ function SiteResources({ siteLabel }: { siteLabel: string }) {
   const { data, error, isLoading } = useSWR<Envelope<ResourceData>>(
     siteName ? `/api/v1/resources?site_name=${siteName}&gte_ms=${gte}&lte_ms=${now}` : null,
     swrFetcherLong,
-    { revalidateOnFocus: false, refreshInterval: 60_000 },
+    { revalidateOnFocus: false, refreshInterval: refreshMs },
   );
   const devices = data?.data?.current ?? [];
 

@@ -15,12 +15,14 @@ export function InterfaceCharts({
   window,
   gteMs,
   lteMs,
+  refreshMs = 0,
 }: {
   source: string;
   iface: InterfaceBox;
   window: string;
   gteMs?: number;
   lteMs?: number;
+  refreshMs?: number;
 }) {
   const [metric, setMetric] = useState<Metric>("mbps");
 
@@ -35,6 +37,7 @@ export function InterfaceCharts({
 
   const { data, error, isLoading } = useSWR<Envelope<ChartData>>(key, swrFetcherLong, {
     revalidateOnFocus: false,
+    refreshInterval: refreshMs,
   });
 
   const chart = data?.data;

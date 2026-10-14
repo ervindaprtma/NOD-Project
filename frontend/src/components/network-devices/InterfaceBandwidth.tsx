@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import useSWR from "swr";
 import { swrFetcherLong } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -20,7 +20,7 @@ const SITES: { key: string; label: string }[] = [
   { key: "Site_FGT_Office", label: "Office" },
 ];
 
-export function InterfaceBandwidth() {
+export function InterfaceBandwidth({ refreshMs = 0 }: { refreshMs?: number }) {
   const [site, setSite] = useState(SITES[0].key);
   // Default 15m (TIME_PRESETS[0]) — same as the old page.
   const [selectedPreset, setSelectedPreset] = useState("15m");
@@ -28,12 +28,27 @@ export function InterfaceBandwidth() {
   const [lteMs, setLteMs] = useState(() => Date.now());
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);
+  // Seconds of the active preset (0 = custom → window is fixed, never auto-slides).
+  const [activeSeconds, setActiveSeconds] = useState(TIME_PRESETS[0].seconds);
   const label = SITES.find((s) => s.key === site)?.label ?? site;
+
+  // Live viewport: on each refresh tick, slide a preset window forward (same as Traffic).
+  // Custom ranges stay pinned. No tick when refresh is Off.
+  useEffect(() => {
+    if (refreshMs <= 0 || activeSeconds <= 0) return;
+    const id = setInterval(() => {
+      const now = Date.now();
+      setGteMs(now - activeSeconds * 1000);
+      setLteMs(now);
+    }, refreshMs);
+    return () => clearInterval(id);
+  }, [refreshMs, activeSeconds]);
 
   function handlePreset(seconds: number, presetLabel: string) {
     const now = Date.now();
     setGteMs(now - seconds * 1000);
     setLteMs(now);
+    setActiveSeconds(seconds);
     setSelectedPreset(presetLabel);
     setCustomRangeLabel(null);
     setShowCustomPicker(false);
@@ -42,6 +57,7 @@ export function InterfaceBandwidth() {
   function handleCustomApply(range: CustomTimeRange) {
     setGteMs(range.gte_ms);
     setLteMs(range.lte_ms);
+    setActiveSeconds(0);
     setSelectedPreset("custom");
     setShowCustomPicker(false);
     const f = new Date(range.gte_ms), t = new Date(range.lte_ms);

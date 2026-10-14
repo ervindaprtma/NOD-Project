@@ -13,7 +13,7 @@ import type { ResourceData } from "@/types";
 // Current-value tiles + CPU%/Mem%/Sessions trend charts over the selected window.
 const WINDOW_SEC: Record<string, number> = { "12h": 43200, "24h": 86400, "7d": 604800, "30d": 2592000 };
 
-export function FortiGateBoxHealth({ site, window = "24h", gteMs, lteMs }: { site: string | null; window?: string; gteMs?: number; lteMs?: number }) {
+export function FortiGateBoxHealth({ site, window = "24h", gteMs, lteMs, refreshMs = 60_000 }: { site: string | null; window?: string; gteMs?: number; lteMs?: number; refreshMs?: number }) {
   const siteName = site ? FGT_SITE_NAME[site] : undefined;
   // /resources requires gte_ms/lte_ms (no window param). Custom range wins; otherwise
   // derive from the preset, rounding to the minute so the SWR key is stable across
@@ -23,7 +23,7 @@ export function FortiGateBoxHealth({ site, window = "24h", gteMs, lteMs }: { sit
   const { data, error, isLoading } = useSWR<Envelope<ResourceData>>(
     siteName ? `/api/v1/resources?site_name=${siteName}&gte_ms=${gte}&lte_ms=${lte}` : null,
     siteName ? (url: string) => swrFetcherLong(url) : null,
-    { revalidateOnFocus: false, refreshInterval: 60_000 },
+    { revalidateOnFocus: false, refreshInterval: refreshMs },
   );
 
   if (!siteName) return null;

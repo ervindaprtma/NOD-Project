@@ -18,11 +18,11 @@ const newId = () =>
   (crypto.randomUUID?.() || `${Date.now()}${Math.random()}`).replace(/-/g, "").slice(0, 32).padEnd(32, "0");
 const snap = (v: number) => Math.round(v / GRID) * GRID;
 
-export function TopologyCanvas({ onOpenDevice }: { onOpenDevice: (source: string) => void }) {
+export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDevice: (source: string) => void; refreshMs?: number }) {
   const { data, error, isLoading, mutate } = useSWR<Envelope<TopologyData>>(
     "/api/v1/topology",
     swrFetcher,
-    { refreshInterval: 30_000 },
+    { refreshInterval: refreshMs },
   );
   const canEdit = hasMinRole("superadmin");
   const [editing, setEditing] = useState(false);
