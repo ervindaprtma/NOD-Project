@@ -708,6 +708,21 @@ async def test_alert_rule(
             # None = "unknown" (device absent / insufficient history) — the engine holds;
             # for the dry-run surface it as 0 so the operator sees "not breaching".
             metric_value = extracted if extracted is not None else 0.0
+        elif rule.data_source == "interface_state":
+            # site_name carries the device IP; target_key is the if_name ("*"/blank = any).
+            from app.opensearch import network_devices as nd_qb
+            from app.services.alert_engine import _extract_interface_state
+            states = await nd_qb.alert_interface_states(
+                source_ip=rule.site_name or "", gte_ms=gte_ms, lte_ms=lte_ms
+            )
+            metric_value = _extract_interface_state(rule.target_key, states) if isinstance(states, dict) else 0.0
+        elif rule.data_source == "interface_errors":
+            from app.opensearch import network_devices as nd_qb
+            from app.services.alert_engine import _extract_interface_errors
+            errs = await nd_qb.alert_interface_errors(
+                source_ip=rule.site_name or "", gte_ms=gte_ms, lte_ms=lte_ms
+            )
+            metric_value = _extract_interface_errors(rule.target_key, errs) if isinstance(errs, dict) else 0.0
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -859,6 +874,27 @@ async def get_site_devices(
     return APIResponse.ok(data=[
         {"key": d["device_key"], "label": d.get("hostname") or d["device_key"]}
         for d in devices
+    ])
+
+
+@router.get("/device-interfaces")
+async def get_device_interfaces(
+    source: str,
+    current_user: User = Depends(require_role("viewer")),
+) -> APIResponse[list[dict]]:
+    """Interface list for one device (→ target_key = if_name) for interface_state /
+    interface_errors rules. `source` is the device IP (tag.source) — the value those
+    rules store in site_name. The '*' (any interface) option is added by the builder.
+    """
+    from app.opensearch import network_devices as nd_qb
+
+    gte, lte = nd_qb.current_window()
+    dev = await nd_qb.device_interfaces(source_ip=source, gte_ms=gte, lte_ms=lte)
+    ifaces = dev.get("interfaces", []) if isinstance(dev, dict) else []
+    return APIResponse.ok(data=[
+        {"key": i["if_name"],
+         "label": f"{i['if_name']} — {i['description']}" if i.get("description") else i["if_name"]}
+        for i in ifaces
     ])
 
 

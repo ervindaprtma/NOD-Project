@@ -517,6 +517,35 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "is_default": False,
         "is_user_created": False,
     },
+    # Interface Up/Down (data_source="interface_state"): threshold rule where metric_value is
+    # 1=down / 0=up, so the fire/resolve lifecycle maps straight to DOWN→UP. target_name is the
+    # if_name ("all interfaces" for a "*" rule); site_name carries the device IP.
+    {
+        "name": "Interface Up/Down",
+        "description": "Interface operational state for an interface_state rule — fires when a "
+                       "monitored interface goes DOWN (admin-enabled) and recovers when it is back UP.",
+        "subject_template": "{% if event == 'resolved' %}✅ Interface UP: {{ target_name|e }}"
+                            "{% else %}🔴 Interface DOWN: {{ target_name|e }}{% endif %} — {{ site_name|e }}",
+        "body_template": (
+            "{% if event == 'resolved' %}✅ <b>INTERFACE UP</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🔌 <b>Interface:</b> {{ target_name|e }}\n"
+            "🖥️ <b>Device:</b> {{ site_name|e }}\n"
+            "🏷️ <b>Rule:</b> {{ rule.name|e }} ({{ severity }})\n"
+            "🕐 <b>Recovered at:</b> {{ sent_at }}\n"
+            "━━━━━━━━━━━━━━━━━━{% else %}🔴 <b>INTERFACE DOWN</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🔌 <b>Interface:</b> {{ target_name|e }}\n"
+            "🖥️ <b>Device:</b> {{ site_name|e }}\n"
+            "🏷️ <b>Rule:</b> {{ rule.name|e }} ({{ severity }})\n"
+            "🕐 <b>Detected at:</b> {{ fired_at }}\n"
+            "⚠️ Operationally down while admin-enabled — check link / SFP / peer.\n"
+            "━━━━━━━━━━━━━━━━━━{% endif %}"
+        ),
+        "line_template": None,
+        "is_default": False,
+        "is_user_created": False,
+    },
 ]
 
 
@@ -1069,6 +1098,36 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_conditions": ["==", ">="],
         "example_threshold": 1,
     },
+    # interface_state / interface_errors — multi-vendor interface monitoring (plan §3.3).
+    # The rule's site_name holds the DEVICE IP (tag.source); target_key is the if_name
+    # ("*"/blank = any interface on that device). The engine ignores metric_field for
+    # these — the field row exists so the builder can offer the source.
+    {
+        "data_source": "interface_state",
+        "field_key": "oper_down",
+        "display_name": "Interface Down",
+        "description": "1 when the targeted interface is operationally DOWN while admin-enabled "
+                       "(admin-disabled never fires). Blank/'*' interface = any port on the device "
+                       "(noisy on access switches — target a specific uplink). Pair with a "
+                       "sustained-for window to dampen flaps. Use == 1.",
+        "unit": "state",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": ["==", ">="],
+        "example_threshold": 1,
+    },
+    {
+        "data_source": "interface_errors",
+        "field_key": "errors_discards",
+        "display_name": "Interface Errors + Discards",
+        "description": "Error + discard delta on the targeted interface over the window. "
+                       "Blank/'*' interface = the worst port on the device. Use > N.",
+        "unit": "count",
+        "category": "errors",
+        "valid_aggregations": ["max", "sum"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 100,
+    },
 ]
 
 
@@ -1100,7 +1159,7 @@ async def seed_field_catalog() -> int:
         # vpn_ssl / vpn_ipsec (count metrics — keep them aligned with the templates that
         # reference the keys, so a stale row from an older catalog can't diverge).
         managed = {"appid_flow", "ha_resource", "interface_stats", "device_uptime", "sdwan_sla",
-                   "vpn_ssl", "vpn_ipsec"}
+                   "vpn_ssl", "vpn_ipsec", "interface_state", "interface_errors"}
         await db.execute(
             delete(AlertFieldCatalog).where(AlertFieldCatalog.data_source.in_(managed))
         )
