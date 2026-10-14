@@ -123,7 +123,7 @@ export default function NetworkDevicesPage() {
         <TabsList className="mb-4 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex">
           <TabsTrigger value="overview" className={TAB_TRIGGER_CLASS}>Overview</TabsTrigger>
           <TabsTrigger value="devices" className={TAB_TRIGGER_CLASS}>Devices</TabsTrigger>
-          <TabsTrigger value="bandwidth" className={TAB_TRIGGER_CLASS}>Interface Bandwidth</TabsTrigger>
+          <TabsTrigger value="bandwidth" className={TAB_TRIGGER_CLASS}>WAN-MPLS Bandwidth</TabsTrigger>
           <TabsTrigger value="topology" className={TAB_TRIGGER_CLASS}>Topology</TabsTrigger>
         </TabsList>
 

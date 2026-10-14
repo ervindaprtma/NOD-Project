@@ -142,22 +142,28 @@ async def get_topology(db: AsyncSession = Depends(get_db), current_user=Depends(
 # ── Edit (superadmin) — full save, icon library ──
 
 
+# A UUID in either form: 32 bare hex (what _new_uuid inserts) OR the canonical 36-char
+# dashed form (what the Postgres UUID column returns on read). The round-trip save sends
+# back whatever GET returned, so both must validate.
+_UUID_RE = r"^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+
+
 class NodeSave(BaseModel):
-    id: str = Field(..., pattern=r"^[0-9a-f]{32}$")  # client-generated uuid hex
+    id: str = Field(..., pattern=_UUID_RE)  # client-generated uuid, or echoed from GET
     source_ip: str | None = Field(default=None, max_length=45)
     support: bool = False
     display_name: str | None = Field(default=None, max_length=255)
     icon_kind: str = Field(default="sw", max_length=16)
-    icon_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    icon_id: str | None = Field(default=None, pattern=_UUID_RE)
     x: int = 0
     y: int = 0
 
 
 class LinkSave(BaseModel):
-    id: str = Field(..., pattern=r"^[0-9a-f]{32}$")
-    a_node_id: str = Field(..., pattern=r"^[0-9a-f]{32}$")
+    id: str = Field(..., pattern=_UUID_RE)
+    a_node_id: str = Field(..., pattern=_UUID_RE)
     a_if_name: str | None = Field(default=None, max_length=255)
-    b_node_id: str = Field(..., pattern=r"^[0-9a-f]{32}$")
+    b_node_id: str = Field(..., pattern=_UUID_RE)
     b_if_name: str | None = Field(default=None, max_length=255)
     link_type: str = Field(default="lan", max_length=16)
 

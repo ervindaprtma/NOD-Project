@@ -51,6 +51,16 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
     for (const n of nodes) m[n.id] = n;
     return m;
   }, [nodes]);
+  // Links grouped by the unordered node pair → fan parallel links apart so multiple links
+  // between the same two devices don't overlap.
+  const pairGroups = useMemo(() => {
+    const g: Record<string, string[]> = {};
+    for (const l of links) {
+      const key = [l.a_node_id, l.b_node_id].sort().join("|");
+      (g[key] ||= []).push(l.id);
+    }
+    return g;
+  }, [links]);
 
   const startEdit = () => {
     setDraftNodes((topo?.nodes || []).map((n) => ({ ...n })));
@@ -176,20 +186,25 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 const ca = center(a), cb = center(b), style = LINK_STYLE[lk.link_type] || LINK_STYLE.lan;
                 const ea = endPoint(a, b), eb = endPoint(b, a);
                 const lkR = lk as TopologyLink;
-                // Label anchors: nudge each end's rate inward (toward midpoint) and off the
-                // line (perpendicular) so the ↓/↑ text isn't jammed against the node or the line.
                 const vx = cb.cx - ca.cx, vy = cb.cy - ca.cy, vlen = Math.hypot(vx, vy) || 1;
                 const ux = vx / vlen, uy = vy / vlen, nx = -uy, ny = ux;
-                const IN_OFF = 22, PERP_OFF = 13;
-                const aLbl = { x: ea.x + ux * IN_OFF + nx * PERP_OFF, y: ea.y + uy * IN_OFF + ny * PERP_OFF };
-                const bLbl = { x: eb.x - ux * IN_OFF + nx * PERP_OFF, y: eb.y - uy * IN_OFF + ny * PERP_OFF };
+                // Fan parallel links apart: shift this link perpendicular by its slot in the pair.
+                const grp = pairGroups[[lk.a_node_id, lk.b_node_id].sort().join("|")] || [lk.id];
+                const slot = grp.indexOf(lk.id) - (grp.length - 1) / 2;
+                const ox = nx * slot * 24, oy = ny * slot * 24;
+                const p1 = { x: ca.cx + ox, y: ca.cy + oy }, p2 = { x: cb.cx + ox, y: cb.cy + oy };
+                const da = { x: ea.x + ox, y: ea.y + oy }, dbp = { x: eb.x + ox, y: eb.y + oy };
+                // Label anchors: nudge each end's rate inward + off the line, on the link's outer side.
+                const IN_OFF = 22, PERP_OFF = 13, sp = slot >= 0 ? 1 : -1;
+                const aLbl = { x: da.x + ux * IN_OFF + nx * PERP_OFF * sp, y: da.y + uy * IN_OFF + ny * PERP_OFF * sp };
+                const bLbl = { x: dbp.x - ux * IN_OFF + nx * PERP_OFF * sp, y: dbp.y - uy * IN_OFF + ny * PERP_OFF * sp };
                 return (
                   <g key={lk.id} className="cursor-pointer" onClick={() => setActiveLink(activeLink === lk.id ? null : lk.id)}>
-                    <line x1={ca.cx} y1={ca.cy} x2={cb.cx} y2={cb.cy} stroke="currentColor"
+                    <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="currentColor"
                       className="text-muted-foreground" strokeWidth={style.width} strokeDasharray={style.dash} />
-                    <circle cx={ea.x} cy={ea.y} r={5} fill={dotColor(lkR.a_oper, a.support)}
+                    <circle cx={da.x} cy={da.y} r={5} fill={dotColor(lkR.a_oper, a.support)}
                       stroke={a.support ? "#a1a1aa" : "none"} strokeDasharray={a.support ? "2 2" : undefined} />
-                    <circle cx={eb.x} cy={eb.y} r={5} fill={dotColor(lkR.b_oper, b.support)}
+                    <circle cx={dbp.x} cy={dbp.y} r={5} fill={dotColor(lkR.b_oper, b.support)}
                       stroke={b.support ? "#a1a1aa" : "none"} strokeDasharray={b.support ? "2 2" : undefined} />
                     {/* Per-interface speed near each data end: ↓ IN blue, ↑ OUT orange
                         (same colours as the Interface Bandwidth tab). Support ends have no rate. */}
@@ -211,18 +226,28 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 onClick={() => !editing && n.source_ip && onOpenDevice(n.source_ip)}
                 onContextMenu={(e) => openCtx(e, n.id)}
                 title={n.display_name || n.source_ip || ""}
-                className={`absolute flex flex-col items-center justify-center rounded-md border-2 bg-background text-center px-2 ${
-                  n.support ? "border-zinc-400/50" : n.online ? "border-emerald-500" : "border-red-500"
-                } ${editing ? "cursor-move" : n.source_ip ? "cursor-pointer hover:bg-muted/40" : ""}`}
+                className={`absolute flex flex-col items-center justify-center text-center px-1 ${
+                  editing ? "cursor-move" : n.source_ip ? "cursor-pointer hover:opacity-80" : ""
+                }`}
                 style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H, touchAction: "none" }}
               >
-                {n.icon_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- SVG via <img> can't run script
-                  <img src={n.icon_url} alt="" className="h-6 w-6 object-contain pointer-events-none" />
-                ) : (
-                  <span className="text-lg leading-none">{ICON_GLYPH[n.icon_kind] || "⬡"}</span>
-                )}
-                <span className="text-[11px] font-medium truncate w-full">{n.display_name || n.source_ip}</span>
+                {/* No box/border — just the icon. Status (online/offline) sits as a dot on
+                    the icon's corner; support nodes have no state so no dot. */}
+                <span className="relative inline-flex">
+                  {n.icon_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- SVG via <img> can't run script
+                    <img src={n.icon_url} alt="" className="h-8 w-8 object-contain pointer-events-none" />
+                  ) : (
+                    <span className="text-2xl leading-none">{ICON_GLYPH[n.icon_kind] || "⬡"}</span>
+                  )}
+                  {!n.support ? (
+                    <span className="absolute -top-0.5 -right-1 w-2.5 h-2.5 rounded-full ring-2 ring-background"
+                      style={{ background: n.online ? "#10b981" : "#ef4444" }} />
+                  ) : null}
+                </span>
+                <span className="mt-0.5 text-[11px] font-medium truncate max-w-full rounded bg-background/70 px-1">
+                  {n.display_name || n.source_ip}
+                </span>
                 {editing ? (
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteNode(n.id); }}
