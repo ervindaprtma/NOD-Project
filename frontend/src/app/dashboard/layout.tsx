@@ -42,7 +42,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/traffic-inbound", label: "Traffic Inbound", Icon: ArrowDownToLine },
   { href: "/dashboard/traffic-internal", label: "Traffic Internal", Icon: ArrowLeftRight },
   { href: "/dashboard/sdwan", label: "SD-WAN SLA", Icon: Timer },
-  { href: "/dashboard/resources", label: "Resources", Icon: LayoutGrid },
+  { href: "/dashboard/resources", label: "Network Devices", Icon: LayoutGrid },
   { href: "/dashboard/vpn", label: "VPN Sessions", Icon: Lock },
   { href: "/dashboard/raw-data", label: "Raw Data", Icon: ScrollText },
   { href: "/dashboard/alerts", label: "Alerts", Icon: AlertTriangle },

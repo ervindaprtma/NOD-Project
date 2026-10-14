@@ -77,3 +77,9 @@ Documentation/
 
 # Claude Code local session/config dir
 .claude/
+
+# local-only DB migration helper (not committed)
+migrate.sh
+
+# runtime-uploaded topology icons (dir auto-created on startup)
+backend/static/icons/
