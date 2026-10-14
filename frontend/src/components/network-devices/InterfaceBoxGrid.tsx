@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import type { InterfaceBox, DeviceState } from "./types";
-import { STATE_BOX, fmtSpeed } from "./types";
+import { STATE_DOT } from "./types";
 
 const FILTERS: { key: "all" | DeviceState; label: string }[] = [
   { key: "all", label: "All" },
@@ -11,14 +12,28 @@ const FILTERS: { key: "all" | DeviceState; label: string }[] = [
   { key: "admin_down", label: "⬜ Admin" },
 ];
 
+const STATE_LABEL: Record<DeviceState, string> = { up: "Up", down: "Down", admin_down: "Admin" };
+
+// Speed as 100Mbps / 1Gbps / 10Gbps (full units, per request — fmtSpeed is the short form).
+function fmtSpeedFull(mbps: number | null): string {
+  if (!mbps || mbps <= 0) return "—";
+  if (mbps >= 1000) {
+    const g = mbps / 1000;
+    return `${g % 1 ? g.toFixed(1) : g}Gbps`;
+  }
+  return `${mbps}Mbps`;
+}
+
 export function InterfaceBoxGrid({
   interfaces,
   selected,
-  onSelect,
+  onToggle,
+  renderDetail,
 }: {
   interfaces: InterfaceBox[];
-  selected: string | null; // if_name
-  onSelect: (ifname: string | null) => void;
+  selected: string | null; // the one expanded interface
+  onToggle: (ifname: string) => void;
+  renderDetail: (iface: InterfaceBox) => ReactNode; // inline chart + history under the row
 }) {
   const [filter, setFilter] = useState<"all" | DeviceState>("all");
   const [search, setSearch] = useState("");
@@ -60,30 +75,55 @@ export function InterfaceBoxGrid({
       {shown.length === 0 ? (
         <p className="text-sm text-muted-foreground py-6 text-center">No interfaces match.</p>
       ) : (
-        // ponytail: plain grid for up to ~183 boxes — fast enough; react-window only if it bites.
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-          {shown.map((i) => {
-            const isSel = selected === i.if_name;
-            const operAdmin = [i.oper, i.admin].filter(Boolean).join("/") || "—";
-            return (
-              <button
-                key={i.if_name}
-                onClick={() => onSelect(isSel ? null : i.if_name)}
-                title={i.if_name}
-                className={`text-left p-2 rounded-md border text-xs transition ${STATE_BOX[i.state]} ${
-                  isSel ? "ring-2 ring-offset-1 ring-current" : ""
-                }`}
-              >
-                <div className="font-medium truncate">{i.if_name}</div>
-                <div className="opacity-80">
-                  {fmtSpeed(i.speed_mbps)} · {operAdmin}
-                </div>
-                {i.description ? (
-                  <div className="opacity-70 truncate">{i.description}</div>
-                ) : null}
-              </button>
-            );
-          })}
+        <div className="overflow-x-auto rounded-md border border-border">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/40 text-muted-foreground">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium">Name</th>
+                <th className="text-left px-3 py-2 font-medium">Descriptions</th>
+                <th className="text-left px-3 py-2 font-medium">Speed</th>
+                <th className="text-left px-3 py-2 font-medium">State</th>
+                <th className="text-center px-3 py-2 font-medium">Color</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((i) => {
+                const isSel = selected === i.if_name;
+                return (
+                  <Fragment key={i.if_name}>
+                    <tr
+                      onClick={() => onToggle(i.if_name)}
+                      className={cn(
+                        "border-t border-border cursor-pointer transition hover:bg-muted/40",
+                        isSel && "bg-muted/60",
+                      )}
+                    >
+                      <td className="px-3 py-1.5 font-medium whitespace-nowrap">
+                        <span className="inline-block w-3 text-muted-foreground">{isSel ? "▾" : "▸"}</span>
+                        {i.if_name}
+                      </td>
+                      <td className="px-3 py-1.5 text-muted-foreground max-w-[22rem] truncate" title={i.description || ""}>
+                        {i.description || "—"}
+                      </td>
+                      <td className="px-3 py-1.5 tabular-nums whitespace-nowrap">
+                        {fmtSpeedFull(i.speed_mbps)}
+                        <span className={cn("inline-block w-2 h-2 rounded-full ml-1.5 align-middle", STATE_DOT[i.state])} />
+                      </td>
+                      <td className="px-3 py-1.5">{STATE_LABEL[i.state]}</td>
+                      <td className="px-3 py-1.5 text-center">
+                        <span className={cn("inline-block w-2.5 h-2.5 rounded-full", STATE_DOT[i.state])} />
+                      </td>
+                    </tr>
+                    {isSel ? (
+                      <tr className="border-t border-border bg-muted/20">
+                        <td colSpan={5} className="p-3">{renderDetail(i)}</td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

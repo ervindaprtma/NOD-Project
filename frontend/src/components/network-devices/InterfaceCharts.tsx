@@ -13,18 +13,24 @@ export function InterfaceCharts({
   source,
   iface,
   window,
+  gteMs,
+  lteMs,
 }: {
   source: string;
   iface: InterfaceBox;
   window: string;
+  gteMs?: number;
+  lteMs?: number;
 }) {
   const [metric, setMetric] = useState<Metric>("mbps");
 
+  // Custom range overrides the preset window (backend accepts gte_ms/lte_ms).
+  const range = gteMs != null && lteMs != null ? `gte_ms=${gteMs}&lte_ms=${lteMs}` : `window=${window}`;
   // ifindex-keyed so interface names with "/" never hit the URL; current one is safe.
   const key = iface.ifindex
     ? `/api/v1/network-devices/devices/${encodeURIComponent(source)}/interfaces/${encodeURIComponent(
         iface.ifindex,
-      )}/chart?metric=${metric}&window=${window}`
+      )}/chart?metric=${metric}&${range}`
     : null;
 
   const { data, error, isLoading } = useSWR<Envelope<ChartData>>(key, swrFetcherLong, {

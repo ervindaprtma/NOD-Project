@@ -5,14 +5,18 @@ import { swrFetcherLong } from "@/lib/api";
 import type { Envelope, HistoryData } from "./types";
 import { fmtDuration } from "./types";
 
-export function StateHistory({ source, window }: { source: string; window: string }) {
+export function StateHistory({ source, window, gteMs, lteMs, ifName }: { source: string; window: string; gteMs?: number; lteMs?: number; ifName?: string }) {
+  const range = gteMs != null && lteMs != null ? `gte_ms=${gteMs}&lte_ms=${lteMs}` : `window=${window}`;
+  // Device-wide fetch (one SWR key per device+window, deduped); filter to one interface
+  // when ifName is given, so the inline panel shows only that interface's changes.
   const { data, error, isLoading } = useSWR<Envelope<HistoryData>>(
-    `/api/v1/network-devices/devices/${encodeURIComponent(source)}/history?window=${window}`,
+    `/api/v1/network-devices/devices/${encodeURIComponent(source)}/history?${range}`,
     swrFetcherLong,
     { revalidateOnFocus: false },
   );
 
-  const rows = data?.data.transitions || [];
+  const all = data?.data.transitions || [];
+  const rows = ifName ? all.filter((t) => t.if_name === ifName) : all;
 
   return (
     <div className="mt-4">

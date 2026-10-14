@@ -2,25 +2,34 @@
 
 import useSWR from "swr";
 import { swrFetcherLong } from "@/lib/api";
+import { formatBucketLabelWIB } from "@/lib/constants";
+import { AreaChart } from "@/components/charts/AreaChart";
 import type { Envelope } from "./types";
 import { FGT_SITE_NAME } from "./types";
 import type { ResourceData } from "@/types";
 
 // FGT-only box-health (CPU / Mem / Sessions / HA). Reuses the existing /resources
 // endpoint — switches have no such telemetry, so this renders only for FortiGate.
-// ponytail: current-value stat tiles (not timelines); sparkline charts are the upgrade
-// path if the per-metric history is wanted here too.
-export function FortiGateBoxHealth({ site }: { site: string | null }) {
+// Current-value tiles + CPU%/Mem%/Sessions trend charts over the selected window.
+const WINDOW_SEC: Record<string, number> = { "12h": 43200, "24h": 86400, "7d": 604800, "30d": 2592000 };
+
+export function FortiGateBoxHealth({ site, window = "24h", gteMs, lteMs }: { site: string | null; window?: string; gteMs?: number; lteMs?: number }) {
   const siteName = site ? FGT_SITE_NAME[site] : undefined;
+  // /resources requires gte_ms/lte_ms (no window param). Custom range wins; otherwise
+  // derive from the preset, rounding to the minute so the SWR key is stable across
+  // renders (a raw Date.now() refetches endlessly → stuck loading).
+  const lte = lteMs ?? Math.floor(Date.now() / 60_000) * 60_000;
+  const gte = gteMs ?? lte - (WINDOW_SEC[window] ?? 86400) * 1000;
   const { data, error, isLoading } = useSWR<Envelope<ResourceData>>(
-    siteName ? `/api/v1/resources?window=15m&site_name=${siteName}` : null,
+    siteName ? `/api/v1/resources?site_name=${siteName}&gte_ms=${gte}&lte_ms=${lte}` : null,
     siteName ? (url: string) => swrFetcherLong(url) : null,
-    { revalidateOnFocus: false },
+    { revalidateOnFocus: false, refreshInterval: 60_000 },
   );
 
   if (!siteName) return null;
 
   const current = data?.data.current || [];
+  const tl = data?.data.timeline;
 
   return (
     <div className="rounded-md border border-border p-3 mb-4">
@@ -32,26 +41,81 @@ export function FortiGateBoxHealth({ site }: { site: string | null }) {
       ) : current.length === 0 ? (
         <p className="text-xs text-muted-foreground">No resource data.</p>
       ) : (
-        <div className="space-y-3">
-          {current.map((d) => (
-            <div key={d.device}>
-              {current.length > 1 ? (
-                <div className="text-xs font-medium mb-1">
-                  {d.hostname || d.device}
-                  {d.sync_status ? (
-                    <span className="ml-2 text-muted-foreground">
-                      HA: {d.sync_status === "1" || d.sync_status.toLowerCase().includes("sync") ? "● in-sync" : "○ out-of-sync"}
-                    </span>
-                  ) : null}
+        <div className="space-y-4">
+          <div className="space-y-3">
+            {current.map((d) => (
+              <div key={d.serial_number || d.hostname || d.device}>
+                {current.length > 1 ? (
+                  <div className="text-xs font-medium mb-1">
+                    {d.hostname || d.device}
+                    {d.sync_status ? (
+                      <span className="ml-2 text-muted-foreground">
+                        HA: {d.sync_status === "1" || d.sync_status.toLowerCase().includes("sync") ? "● in-sync" : "○ out-of-sync"}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="grid grid-cols-3 gap-2">
+                  <Tile label="CPU" value={pct(d.cpu_usage)} />
+                  <Tile label="Memory" value={pct(d.mem_usage)} />
+                  <Tile label="Sessions" value={d.session_count != null ? d.session_count.toLocaleString() : "—"} />
                 </div>
-              ) : null}
-              <div className="grid grid-cols-3 gap-2">
-                <Tile label="CPU" value={pct(d.cpu_usage)} />
-                <Tile label="Memory" value={pct(d.mem_usage)} />
-                <Tile label="Sessions" value={d.session_count != null ? d.session_count.toLocaleString() : "—"} />
               </div>
+            ))}
+          </div>
+
+          {tl ? (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <MetricChart title="CPU %" pts={tl.cpu} fmt={(v) => `${v.toFixed(0)}%`} />
+              <MetricChart title="Memory %" pts={tl.memory} fmt={(v) => `${v.toFixed(0)}%`} />
+              <MetricChart title="Sessions" pts={tl.sessions} fmt={(v) => v.toLocaleString()} />
             </div>
-          ))}
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Pt = { timestamp: number; value: number; device: string };
+
+// Pivot a flat [{timestamp,value,device}] series (HA interleaves 2 devices) into
+// recharts rows with one column per device, so each HA member draws its own line.
+function pivot(pts: Pt[]): { rows: Record<string, unknown>[]; devices: string[] } {
+  const devices: string[] = [];
+  const byTs = new Map<number, Record<string, unknown>>();
+  for (const p of pts) {
+    if (!devices.includes(p.device)) devices.push(p.device);
+    let row = byTs.get(p.timestamp);
+    if (!row) { row = { tsMs: p.timestamp }; byTs.set(p.timestamp, row); }
+    row[p.device] = p.value;
+  }
+  const sorted = [...byTs.values()].sort((a, b) => (a.tsMs as number) - (b.tsMs as number));
+  const rows = sorted.map((r, i) => ({
+    ...r,
+    t: formatBucketLabelWIB(r.tsMs as number, i > 0 ? (sorted[i - 1].tsMs as number) : null),
+  }));
+  return { rows, devices };
+}
+
+function MetricChart({ title, pts, fmt }: { title: string; pts: Pt[]; fmt: (v: number) => string }) {
+  const { rows, devices } = pivot(pts || []);
+  const bucketMs = rows.length > 1 ? ((rows[1].tsMs as number) - (rows[0].tsMs as number)) || 60_000 : 60_000;
+  return (
+    <div>
+      <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">{title}</p>
+      {rows.length > 1 ? (
+        <div className="h-40 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
+          <AreaChart
+            className="h-full" data={rows} index="t" categories={devices}
+            colors={["blue", "orange"]} valueFormatter={fmt}
+            showLegend={devices.length > 1} showXAxis showYAxis autoMinValue allowDecimals
+            curveType="monotone" tickGap={40} yAxisWidth={50} bucketMs={bucketMs}
+          />
+        </div>
+      ) : (
+        <div className="bg-muted/30 rounded-lg h-40 flex items-center justify-center">
+          <p className="text-xs text-muted-foreground">No timeline data</p>
         </div>
       )}
     </div>

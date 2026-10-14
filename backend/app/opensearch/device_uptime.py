@@ -61,6 +61,7 @@ SITE_ENDPOINT: dict[str, str] = {
 }
 
 WINDOW_SECONDS: dict[str, int] = {
+    "12h": 43_200,
     "24h": 86_400,
     "7d": 604_800,
     "30d": 2_592_000,
@@ -70,6 +71,7 @@ WINDOW_SECONDS: dict[str, int] = {
 
 # ~100-365 buckets per window: enough shape to see an outage, few enough to render.
 WINDOW_BUCKET: dict[str, str] = {
+    "12h": "10m",
     "24h": "15m",
     "7d": "1h",
     "30d": "6h",

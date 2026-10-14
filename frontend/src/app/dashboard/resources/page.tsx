@@ -10,9 +10,12 @@ import { OverviewCards } from "@/components/network-devices/OverviewCards";
 import { DeviceList } from "@/components/network-devices/DeviceList";
 import { DeviceDetail } from "@/components/network-devices/DeviceDetail";
 import { TopologyCanvas } from "@/components/network-devices/TopologyCanvas";
+import { InterfaceBandwidth } from "@/components/network-devices/InterfaceBandwidth";
+import { AvailabilityCards } from "@/components/network-devices/AvailabilityCards";
+import { FortiGateResources } from "@/components/network-devices/FortiGateResources";
 
-type TabKey = "overview" | "devices" | "topology";
-const TABS: TabKey[] = ["overview", "devices", "topology"];
+type TabKey = "overview" | "devices" | "bandwidth" | "topology";
+const TABS: TabKey[] = ["overview", "devices", "bandwidth", "topology"];
 
 // Legacy deep-links from the Overview page / bookmarks used the old Resources params
 // (?site=Site_FGT-* , ?tab=availability|bandwidth|resources). Honour them (plan §1):
@@ -29,6 +32,7 @@ function translateLegacy(p: URLSearchParams): { tab: TabKey; device: string | nu
   const isLegacyTab = legacyTab === "availability" || legacyTab === "bandwidth" || legacyTab === "resources";
   if (!legacySite && !isLegacyTab) return null;
   if (legacyTab === "availability") return { tab: "overview", device: null };
+  if (legacyTab === "bandwidth") return { tab: "bandwidth", device: null };  // WAN/MPLS view
   const device = legacySite ? LEGACY_FGT_SOURCE[legacySite] ?? null : null;
   return { tab: device ? "devices" : "overview", device };
 }
@@ -102,10 +106,14 @@ export default function NetworkDevicesPage() {
         <TabsList className="mb-4 p-1 gap-1 bg-muted/40 dark:bg-muted/30 rounded-lg inline-flex">
           <TabsTrigger value="overview" className={TAB_TRIGGER_CLASS}>Overview</TabsTrigger>
           <TabsTrigger value="devices" className={TAB_TRIGGER_CLASS}>Devices</TabsTrigger>
+          <TabsTrigger value="bandwidth" className={TAB_TRIGGER_CLASS}>Interface Bandwidth</TabsTrigger>
           <TabsTrigger value="topology" className={TAB_TRIGGER_CLASS}>Topology</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
+          {/* Device Availability pinned to the top, then FortiGate resources, then fleet cards */}
+          <AvailabilityCards />
+          <FortiGateResources />
           {summaryLoading ? (
             <p className="text-sm text-muted-foreground py-8 text-center">Loading fleet…</p>
           ) : summary ? (
@@ -123,6 +131,10 @@ export default function NetworkDevicesPage() {
           ) : (
             <DeviceList devices={devices} onSelect={openDevice} />
           )}
+        </TabsContent>
+
+        <TabsContent value="bandwidth">
+          <InterfaceBandwidth />
         </TabsContent>
 
         <TabsContent value="topology">
