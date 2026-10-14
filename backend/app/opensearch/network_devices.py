@@ -61,40 +61,49 @@ def current_window(now_ms: Optional[int] = None) -> tuple[int, int]:
 
 
 # ── Vendor profiles (typed dict in code, NOT runtime JSON — plan §5) ──
-# H3C and Cisco share one byte-identical schema; only the measurement differs.
-_SWITCH_FIELDS = {
-    "if_name": "tag.if_name",
-    "ifindex": "tag.index",
-    "speed": "active_speed_mbps",
-    "oper_num": "oper_status",
-    "oper_text": "oper_status_text",
-    "admin_text": "admin_status_text",
-    "desc": "description",
-    "in_oct": "in_octets",
-    "out_oct": "out_octets",
-    "err_fields": ["in_errors", "out_errors", "in_discards", "out_discards"],
-    "hostname": "tag.hostname",
-    "site": "tag.site",
-}
+# telegraf nests non-tag fields under a `<measurement>` object (verified live), so
+# every measurement field path carries the measurement prefix (e.g.
+# "fgt_iface_stats.ifOperStatus") — the same dotted path the aggs use. Tags are under
+# the `tag` object and stay "tag.*". H3C and Cisco share one schema; only the
+# measurement (and thus the prefix) differs.
+def _switch_profile(meas: str) -> dict[str, Any]:
+    return {
+        "measurement": meas,
+        "if_name": "tag.if_name",
+        "ifindex": "tag.index",
+        "speed": f"{meas}.active_speed_mbps",
+        "oper_num": f"{meas}.oper_status",
+        "oper_text": f"{meas}.oper_status_text",
+        "admin_text": f"{meas}.admin_status_text",
+        "desc": f"{meas}.description",
+        "in_oct": f"{meas}.in_octets",
+        "out_oct": f"{meas}.out_octets",
+        "err_fields": [f"{meas}.in_errors", f"{meas}.out_errors",
+                       f"{meas}.in_discards", f"{meas}.out_discards"],
+        "hostname": "tag.hostname",
+        "site": "tag.site",
+    }
+
 
 VENDOR_PROFILE: dict[str, dict[str, Any]] = {
     "fortigate": {
         "measurement": "fgt_iface_stats",
         "if_name": "tag.ifName",
         "ifindex": "tag.ifIndex",
-        "speed": "ifHighSpeed_Mbps",
-        "oper_num": "ifOperStatus",
+        "speed": "fgt_iface_stats.ifHighSpeed_Mbps",
+        "oper_num": "fgt_iface_stats.ifOperStatus",
         "oper_text": None,      # FGT reports only numeric ifOperStatus
         "admin_text": None,     # FGT has no admin status in this measurement
-        "desc": "tag.ifAlias",  # verified present (e.g. "Testing ADVPN")
-        "in_oct": "ifHCInOctets",
-        "out_oct": "ifHCOutOctets",
-        "err_fields": ["ifInErrors", "ifOutErrors", "ifInDiscards", "ifOutDiscards"],
+        "desc": "tag.ifAlias",  # sparse tag (absent on most ifaces) → None when missing
+        "in_oct": "fgt_iface_stats.ifHCInOctets",
+        "out_oct": "fgt_iface_stats.ifHCOutOctets",
+        "err_fields": ["fgt_iface_stats.ifInErrors", "fgt_iface_stats.ifOutErrors",
+                       "fgt_iface_stats.ifInDiscards", "fgt_iface_stats.ifOutDiscards"],
         "hostname": "tag.device",  # FGT has no tag.hostname — name = tag.device
         "site": None,              # resolved via FGT_IP_SITE
     },
-    "h3c": {"measurement": "h3c_interface", **_SWITCH_FIELDS},
-    "cisco": {"measurement": "cisco_interface", **_SWITCH_FIELDS},
+    "h3c": _switch_profile("h3c_interface"),
+    "cisco": _switch_profile("cisco_interface"),
 }
 
 _MEASUREMENT_VENDOR = {p["measurement"]: v for v, p in VENDOR_PROFILE.items()}
