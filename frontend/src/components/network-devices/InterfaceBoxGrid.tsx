@@ -12,7 +12,7 @@ const FILTERS: { key: "all" | DeviceState; label: string }[] = [
   { key: "admin_down", label: "⬜ Admin" },
 ];
 
-const STATE_LABEL: Record<DeviceState, string> = { up: "Up", down: "Down", admin_down: "Admin" };
+const cap = (v: string | null | undefined) => (v ? v.charAt(0).toUpperCase() + v.slice(1) : "—");
 
 // Speed as 100Mbps / 1Gbps / 10Gbps (full units, per request — fmtSpeed is the short form).
 function fmtSpeedFull(mbps: number | null): string {
@@ -82,7 +82,8 @@ export function InterfaceBoxGrid({
                 <th className="text-left px-3 py-2 font-medium">Name</th>
                 <th className="text-left px-3 py-2 font-medium">Descriptions</th>
                 <th className="text-left px-3 py-2 font-medium">Speed</th>
-                <th className="text-left px-3 py-2 font-medium">State</th>
+                <th className="text-left px-3 py-2 font-medium">Admin Status</th>
+                <th className="text-left px-3 py-2 font-medium">Oper Status</th>
                 <th className="text-center px-3 py-2 font-medium">Color</th>
               </tr>
             </thead>
@@ -109,14 +110,17 @@ export function InterfaceBoxGrid({
                         {fmtSpeedFull(i.speed_mbps)}
                         <span className={cn("inline-block w-2 h-2 rounded-full ml-1.5 align-middle", STATE_DOT[i.state])} />
                       </td>
-                      <td className="px-3 py-1.5">{STATE_LABEL[i.state]}</td>
+                      {/* Admin = configured enable/disable; informational, never drives color/count. */}
+                      <td className="px-3 py-1.5 text-muted-foreground">{cap(i.admin)}</td>
+                      {/* Oper = operational up/down; this is what the color + up/down counts use. */}
+                      <td className="px-3 py-1.5">{cap(i.oper)}</td>
                       <td className="px-3 py-1.5 text-center">
                         <span className={cn("inline-block w-2.5 h-2.5 rounded-full", STATE_DOT[i.state])} />
                       </td>
                     </tr>
                     {isSel ? (
                       <tr className="border-t border-border bg-muted/20">
-                        <td colSpan={5} className="p-3">{renderDetail(i)}</td>
+                        <td colSpan={6} className="p-3">{renderDetail(i)}</td>
                       </tr>
                     ) : null}
                   </Fragment>
