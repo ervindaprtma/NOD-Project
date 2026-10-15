@@ -21,7 +21,7 @@ def upgrade() -> None:
     op.add_column(
         "report_jobs",
         sa.Column("devices", JSONB(), nullable=True,
-                  comment="R-11: device source_ips to include; NULL/empty = all in the selected sites"),
+                  comment="R-11 only: device source_ips to include; NULL/empty = all in the selected sites"),
     )
 
 
