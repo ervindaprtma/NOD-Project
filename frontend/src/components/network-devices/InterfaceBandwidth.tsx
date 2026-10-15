@@ -6,6 +6,7 @@ import { swrFetcherLong } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatBytes, formatBucketLabelWIB, TIME_PRESETS } from "@/lib/constants";
 import { AreaChart } from "@/components/charts/AreaChart";
+import { ChartFrame } from "./ChartFrame";
 import TimeRangePicker, { type CustomTimeRange } from "@/components/panels/TimeRangePicker";
 import type { Envelope } from "./types";
 import type { InterfaceStatsData, InterfaceStatsItem } from "@/types";
@@ -215,15 +216,17 @@ function InterfaceBandwidthCard({ iface }: { iface: InterfaceStatsItem }) {
       </div>
 
       {hasTimeline ? (
-        <div className="h-40 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
-          <AreaChart
-            className="h-full" data={chartData} index="timestamp" categories={["In", "Out"]}
-            colors={["blue", "orange"]}
-            valueFormatter={(v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)} Gbps` : `${v.toFixed(1)} Mbps`)}
-            showLegend showXAxis showYAxis autoMinValue allowDecimals curveType="monotone"
-            tickGap={30} yAxisWidth={60} bucketMs={bucketMs} bands={gapBands}
-          />
-        </div>
+        <ChartFrame title={iface.label} inlineClassName="h-40">
+          <div className="h-full [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
+            <AreaChart
+              className="h-full" data={chartData} index="timestamp" categories={["In", "Out"]}
+              colors={["blue", "orange"]}
+              valueFormatter={(v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)} Gbps` : `${v.toFixed(1)} Mbps`)}
+              showLegend showXAxis showYAxis autoMinValue allowDecimals curveType="monotone"
+              tickGap={30} yAxisWidth={60} bucketMs={bucketMs} bands={gapBands}
+            />
+          </div>
+        </ChartFrame>
       ) : (
         <div className="bg-muted/30 rounded-lg h-40 flex items-center justify-center">
           <p className="text-xs text-muted-foreground">No timeline data available</p>

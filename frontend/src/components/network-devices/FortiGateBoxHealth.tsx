@@ -4,6 +4,7 @@ import useSWR from "swr";
 import { swrFetcherLong } from "@/lib/api";
 import { formatBucketLabelWIB } from "@/lib/constants";
 import { AreaChart } from "@/components/charts/AreaChart";
+import { ChartFrame } from "./ChartFrame";
 import type { Envelope } from "./types";
 import { FGT_SITE_NAME } from "./types";
 import type { ResourceData } from "@/types";
@@ -105,14 +106,16 @@ function MetricChart({ title, pts, fmt }: { title: string; pts: Pt[]; fmt: (v: n
     <div>
       <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">{title}</p>
       {rows.length > 1 ? (
-        <div className="h-40 [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
-          <AreaChart
-            className="h-full" data={rows} index="t" categories={devices}
-            colors={["blue", "orange"]} valueFormatter={fmt}
-            showLegend={devices.length > 1} showXAxis showYAxis autoMinValue allowDecimals
-            curveType="monotone" tickGap={40} yAxisWidth={50} bucketMs={bucketMs}
-          />
-        </div>
+        <ChartFrame title={title} inlineClassName="h-40">
+          <div className="h-full [&_text]:fill-gray-500 dark:[&_text]:fill-gray-400">
+            <AreaChart
+              className="h-full" data={rows} index="t" categories={devices}
+              colors={["blue", "orange"]} valueFormatter={fmt}
+              showLegend={devices.length > 1} showXAxis showYAxis autoMinValue allowDecimals
+              curveType="monotone" tickGap={40} yAxisWidth={50} bucketMs={bucketMs}
+            />
+          </div>
+        </ChartFrame>
       ) : (
         <div className="bg-muted/30 rounded-lg h-40 flex items-center justify-center">
           <p className="text-xs text-muted-foreground">No timeline data</p>

@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { swrFetcherLong } from "@/lib/api";
 import { AreaChart } from "@/components/charts/AreaChart";
+import { ChartFrame } from "./ChartFrame";
 import type { ChartData, Envelope, InterfaceBox } from "./types";
 import { fmtSpeed } from "./types";
 
@@ -83,14 +84,16 @@ export function InterfaceCharts({
       ) : rows.length === 0 ? (
         <p className="text-xs text-muted-foreground py-8 text-center">No traffic in window.</p>
       ) : (
-        <AreaChart
-          data={rows}
-          index="time"
-          categories={categories}
-          valueFormatter={(v) => `${v.toFixed(2)} ${unit}`}
-          showLegend
-          className="h-56"
-        />
+        <ChartFrame title={`${iface.if_name} — ${metric === "mb" ? "Volume (MB)" : "Throughput (Mbps)"}`} inlineClassName="h-56">
+          <AreaChart
+            data={rows}
+            index="time"
+            categories={categories}
+            valueFormatter={(v) => `${v.toFixed(2)} ${unit}`}
+            showLegend
+            className="h-full"
+          />
+        </ChartFrame>
       )}
       {metric === "mbps" && chart && !chart.speed_mbps ? (
         <p className="text-[11px] text-muted-foreground mt-1">
