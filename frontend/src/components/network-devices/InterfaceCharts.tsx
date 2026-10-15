@@ -3,6 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { swrFetcherLong } from "@/lib/api";
+import { formatBucketLabelWIB } from "@/lib/constants";
 import { AreaChart } from "@/components/charts/AreaChart";
 import { ChartFrame } from "./ChartFrame";
 import type { ChartData, Envelope, InterfaceBox } from "./types";
@@ -44,9 +45,12 @@ export function InterfaceCharts({
   });
 
   const chart = data?.data;
-  const rows = (chart?.points || []).map((p) => ({
+  const pts = chart?.points || [];
+  // Date+time x-axis labels (WIB), same as the WAN-MPLS Bandwidth chart — the label shows
+  // the date on a day boundary and the time otherwise.
+  const rows = pts.map((p, idx) => ({
     tsMs: p.ts_ms,
-    time: new Date(p.ts_ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
+    time: formatBucketLabelWIB(p.ts_ms, idx > 0 ? pts[idx - 1].ts_ms : null),
     In: p.in,
     Out: p.out,
     ...(p.util_pct != null ? { "Util %": p.util_pct } : {}),
