@@ -101,7 +101,9 @@ export default function NetworkDevicesPage() {
   const devices = devicesResp?.data || [];
 
   return (
-    <div className="p-4 md:p-6 max-w-[1400px] mx-auto">
+    // Full-width like the previous Resources page; the dashboard <main> already pads (p-6).
+    // (No max-w cap / mx-auto — those made the page look narrower than before on wide screens.)
+    <div className="space-y-4">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Network Devices</h1>
         {/* Auto-refresh selector — applies to every tab (same control as Traffic pages). */}
