@@ -68,6 +68,7 @@ async def generate_report(
         sections=body.sections,
         table_interval=body.table_interval,
         sla_thresholds=body.sla_thresholds.model_dump() if body.sla_thresholds else None,
+        devices=body.devices or None,
     )
     db.add(job)
     await db.commit()

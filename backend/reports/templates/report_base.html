@@ -1784,6 +1784,75 @@ body {
 
 
 {## ════════════════════════════════════════════════════════════════════════
+    SECTION: R-11 — NETWORK DEVICE INTERFACE REPORT
+    Expects report_data.device_interfaces:
+      .generated_at, .devices[] = { hostname, source_ip, site_label, vendor, online,
+                                     rows[] = { name, description, admin, oper, state, speed, in_mbps, out_mbps } }
+  ════════════════════════════════════════════════════════════════════════ #}
+{% macro _oper_badge(state) %}
+{% if state == 'up' %}<span class="badge badge-success">Up</span>
+{% elif state == 'down' %}<span class="badge badge-danger">Down</span>
+{% elif state == 'admin_down' %}<span class="badge">Admin down</span>
+{% else %}<span class="badge">—</span>{% endif %}
+{% endmacro %}
+
+{% macro section_device_interfaces(data) %}
+{% if data.devices %}
+<h2 class="section-title" style="margin-bottom:16px;">Network Device Interfaces <span class="timeframe-badge">as of {{ data.generated_at }}</span></h2>
+{% for dev in data.devices %}
+<h3 style="margin:12px 0 6px 0;font-size:11pt;">
+    {{ dev.hostname }}
+    <span style="font-size:8.5pt;font-weight:normal;color:hsl(var(--muted-foreground));">
+        · {{ dev.source_ip }} · {{ dev.site_label }} · {{ dev.vendor }}
+        · {% if dev.online %}<span class="badge badge-success">Online</span>{% else %}<span class="badge badge-danger">Offline</span>{% endif %}
+        · {{ dev.rows | length }} interfaces
+    </span>
+</h3>
+{% if dev.rows %}
+<div class="table-card" style="margin-bottom:16px;">
+    <table>
+        <thead>
+            <tr>
+                <th>Interface</th>
+                <th>Description</th>
+                <th class="num-col">Admin</th>
+                <th class="num-col">Oper</th>
+                <th class="num-col">Link Speed</th>
+                <th class="num-col">In (Mbps)</th>
+                <th class="num-col">Out (Mbps)</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in dev.rows %}
+            <tr>
+                <td><strong>{{ r.name }}</strong></td>
+                <td>{{ r.description }}</td>
+                <td class="num-col">{{ r.admin }}</td>
+                <td class="num-col">{{ _oper_badge(r.state) }}</td>
+                <td class="num-col">{{ r.speed }}</td>
+                <td class="num-col">{{ '%.2f' | format(r.in_mbps) }}</td>
+                <td class="num-col">{{ '%.2f' | format(r.out_mbps) }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="card"><p class="no-data">No interfaces found for this device.</p></div>
+{% endif %}
+{% endfor %}
+<p style="font-size:8pt;font-style:italic;color:hsl(var(--muted-foreground));">
+    In/Out are the current throughput (snapshot at generation time), not an average over the report period.
+</p>
+{% else %}
+<div class="card">
+    <p class="no-data">No device interface data for the selected devices/sites.</p>
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{## ════════════════════════════════════════════════════════════════════════
     SECTION: R-08 — ALL-IN-ONE
     Renders all sections in logical order:
     R-07 (Exec Summary) → R-01 (Traffic Overview) → R-02 (Resources) → R-03 (VPN) → R-04 (SD-WAN) → R-05 (Inbound) → R-06 (Internal)
@@ -1874,6 +1943,10 @@ body {
     {# R-10: Device Availability #}
     {% if report_type == 'R-10' %}
         {{ section_device_availability(report_data.device_availability | default({})) }}
+    {% endif %}
+
+    {% if report_type == 'R-11' %}
+        {{ section_device_interfaces(report_data.device_interfaces | default({})) }}
     {% endif %}
 
 {% else %}

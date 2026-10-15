@@ -565,6 +565,10 @@ class ReportJob(Base):
         JSONB, nullable=True,
         comment="R-04 only: {wan:{latency,jitter,packet_loss}, mpls:{...}} SLA ceilings"
     )
+    devices: Mapped[Optional[list[str]]] = mapped_column(
+        JSONB, nullable=True,
+        comment="R-11 only: device source_ips to include; NULL/empty = all in the selected sites"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────

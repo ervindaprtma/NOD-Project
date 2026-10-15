@@ -24,7 +24,7 @@ class SLAThresholds(BaseModel):
 
 
 class ReportGenerateRequest(BaseModel):
-    report_type: str = Field(..., pattern=r"^(R-01|R-02|R-03|R-04|R-05|R-06|R-07|R-08|R-09|R-10)$")
+    report_type: str = Field(..., pattern=r"^(R-01|R-02|R-03|R-04|R-05|R-06|R-07|R-08|R-09|R-10|R-11)$")
     output_format: str = Field(default="pdf", pattern=r"^(pdf|html|docx)$")
     time_range_start: int  # UTC epoch ms
     time_range_end: int  # UTC epoch ms
@@ -46,6 +46,11 @@ class ReportGenerateRequest(BaseModel):
         default=None,
         description="R-04 only: per-link-type SLA ceilings (WAN/MPLS × latency/jitter/packet_loss). "
         "Links exceeding their type's threshold are marked Breached.",
+    )
+    devices: Optional[list[str]] = Field(
+        default=None,
+        description="R-11 only: device source_ips to include; empty/None = all devices in the "
+        "selected sites.",
     )
 
 

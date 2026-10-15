@@ -576,6 +576,7 @@ async def build_report_context(
     sections: list[str] | None = None,
     table_interval: str | None = None,
     sla_thresholds: dict[str, Any] | None = None,
+    devices: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Fetch all required data from OpenSearch and build the full
@@ -2117,6 +2118,70 @@ async def build_report_context(
             })
         context["report_data"]["device_availability"] = {"window": window, "sites": da_sites}
 
+    # ── R-11: Network Device Interface Report ───────────────────────
+    if report_type == "R-11" and (not sections or "device_interfaces" in sections):
+        from app.opensearch import network_devices as nd
+
+        # Snapshot: current interface status + current traffic rate (when the report is
+        # generated), not the whole report range — "current/last speed traffic". The
+        # selected report range is shown as the period in the header.
+        snap_gte, snap_lte = nd.current_window()
+        want = set(devices or [])  # source_ips; empty = all devices in the selected sites
+        try:
+            roster = await nd.collect_devices(snap_gte, snap_lte)
+        except Exception as exc:
+            logger.error("R-11 collect_devices failed: %s", exc, exc_info=True)
+            roster = []
+        # roster d["site"] is the short label (DC/DRC/Office); site_list is canonical.
+        want_labels = {_site_label(s) for s in site_list}
+        selected = [
+            d for d in roster
+            if d.get("site") in want_labels and (not want or d.get("source_ip") in want)
+        ]
+        mappings = {
+            d["source_ip"]: [i["if_name"] for i in d.get("interfaces", [])]
+            for d in selected if d.get("source_ip")
+        }
+        try:
+            live = await nd.topology_live(mappings, snap_gte, snap_lte) if mappings else {}
+        except Exception as exc:
+            logger.error("R-11 topology_live failed: %s", exc, exc_info=True)
+            live = {}
+
+        def _fmt_link_speed(mbps: int | None) -> str:
+            if not mbps or mbps <= 0:
+                return "—"
+            return f"{mbps / 1000:g} Gbps" if mbps >= 1000 else f"{mbps} Mbps"
+
+        dev_blocks: list[dict[str, Any]] = []
+        for d in selected:
+            liface = (live.get(d["source_ip"], {}) or {}).get("interfaces", {})
+            rows = []
+            for i in d.get("interfaces", []):
+                tr = liface.get(i["if_name"], {})
+                rows.append({
+                    "name": i.get("if_name", "—"),
+                    "description": i.get("description") or "—",
+                    "admin": i.get("admin") or "—",
+                    "oper": i.get("oper") or "—",
+                    "state": i.get("state", ""),
+                    "speed": _fmt_link_speed(i.get("speed_mbps")),
+                    "in_mbps": round(float(tr.get("rx_mbps") or 0.0), 2),
+                    "out_mbps": round(float(tr.get("tx_mbps") or 0.0), 2),
+                })
+            dev_blocks.append({
+                "hostname": d.get("name") or d.get("source_ip", "—"),
+                "source_ip": d.get("source_ip", "—"),
+                "site_label": _site_label(d.get("site") or ""),
+                "vendor": d.get("vendor", "—"),
+                "online": d.get("online", False),
+                "rows": rows,
+            })
+        context["report_data"]["device_interfaces"] = {
+            "generated_at": format_time_ms(snap_lte),
+            "devices": dev_blocks,
+        }
+
     # ── Attach all charts ───────────────────────────────────────────
     context["charts"] = {
         k: base64.b64encode(v).decode() if isinstance(v, bytes) else v
@@ -2270,6 +2335,7 @@ def _report_title(report_type: str) -> str:
         "R-08": "All-in-One Network Observability Report",
         "R-09": "Interface Bandwidth Usage Report",
         "R-10": "Device Availability Report",
+        "R-11": "Network Device Interface Report",
     }
     return mapping.get(report_type, "NOD Report")
 
@@ -2293,6 +2359,7 @@ async def _generate_multi_site_report(job, sites_ordered: list[str], gte_ms: int
             sections=job.sections,
             table_interval=getattr(job, "table_interval", None),
             sla_thresholds=getattr(job, "sla_thresholds", None),
+            devices=getattr(job, "devices", None),
         )
 
         # Metadata
@@ -2387,6 +2454,7 @@ async def generate_report(job) -> str:
                     table_interval=getattr(job, "table_interval", None),
                     sla_thresholds=getattr(job, "sla_thresholds", None),
                     sections=job.sections,
+                    devices=getattr(job, "devices", None),
                 )
                 _apply_metadata(context, job)
                 _generate_docx(context, output_path)
@@ -2404,6 +2472,7 @@ async def generate_report(job) -> str:
         sections=job.sections,
         table_interval=getattr(job, "table_interval", None),
         sla_thresholds=getattr(job, "sla_thresholds", None),
+        devices=getattr(job, "devices", None),
     )
 
     _apply_metadata(context, job)
