@@ -332,6 +332,23 @@ async def _run_group_query(
                     site_name=site_name or "Site_FGT-DC", gte_ms=gte_ms, lte_ms=lte_ms
                 )
 
+            elif data_source == "interface_state":
+                from app.opensearch import network_devices as nd_qb
+
+                # {if_name: state} for one device (source_ip carried in site_name).
+                # All interface_state rules for a (device, window) share this one query.
+                result = await nd_qb.alert_interface_states(
+                    source_ip=site_name or "", gte_ms=gte_ms, lte_ms=lte_ms
+                )
+
+            elif data_source == "interface_errors":
+                from app.opensearch import network_devices as nd_qb
+
+                # {if_name: error+discard delta} for one device (source_ip in site_name).
+                result = await nd_qb.alert_interface_errors(
+                    source_ip=site_name or "", gte_ms=gte_ms, lte_ms=lte_ms
+                )
+
             else:
                 logger.warning("Unsupported data_source for group query: %s", data_source)
                 return None
@@ -452,6 +469,32 @@ def _extract_interface_stats(
     return float(iface.get(base, {}).get(agg, 0.0) or 0.0)
 
 
+def _extract_interface_state(target_key: str | None, group_result: dict[Any, Any]) -> float:
+    """1.0 if the targeted interface(s) are currently DOWN (oper down, admin up), else 0.0.
+
+    target_key is the if_name; blank or "*" = "any interface on the device". admin_down
+    is NOT a firing state. Flap dampening is the rule's sustained_for_minutes (the down
+    level must hold N ticks). Missing interface → 0 (no false fire).
+
+    ponytail: level signal (current state), not edge — so a long outage keeps firing and
+    a flap clears on recovery. The trade-off is that an enabled-but-unused port reads as
+    `down`, so a wildcard ("*") rule is noisy on access switches; alert a specific uplink.
+    detect_transitions() (history endpoint) is the edge-based upgrade path for "*".
+    """
+    if target_key in (None, "", "*"):
+        return 1.0 if any(v == "down" for v in group_result.values()) else 0.0
+    return 1.0 if group_result.get(target_key) == "down" else 0.0
+
+
+def _extract_interface_errors(target_key: str | None, group_result: dict[Any, Any]) -> float:
+    """Total error+discard delta for the targeted interface over the window; blank/"*"
+    = the worst (max) interface. Missing interface → 0."""
+    if target_key in (None, "", "*"):
+        vals = [float(v or 0) for v in group_result.values()]
+        return max(vals) if vals else 0.0
+    return float(group_result.get(target_key, 0) or 0)
+
+
 def _extract_device_uptime(
     metric_field: str, target_key: str | None, group_result: dict[Any, Any]
 ) -> float | None:
@@ -562,6 +605,16 @@ def _extract_per_rule_value(
                 return _extract_device_uptime(rule.metric_field, rule.target_key, group_result)
             return None
 
+        if rule.data_source == "interface_state":
+            if isinstance(group_result, dict):
+                return _extract_interface_state(rule.target_key, group_result)
+            return None
+
+        if rule.data_source == "interface_errors":
+            if isinstance(group_result, dict):
+                return _extract_interface_errors(rule.target_key, group_result)
+            return 0.0
+
         return None
 
     except Exception as e:
@@ -664,6 +717,8 @@ def _resolve_target_name(
                 if d.get("device_key") == target_key:
                     return d.get("hostname") or str(target_key)
         return str(target_key)  # fall back to the IP
+    if data_source in ("interface_state", "interface_errors"):
+        return "all interfaces" if target_key == "*" else str(target_key)  # target_key = if_name
     return None
 
 
@@ -1236,6 +1291,14 @@ def _extract_per_rule_value_flat(
             if isinstance(group_result, dict):
                 return _extract_device_uptime(metric_field, target_key, group_result)
             return None
+        if data_source == "interface_state":
+            if isinstance(group_result, dict):
+                return _extract_interface_state(target_key, group_result)
+            return None
+        if data_source == "interface_errors":
+            if isinstance(group_result, dict):
+                return _extract_interface_errors(target_key, group_result)
+            return 0.0
         return None
     except (TypeError, ValueError, IndexError):
         return None

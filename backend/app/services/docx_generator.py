@@ -421,6 +421,37 @@ def generate_docx_report(context: dict[str, Any], output_path: Path) -> Path:
                     "outage, not proven device downtime. Excluded from availability %."
                 ).paragraph_format.space_after = Pt(6)
 
+    # ── R-11: Network Device Interfaces ───────────────────────────
+    di = rd.get("device_interfaces", {})
+    if di.get("devices"):
+        _add_heading_styled(doc, f"Network Device Interfaces — as of {di.get('generated_at', '—')}", level=2)
+        for dev in di["devices"]:
+            _add_heading_styled(
+                doc,
+                f"{dev.get('hostname', '—')} · {dev.get('source_ip', '—')} · "
+                f"{dev.get('site_label', '—')} · {dev.get('vendor', '—')} · "
+                f"{'Online' if dev.get('online') else 'Offline'}",
+                level=3,
+            )
+            iface_rows = dev.get("rows", [])
+            if iface_rows:
+                headers = ["Interface", "Description", "Admin", "Oper", "Link Speed", "In (Mbps)", "Out (Mbps)"]
+                rows = [[
+                    r.get("name", "—"),
+                    r.get("description", "—"),
+                    r.get("admin", "—"),
+                    r.get("oper", "—"),
+                    r.get("speed", "—"),
+                    f"{r.get('in_mbps', 0):.2f}",
+                    f"{r.get('out_mbps', 0):.2f}",
+                ] for r in iface_rows]
+                _add_data_table(doc, headers, rows, col_widths=[1.1, 1.6, 0.6, 0.6, 0.9, 0.8, 0.8])
+            else:
+                doc.add_paragraph("No interfaces found for this device.")
+        doc.add_paragraph(
+            "In/Out are the current throughput (snapshot at generation time), not an average over the report period."
+        ).paragraph_format.space_after = Pt(6)
+
     # ── Footer (timestamp) ────────────────────────────────────────
     doc.add_paragraph("")  # spacer
     footer_p = doc.add_paragraph(

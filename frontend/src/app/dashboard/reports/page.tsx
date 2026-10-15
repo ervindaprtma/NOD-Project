@@ -49,6 +49,7 @@ const REPORT_TYPES = [
   { id: "R-08", title: "All-in-One", desc: "Combined report: all sections" },
   { id: "R-09", title: "Interface Bandwidth", desc: "WAN/MPLS per-interface throughput, avg In/Out, time-range table" },
   { id: "R-10", title: "Device Availability", desc: "Per-device SLA %, uptime, reboots, downtime & collector gaps per site" },
+  { id: "R-11", title: "Network Device Interfaces", desc: "Per-device interface table: name, admin/oper status, description, link speed, current In/Out traffic" },
 ];
 
 const SITES = [
@@ -218,6 +219,8 @@ export default function ReportsPage() {
   // Site & section selection
   const [selectedSites, setSelectedSites] = useState<string[]>(["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"]);
   const [selectedSections, setSelectedSections] = useState<string[]>([]);
+  // R-11: specific devices (source_ips); empty = all devices in the selected sites.
+  const [selectedDevices, setSelectedDevices] = useState<string[]>([]);
 
   // Distribute state
   const [distChannels, setDistChannels] = useState<string[]>([]);
@@ -240,6 +243,15 @@ export default function ReportsPage() {
     apiFetch,
     { refreshInterval: 5000 }
   );
+
+  // R-11 device picker: roster filtered to the selected sites (site label e.g. "DC").
+  const { data: deviceData } = useSWR<{ data: { source_ip: string; name: string; site: string; vendor: string }[] }>(
+    token && reportType === "R-11" ? "/api/v1/network-devices/devices" : null,
+    apiFetch,
+  );
+  const siteLabelById = Object.fromEntries(SITES.map((s) => [s.id, s.label]));
+  const selectedSiteLabels = new Set(selectedSites.map((id) => siteLabelById[id]));
+  const deviceChoices = (deviceData?.data || []).filter((d) => selectedSiteLabels.has(d.site));
 
   // Active job status (poll every 2s while generating)
   const jobId = activeJobId || (listData?.data?.find((j) => j.status === "running")?.job_id ?? null);
@@ -313,6 +325,7 @@ export default function ReportsPage() {
           table_interval:
             reportType === "R-09" ? tableInterval : reportType === "R-10" ? availWindow : undefined,
           sla_thresholds: reportType === "R-04" ? slaThresholds : undefined,
+          devices: reportType === "R-11" && selectedDevices.length > 0 ? selectedDevices : undefined,
         }),
         },
       );
@@ -459,6 +472,53 @@ export default function ReportsPage() {
             ))}
           </div>
         </div>
+
+        {/* R-11: device scope — all devices in the selected sites, or pick specific ones */}
+        {reportType === "R-11" && (
+          <div>
+            <label className="text-sm font-medium mb-2 block">
+              Devices{" "}
+              <span className="text-xs font-normal text-muted-foreground">
+                ({selectedDevices.length === 0 ? "all devices in the selected sites" : `${selectedDevices.length} selected`})
+              </span>
+            </label>
+            <div className="flex flex-wrap gap-2 max-h-40 overflow-auto rounded-md border border-border p-2">
+              <button
+                onClick={() => setSelectedDevices([])}
+                className={cn(
+                  "px-3 py-1.5 text-xs rounded-md border transition-colors",
+                  selectedDevices.length === 0 ? "border-primary bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:bg-muted"
+                )}
+              >
+                All devices
+              </button>
+              {deviceChoices.map((d) => (
+                <label
+                  key={d.source_ip}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs cursor-pointer transition-colors",
+                    selectedDevices.includes(d.source_ip) ? "border-primary bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedDevices.includes(d.source_ip)}
+                    onChange={() =>
+                      setSelectedDevices((prev) =>
+                        prev.includes(d.source_ip) ? prev.filter((x) => x !== d.source_ip) : [...prev, d.source_ip]
+                      )
+                    }
+                    className="h-3.5 w-3.5 rounded border-border"
+                  />
+                  {d.name} <span className="text-muted-foreground">· {d.site}</span>
+                </label>
+              ))}
+              {deviceChoices.length === 0 && (
+                <span className="text-xs text-muted-foreground px-1 py-1.5">No devices in the selected sites.</span>
+              )}
+            </div>
+          </div>
+        )}
 
 
         {/* Format */}

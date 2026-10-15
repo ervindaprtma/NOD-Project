@@ -565,6 +565,10 @@ class ReportJob(Base):
         JSONB, nullable=True,
         comment="R-04 only: {wan:{latency,jitter,packet_loss}, mpls:{...}} SLA ceilings"
     )
+    devices: Mapped[Optional[list[str]]] = mapped_column(
+        JSONB, nullable=True,
+        comment="R-11 only: device source_ips to include; NULL/empty = all in the selected sites"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -691,3 +695,91 @@ class DeviceIpAlias(Base):
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Network Device Monitoring — Topology & overrides (plan v3 §4.3)
+# Config, not telemetry. Live state/traffic are read from OpenSearch
+# at request time; these tables only store the map + label overrides.
+# ─────────────────────────────────────────────────────────────────
+
+
+class IconLibrary(Base):
+    """Uploaded topology icons (.png/.svg). Superadmin-managed."""
+    __tablename__ = "icon_library"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    uploaded_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+class TopologyNode(Base):
+    """A device (or support/icon-only anchor) placed on the topology map.
+
+    support=true → source_ip IS NULL, icon-only, never state-coloured
+    (internet, server, AP, cloud, any unmonitored endpoint).
+    Data nodes key to a single tag.source IP (one physical device).
+    """
+    __tablename__ = "topology_nodes"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    source_ip: Mapped[Optional[str]] = mapped_column(
+        String(45), unique=True, nullable=True
+    )  # NULL for support nodes; = tag.source for data nodes
+    support: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    icon_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="sw"
+    )  # fg, sw, fw, router, cloud, srv, ap, custom
+    icon_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("icon_library.id", ondelete="SET NULL"), nullable=True
+    )  # overrides icon_kind art when set
+    x: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    y: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class TopologyLink(Base):
+    """A link between two topology nodes. link_type is a superadmin-assigned
+    LABEL (visual/semantic); live state/traffic still come from raw SNMP.
+    *_if_name is NULL for a support-node end.
+    """
+    __tablename__ = "topology_links"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    a_node_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("topology_nodes.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    a_if_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    b_node_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("topology_nodes.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    b_if_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    link_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="lan"
+    )  # lan, wan, mpls, wireless
+
+
+class DeviceOverride(Base):
+    """Per-device label overrides, keyed by source_ip (= tag.source = one
+    physical device, v3). display_name overrides tag.hostname; iface_overrides
+    maps if_name → {alias, description} supplementing SNMP values.
+    """
+    __tablename__ = "device_overrides"
+
+    source_ip: Mapped[str] = mapped_column(String(45), primary_key=True)
+    display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    iface_overrides: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)

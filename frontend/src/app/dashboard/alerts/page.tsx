@@ -48,11 +48,21 @@ const DATA_SOURCES = [
   { value: "vpn_ipsec", label: "IPsec VPN" },
   { value: "interface_stats", label: "Interface Bandwidth" },
   { value: "device_uptime", label: "Device Availability" },
+  { value: "interface_state", label: "Interface Up/Down" },
+  { value: "interface_errors", label: "Interface Errors" },
 ];
 
 // interface_stats requires a canonical site (the interface picker keys off it) and a
 // window ≥ 2 min (the counter→rate derivative needs 2 histogram buckets).
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
+// Device IP → canonical site (telemetry subnets), used to scope the interface-alert
+// device picker when editing an existing rule (site_name holds the device IP).
+function siteFromDeviceIp(ip: string): string {
+  if (ip.startsWith("10.80.")) return "Site_FGT-DC";
+  if (ip.startsWith("10.90.")) return "Site_FGT-DRC";
+  if (ip.startsWith("10.70.")) return "Site_FGT_Office";
+  return SITES[0];
+}
 const IFACE_MIN_WINDOW = 2;
 // device_uptime: ≥5 min so a dropped 30s poll or two can't trip a false "down" (§11.2).
 const DEVICE_MIN_WINDOW = 5;
@@ -433,6 +443,40 @@ export default function AlertsPage() {
 
   const deviceWindowTooShort = isDevice && form.evaluation_window_minutes < DEVICE_MIN_WINDOW;
 
+  // interface_state / interface_errors: the engine keys on the DEVICE (source_ip stored in
+  // site_name) + an if_name (target_key). So this is a site → device → interface cascade:
+  // the canonical site only scopes the device list (local state), the chosen device IP goes
+  // into site_name, and the if_name (or "*") into target_key.
+  const isIfaceState = form.data_source === "interface_state" || form.data_source === "interface_errors";
+  const [ifaceSite, setIfaceSite] = useState(SITES[0]);
+  const { data: ifaceDevData } = useSWR<{ data: { key: string; label: string }[] }>(
+    showModal && isIfaceState && SITES.includes(ifaceSite)
+      ? `/api/v1/alerts/devices?site_name=${ifaceSite}`
+      : null,
+    swrFetcher,
+  );
+  const ifaceDevices = ifaceDevData?.data || [];
+  const { data: ifaceIfData } = useSWR<{ data: { key: string; label: string }[] }>(
+    showModal && isIfaceState && form.site_name && !SITES.includes(form.site_name)
+      ? `/api/v1/alerts/device-interfaces?source=${encodeURIComponent(form.site_name)}`
+      : null,
+    swrFetcher,
+  );
+  const deviceIfaces = ifaceIfData?.data || [];
+
+  // When entering interface mode or changing the scope site, make sure site_name holds a
+  // real device IP from the current site (not a leftover canonical site), and default the
+  // interface to "*" (any). Reselect if the current device isn't in this site's list.
+  useEffect(() => {
+    if (!showModal || !isIfaceState) return;
+    if (ifaceDevices.length && (SITES.includes(form.site_name) || !ifaceDevices.some((d) => d.key === form.site_name))) {
+      setForm((prev) => ({ ...prev, site_name: ifaceDevices[0].key, target_key: prev.target_key || "*" }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isIfaceState, ifaceDevices, ifaceSite, showModal]);
+  const DEVICE_MIN_WINDOW_IFACE = 3; // a few 30s polls so a flap needs to sustain
+  const ifaceStateWindowTooShort = isIfaceState && form.evaluation_window_minutes < DEVICE_MIN_WINDOW_IFACE;
+
   // SD-WAN: pick the link (→ target_key = 1-based link number), site-aware named list
   // (WAN uplink or IPsec/ADVPN tunnel). Composite clauses may target links too.
   const isSdwan = form.data_source === "sdwan_sla";
@@ -577,6 +621,10 @@ export default function AlertsPage() {
       site_name: rule.site_name || "",
       enabled: rule.enabled,
     });
+    // interface_state/errors store the device IP in site_name — scope the picker to its site.
+    if (rule.data_source === "interface_state" || rule.data_source === "interface_errors") {
+      setIfaceSite(siteFromDeviceIp(rule.site_name || ""));
+    }
     setTestResult(null);
     setShowModal(true);
   }
@@ -586,7 +634,7 @@ export default function AlertsPage() {
     // target_key applies to interface_stats (required) and device_uptime (optional; blank =
     // any device / site-level). Cleared for every other source. Empty string → null.
     // session rules carry the username glob in target_key.
-    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla" || isSession || isReboot;
+    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla" || isIfaceState || isSession || isReboot;
     // link_max_mbps only rides along with interface throughput's %-of-max mode.
     const keepsLinkMax = form.data_source === "interface_stats" && form.metric_field === "iface.throughput_mbps";
 
@@ -1102,14 +1150,25 @@ export default function AlertsPage() {
                   <label className="text-xs font-medium">Site Name</label>
                   {/* Canonical sites only — free text silently fell back to DC in the engine
                       (site_name or "Site_FGT-DC"). Reset target_key: the device/interface
-                      picker is keyed on the site. */}
-                  <select
-                    value={SITES.includes(form.site_name) ? form.site_name : SITES[0]}
-                    onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: "" })}
-                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                  >
-                    {SITES.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                      picker is keyed on the site. For interface_state/errors the site only
+                      scopes the device list (ifaceSite); site_name itself holds the device IP. */}
+                  {isIfaceState ? (
+                    <select
+                      value={ifaceSite}
+                      onChange={(e) => setIfaceSite(e.target.value)}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    >
+                      {SITES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  ) : (
+                    <select
+                      value={SITES.includes(form.site_name) ? form.site_name : SITES[0]}
+                      onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: "" })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    >
+                      {SITES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  )}
                 </div>
               </div>
 
@@ -1350,6 +1409,43 @@ export default function AlertsPage() {
                 <p className="text-xs text-muted-foreground">
                   Collector-gap is a site-level signal — it fires once when the whole site goes silent, so no device is selected.
                 </p>
+              )}
+
+              {/* interface_state / interface_errors: device (→ site_name = IP) + interface (→ target_key) */}
+              {isIfaceState && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium">Device</label>
+                    {ifaceDevices.length === 0 ? (
+                      <div className="w-full px-3 py-1.5 text-sm rounded-md border bg-muted/50 mt-1 text-muted-foreground">
+                        Loading devices…
+                      </div>
+                    ) : (
+                      <select
+                        value={form.site_name}
+                        onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: "*" })}
+                        className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      >
+                        {ifaceDevices.map((d) => (
+                          <option key={d.key} value={d.key}>{d.label} ({d.key})</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">Interface</label>
+                    <select
+                      value={form.target_key || "*"}
+                      onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                    >
+                      <option value="*">Any interface on this device</option>
+                      {deviceIfaces.map((i) => (
+                        <option key={i.key} value={i.key}>{i.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               )}
 
               {/* Threshold controls — specialized for SD-WAN link state & interface throughput */}
@@ -1637,7 +1733,9 @@ export default function AlertsPage() {
                         </div>
                         <div className="grid grid-cols-2 gap-2">
                           <select value={c.data_source} onChange={(e) => setClauseSource(i, e.target.value)} className="px-2 py-1 text-xs rounded-md border bg-background">
-                            {DATA_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                            {/* interface_state/errors need a device-IP in site_name (per-rule), which a
+                                shared-site composite clause can't express — single rules only. */}
+                            {DATA_SOURCES.filter((s) => s.value !== "interface_state" && s.value !== "interface_errors").map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                           </select>
                           <select value={c.metric_field} onChange={(e) => setClauseMetric(i, e.target.value)} className="px-2 py-1 text-xs rounded-md border bg-background">
                             {cf.length === 0 && <option value="">Loading…</option>}
@@ -1682,15 +1780,15 @@ export default function AlertsPage() {
                 <div>
                   <label className="text-xs font-medium">Eval Window (min)</label>
                   <NumberField
-                    min={isIface ? IFACE_MIN_WINDOW : isDevice ? DEVICE_MIN_WINDOW : 1}
+                    min={isIface ? IFACE_MIN_WINDOW : isDevice ? DEVICE_MIN_WINDOW : isIfaceState ? DEVICE_MIN_WINDOW_IFACE : 1}
                     value={form.evaluation_window_minutes}
                     onValueChange={(n) => setForm({ ...form, evaluation_window_minutes: n })}
                     className={cn(
                       "w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1",
-                      (windowInvalid || ifaceWindowTooShort || deviceWindowTooShort) && "border-red-400"
+                      (windowInvalid || ifaceWindowTooShort || deviceWindowTooShort || ifaceStateWindowTooShort) && "border-red-400"
                     )}
                   />
-                  {windowInvalid && !ifaceWindowTooShort && !deviceWindowTooShort && (
+                  {windowInvalid && !ifaceWindowTooShort && !deviceWindowTooShort && !ifaceStateWindowTooShort && (
                     <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
                       Eval window must be at least 1 minute.
                     </p>
@@ -1703,6 +1801,11 @@ export default function AlertsPage() {
                   {deviceWindowTooShort && (
                     <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
                       Device availability needs ≥ {DEVICE_MIN_WINDOW} min (else a dropped poll false-fires).
+                    </p>
+                  )}
+                  {ifaceStateWindowTooShort && (
+                    <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
+                      Interface up/down needs ≥ {DEVICE_MIN_WINDOW_IFACE} min (a few polls so a flap must sustain).
                     </p>
                   )}
                 </div>
@@ -1795,7 +1898,7 @@ export default function AlertsPage() {
                 </button>
                 <button
                   onClick={saveRule}
-                  disabled={saving || !form.name || windowInvalid || ifaceWindowTooShort || deviceWindowTooShort || (isIface && !form.target_key) || compositeInvalid}
+                  disabled={saving || !form.name || windowInvalid || ifaceWindowTooShort || deviceWindowTooShort || ifaceStateWindowTooShort || (isIface && !form.target_key) || (isIfaceState && !form.site_name) || compositeInvalid}
                   className="px-4 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : editingRule ? "Update" : "Create"}

@@ -1,6 +1,7 @@
 # FastAPI & ASGI
 fastapi>=0.111.0,<1.0.0
 uvicorn[standard]>=0.29.0,<1.0.0
+python-multipart>=0.0.9,<1.0.0  # topology icon uploads (UploadFile)
 
 # OpenSearch (async client only)
 opensearch-py[async]>=2.6.0,<3.0.0

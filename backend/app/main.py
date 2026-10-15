@@ -25,12 +25,14 @@ from app.api import (
     ha,
     interface_stats,
     logs,
+    network_devices,
     notifications,
     overview,
     raw_data,
     reports,
     resources,
     sdwan,
+    topology,
     traffic_flow,
     traffic_inbound,
     traffic_internal,
@@ -153,6 +155,13 @@ app = FastAPI(
     openapi_url="/api/openapi.json" if settings.ENVIRONMENT == "development" else None,
     lifespan=lifespan,
 )
+
+# ── Static: topology icons (H3 — no mount existed before) ─────
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from app.api.topology import ICON_DIR, ICON_URL_PREFIX  # noqa: E402
+
+ICON_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(ICON_URL_PREFIX, StaticFiles(directory=str(ICON_DIR)), name="topology-icons")
 
 # ── Rate Limiting (P0 security) ───────────────────────────────
 app.state.limiter = limiter
@@ -284,6 +293,8 @@ app.include_router(sdwan.router)
 app.include_router(ha.router)
 app.include_router(interface_stats.router)
 app.include_router(device_uptime.router)
+app.include_router(network_devices.router)
+app.include_router(topology.router)
 app.include_router(resources.router)
 app.include_router(vpn.router)
 app.include_router(raw_data.router)
