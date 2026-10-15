@@ -157,6 +157,19 @@ export const ICON_GLYPH: Record<string, string> = {
   fg: "🛡", sw: "🔀", fw: "🧱", router: "📡", cloud: "☁", srv: "🖥", ap: "📶", custom: "⬡",
 };
 
+// Built-in default icons offered in the Add/Edit Device dialog (kind → DeviceIcon SVG).
+export const DEFAULT_ICONS: { kind: string; label: string }[] = [
+  { kind: "pc", label: "PC / Workstation" },
+  { kind: "ap", label: "Access Point" },
+  { kind: "router", label: "Router" },
+  { kind: "fw", label: "Firewall" },
+  { kind: "cloud", label: "Cloud / Internet" },
+  { kind: "srv_tower", label: "Server (Tower)" },
+  { kind: "srv_rack", label: "Server (Rackmount)" },
+  { kind: "sw_l2", label: "Switch L2" },
+  { kind: "sw_l3", label: "Switch L3" },
+];
+
 // link_type → svg stroke style (v1 hand-rolled glyphs; d3 markers are the upgrade path).
 export const LINK_STYLE: Record<string, { width: number; dash?: string }> = {
   lan: { width: 1.5 },

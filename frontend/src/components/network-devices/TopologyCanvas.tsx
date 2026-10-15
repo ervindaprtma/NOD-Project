@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { apiFetch, swrFetcher, hasMinRole } from "@/lib/api";
 import type { DeviceRow, Envelope, IconData, TopologyData, TopologyLink, TopologyNode } from "./types";
-import { ICON_GLYPH, LINK_STYLE, fmtRate } from "./types";
+import { DEFAULT_ICONS, LINK_STYLE, fmtRate } from "./types";
 import { IconPicker } from "./IconPicker";
+import { DeviceIcon } from "./DeviceIcon";
 
 const NODE_W = 120;
 const NODE_H = 56;
@@ -96,20 +97,37 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
     }
   };
 
-  // ── drag (edit mode only) ──
-  const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  // ── pan-zoom ──
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const clampZoom = (z: number) => Math.min(2.5, Math.max(0.3, z));
+  // Ctrl/⌘ + wheel zooms (plain wheel still scrolls). Non-passive so we can preventDefault.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom((z) => clampZoom(z * (e.deltaY < 0 ? 1.1 : 0.9)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // ── drag (edit mode only) — zoom-aware: screen delta ÷ zoom = canvas delta ──
+  const dragRef = useRef<{ id: string; startX: number; startY: number; nodeX: number; nodeY: number } | null>(null);
   const onNodePointerDown = (e: React.PointerEvent, n: DraftNode) => {
     if (!editing) return;
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    dragRef.current = { id: n.id, dx: e.clientX - n.x, dy: e.clientY - n.y };
+    dragRef.current = { id: n.id, startX: e.clientX, startY: e.clientY, nodeX: n.x, nodeY: n.y };
   };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
     if (!d) return;
-    setDraftNodes((prev) =>
-      prev.map((n) => (n.id === d.id ? { ...n, x: Math.max(0, snap(e.clientX - d.dx)), y: Math.max(0, snap(e.clientY - d.dy)) } : n)),
-    );
+    const nx = Math.max(0, snap(d.nodeX + (e.clientX - d.startX) / zoom));
+    const ny = Math.max(0, snap(d.nodeY + (e.clientY - d.startY) / zoom));
+    setDraftNodes((prev) => prev.map((n) => (n.id === d.id ? { ...n, x: nx, y: ny } : n)));
   };
   const onCanvasPointerUp = () => { dragRef.current = null; };
 
@@ -118,6 +136,13 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
     for (const n of nodes) { mw = Math.max(mw, n.x + NODE_W + 40); mh = Math.max(mh, n.y + NODE_H + 40); }
     return { w: mw, h: mh };
   }, [nodes]);
+
+  // Fit the whole map into the current viewport (never upscale past 100%).
+  const fitZoom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setZoom(clampZoom(Math.min(el.clientWidth / w, el.clientHeight / h, 1)));
+  };
 
   const deleteNode = (id: string) => {
     setDraftNodes((p) => p.filter((n) => n.id !== id));
@@ -148,20 +173,29 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
         <Legend />
-        {canEdit ? (
-          editing ? (
-            <div className="flex gap-2">
-              <ToolbarBtn onClick={() => setModal("device")}>+ Device</ToolbarBtn>
-              <ToolbarBtn onClick={() => setLinkEdit({})}>+ Link</ToolbarBtn>
-              <ToolbarBtn onClick={save} disabled={saving} primary>{saving ? "Saving…" : "Save"}</ToolbarBtn>
-              <ToolbarBtn onClick={cancelEdit}>Cancel</ToolbarBtn>
-            </div>
-          ) : (
-            <ToolbarBtn onClick={startEdit}>✎ Edit Layout</ToolbarBtn>
-          )
-        ) : null}
+        <div className="flex items-center gap-2">
+          {/* Zoom controls (works in view + edit). Ctrl/⌘ + wheel also zooms. */}
+          <div className="inline-flex items-center rounded-md border border-border overflow-hidden text-xs">
+            <button onClick={() => setZoom((z) => clampZoom(z * 0.9))} className="px-2 py-1 hover:bg-muted/50" title="Zoom out">−</button>
+            <button onClick={() => setZoom(1)} className="px-2 py-1 hover:bg-muted/50 tabular-nums w-12 text-center" title="Reset to 100%">{Math.round(zoom * 100)}%</button>
+            <button onClick={() => setZoom((z) => clampZoom(z * 1.1))} className="px-2 py-1 hover:bg-muted/50" title="Zoom in">+</button>
+            <button onClick={fitZoom} className="px-2 py-1 hover:bg-muted/50 border-l border-border" title="Fit to screen">Fit</button>
+          </div>
+          {canEdit ? (
+            editing ? (
+              <div className="flex gap-2">
+                <ToolbarBtn onClick={() => setModal("device")}>+ Device</ToolbarBtn>
+                <ToolbarBtn onClick={() => setLinkEdit({})}>+ Link</ToolbarBtn>
+                <ToolbarBtn onClick={save} disabled={saving} primary>{saving ? "Saving…" : "Save"}</ToolbarBtn>
+                <ToolbarBtn onClick={cancelEdit}>Cancel</ToolbarBtn>
+              </div>
+            ) : (
+              <ToolbarBtn onClick={startEdit}>✎ Edit Layout</ToolbarBtn>
+            )
+          ) : null}
+        </div>
       </div>
 
       {editing ? <UnmappedBanner draftNodes={draftNodes} onAdd={(d) => addDeviceNode(d, setDraftNodes, draftNodes)} /> : null}
@@ -172,13 +206,18 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         </div>
       ) : (
         <div
+          ref={scrollRef}
           className="relative overflow-auto rounded-lg border border-border bg-muted/10"
-          style={{ minHeight: 420 }}
+          // Viewport-sized box: scroll (both axes) stays INSIDE the topology, so the page
+          // doesn't grow with the map. Height tracks the viewport (dynamic).
+          style={{ height: "calc(100vh - 16rem)", minHeight: 420 }}
           onPointerMove={onCanvasPointerMove}
           onPointerUp={onCanvasPointerUp}
           onContextMenu={(e) => openCtx(e, null)}
         >
-          <div className="relative" style={{ width: w, height: h }}>
+          {/* Outer box reserves the scaled size so scrollbars track the zoom; inner scales. */}
+          <div style={{ width: w * zoom, height: h * zoom }}>
+          <div className="relative" style={{ width: w, height: h, transform: `scale(${zoom})`, transformOrigin: "0 0" }}>
             <svg className="absolute inset-0" width={w} height={h}>
               {links.map((lk) => {
                 const a = nodeById[lk.a_node_id], b = nodeById[lk.b_node_id];
@@ -238,7 +277,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                     // eslint-disable-next-line @next/next/no-img-element -- SVG via <img> can't run script
                     <img src={n.icon_url} alt="" className="h-8 w-8 object-contain pointer-events-none" />
                   ) : (
-                    <span className="text-2xl leading-none">{ICON_GLYPH[n.icon_kind] || "⬡"}</span>
+                    <DeviceIcon kind={n.icon_kind} className="h-8 w-8 pointer-events-none" />
                   )}
                   {!n.support ? (
                     <span className="absolute -top-0.5 -right-1 w-2.5 h-2.5 rounded-full ring-2 ring-background"
@@ -257,6 +296,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 ) : null}
               </div>
             ))}
+          </div>
           </div>
         </div>
       )}
@@ -456,6 +496,19 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
+// Dropdown of built-in default icons with a live preview of the selection.
+function DefaultIconPicker({ value, onChange }: { value: string; onChange: (k: string) => void }) {
+  return (
+    <div className="flex items-center gap-2 mt-1">
+      <DeviceIcon kind={value} className="h-7 w-7 shrink-0" />
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        className="flex-1 px-2 py-1.5 text-sm rounded-md border border-border bg-background">
+        {DEFAULT_ICONS.map((o) => <option key={o.kind} value={o.kind}>{o.label}</option>)}
+      </select>
+    </div>
+  );
+}
+
 function AddDeviceModal({ placed, onClose, onAdd }: {
   placed: Set<string>; onClose: () => void; onAdd: (n: DraftNode) => void;
 }) {
@@ -464,19 +517,26 @@ function AddDeviceModal({ placed, onClose, onAdd }: {
   const [sel, setSel] = useState("");
   const [name, setName] = useState("");
   const [icon, setIcon] = useState<IconData | null>(null); // chosen uploaded icon, or null = default
+  const [kind, setKind] = useState("sw_l2");               // built-in default icon type
   const devices = data?.data || [];
+
+  // Sensible default icon type: FortiGate → Firewall, other data → Switch L2, support → Cloud.
+  useEffect(() => {
+    setKind(mode === "support" ? "cloud" : devices.find((x) => x.source_ip === sel)?.vendor === "fortigate" ? "fw" : "sw_l2");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, sel]);
 
   const addData = () => {
     const d = devices.find((x) => x.source_ip === sel);
     if (!d) return;
     onAdd({ id: newId(), source_ip: d.source_ip, support: false, display_name: d.name,
-      icon_kind: icon ? "custom" : d.vendor === "fortigate" ? "fg" : "sw",
+      icon_kind: icon ? "custom" : kind,
       icon_id: icon?.id ?? null, icon_url: icon?.url ?? null, x: 40, y: 40 });
   };
   const addSupport = () => {
     if (!name.trim()) return;
     onAdd({ id: newId(), source_ip: null, support: true, display_name: name.trim(),
-      icon_kind: icon ? "custom" : "cloud", icon_id: icon?.id ?? null, icon_url: icon?.url ?? null, x: 40, y: 40 });
+      icon_kind: icon ? "custom" : kind, icon_id: icon?.id ?? null, icon_url: icon?.url ?? null, x: 40, y: 40 });
   };
 
   return (
@@ -496,7 +556,11 @@ function AddDeviceModal({ placed, onClose, onAdd }: {
             ))}
           </select>
           <div className="mt-3">
-            <span className="text-xs text-muted-foreground">Icon</span>
+            <span className="text-xs text-muted-foreground">Default icon</span>
+            <DefaultIconPicker value={kind} onChange={setKind} />
+          </div>
+          <div className="mt-3">
+            <span className="text-xs text-muted-foreground">Or upload custom icon</span>
             <IconPicker selectedId={icon?.id ?? null} onSelect={setIcon} />
           </div>
           <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={addData}>Add to Canvas</ToolbarBtn></div>
@@ -507,7 +571,11 @@ function AddDeviceModal({ placed, onClose, onAdd }: {
             className="w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background" />
           <p className="text-[11px] text-muted-foreground mt-1">Icon-only node — no SNMP data, never shows green/red.</p>
           <div className="mt-3">
-            <span className="text-xs text-muted-foreground">Icon</span>
+            <span className="text-xs text-muted-foreground">Default icon</span>
+            <DefaultIconPicker value={kind} onChange={setKind} />
+          </div>
+          <div className="mt-3">
+            <span className="text-xs text-muted-foreground">Or upload custom icon</span>
             <IconPicker selectedId={icon?.id ?? null} onSelect={setIcon} />
           </div>
           <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={addSupport}>Add to Canvas</ToolbarBtn></div>
@@ -569,16 +637,19 @@ function EditDeviceModal({ node, onClose, onSave }: {
   node: DraftNode; onClose: () => void; onSave: (patch: Partial<DraftNode>) => void;
 }) {
   const [name, setName] = useState(node.display_name || "");
+  const isCustom = node.icon_kind === "custom";
   const [icon, setIcon] = useState<IconData | null>(
-    node.icon_kind === "custom" && node.icon_url ? { id: node.icon_id || "", name: "", url: node.icon_url } : null,
+    isCustom && node.icon_url ? { id: node.icon_id || "", name: "", url: node.icon_url } : null,
   );
+  // Built-in default type: seed from the node unless it was a custom upload.
+  const [kind, setKind] = useState(isCustom ? "sw_l2" : node.icon_kind);
   const save = () => {
     onSave({
       display_name: name.trim() || node.display_name,
-      // A newly-picked icon → custom; untouched → keep the node's existing icon.
+      // A picked custom icon wins; otherwise store the chosen default type.
       ...(icon
         ? { icon_kind: "custom", icon_id: icon.id, icon_url: icon.url }
-        : { icon_kind: node.icon_kind, icon_id: node.icon_id, icon_url: node.icon_url }),
+        : { icon_kind: kind, icon_id: null, icon_url: null }),
     });
   };
   return (
@@ -593,7 +664,11 @@ function EditDeviceModal({ node, onClose, onSave }: {
         <p className="text-[11px] text-muted-foreground mt-1">Icon-only (support) node — no SNMP data.</p>
       )}
       <div className="mt-3">
-        <span className="text-xs text-muted-foreground">Icon</span>
+        <span className="text-xs text-muted-foreground">Default icon</span>
+        <DefaultIconPicker value={kind} onChange={(k) => { setKind(k); setIcon(null); }} />
+      </div>
+      <div className="mt-3">
+        <span className="text-xs text-muted-foreground">Or upload custom icon</span>
         <IconPicker selectedId={icon?.id ?? null} onSelect={setIcon} />
       </div>
       <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={save}>Save</ToolbarBtn></div>

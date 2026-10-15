@@ -30,7 +30,12 @@ router = APIRouter(prefix="/api/v1/topology", tags=["Topology"])
 # nginx only forward /api/*, not a bare /static/*) — no new proxy rule in two places.
 ICON_DIR = Path(__file__).resolve().parents[2] / "static" / "icons"
 ICON_URL_PREFIX = "/api/static/icons"
-_ICON_KINDS = {"fg", "sw", "fw", "router", "cloud", "srv", "ap", "custom"}
+_ICON_KINDS = {
+    # legacy / auto (data devices): fg = FortiGate, sw = switch, srv = server
+    "fg", "sw", "srv", "custom",
+    # built-in default-icon picker (Add/Edit Device dialog)
+    "pc", "ap", "router", "fw", "cloud", "srv_tower", "srv_rack", "sw_l2", "sw_l3",
+}
 _LINK_TYPES = {"lan", "wan", "mpls", "wireless"}
 
 
