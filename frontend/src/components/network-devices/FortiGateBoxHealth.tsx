@@ -14,7 +14,7 @@ import type { ResourceData } from "@/types";
 // Current-value tiles + CPU%/Mem%/Sessions trend charts over the selected window.
 const WINDOW_SEC: Record<string, number> = { "12h": 43200, "24h": 86400, "7d": 604800, "30d": 2592000 };
 
-export function FortiGateBoxHealth({ site, window = "24h", gteMs, lteMs, refreshMs = 60_000 }: { site: string | null; window?: string; gteMs?: number; lteMs?: number; refreshMs?: number }) {
+export function FortiGateBoxHealth({ site, window = "24h", gteMs, lteMs, refreshMs = 60_000, onRangeSelect }: { site: string | null; window?: string; gteMs?: number; lteMs?: number; refreshMs?: number; onRangeSelect?: (gteMs: number, lteMs: number) => void }) {
   const siteName = site ? FGT_SITE_NAME[site] : undefined;
   // /resources requires gte_ms/lte_ms (no window param). Custom range wins; otherwise
   // derive from the preset, rounding to the minute so the SWR key is stable across
@@ -67,9 +67,9 @@ export function FortiGateBoxHealth({ site, window = "24h", gteMs, lteMs, refresh
 
           {tl ? (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <MetricChart title="CPU %" pts={tl.cpu} fmt={(v) => `${v.toFixed(0)}%`} />
-              <MetricChart title="Memory %" pts={tl.memory} fmt={(v) => `${v.toFixed(0)}%`} />
-              <MetricChart title="Sessions" pts={tl.sessions} fmt={(v) => v.toLocaleString()} />
+              <MetricChart title="CPU %" pts={tl.cpu} fmt={(v) => `${v.toFixed(0)}%`} onRangeSelect={onRangeSelect} />
+              <MetricChart title="Memory %" pts={tl.memory} fmt={(v) => `${v.toFixed(0)}%`} onRangeSelect={onRangeSelect} />
+              <MetricChart title="Sessions" pts={tl.sessions} fmt={(v) => v.toLocaleString()} onRangeSelect={onRangeSelect} />
             </div>
           ) : null}
         </div>
@@ -99,7 +99,7 @@ function pivot(pts: Pt[]): { rows: Record<string, unknown>[]; devices: string[] 
   return { rows, devices };
 }
 
-function MetricChart({ title, pts, fmt }: { title: string; pts: Pt[]; fmt: (v: number) => string }) {
+function MetricChart({ title, pts, fmt, onRangeSelect }: { title: string; pts: Pt[]; fmt: (v: number) => string; onRangeSelect?: (gteMs: number, lteMs: number) => void }) {
   const { rows, devices } = pivot(pts || []);
   const bucketMs = rows.length > 1 ? ((rows[1].tsMs as number) - (rows[0].tsMs as number)) || 60_000 : 60_000;
   return (
@@ -113,6 +113,7 @@ function MetricChart({ title, pts, fmt }: { title: string; pts: Pt[]; fmt: (v: n
               colors={["blue", "orange"]} valueFormatter={fmt}
               showLegend={devices.length > 1} showXAxis showYAxis autoMinValue allowDecimals
               curveType="monotone" tickGap={40} yAxisWidth={50} bucketMs={bucketMs}
+              onRangeSelect={onRangeSelect}
             />
           </div>
         </ChartFrame>

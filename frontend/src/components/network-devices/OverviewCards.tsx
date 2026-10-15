@@ -4,6 +4,9 @@ import type { DeviceRow, SummaryData } from "./types";
 import { VENDOR_LABEL } from "./types";
 
 const SITE_ORDER = ["DC", "DRC", "Office"];
+// Device order within a site: firewall (FortiGate) first, then switches (H3C/Cisco).
+const ROLE_RANK: Record<string, number> = { fortigate: 0 };
+const roleRank = (vendor: string) => ROLE_RANK[vendor] ?? 1;
 const VENDOR_ACCENT: Record<string, string> = {
   fortigate: "border-l-amber-500",
   h3c: "border-l-sky-500",
@@ -35,7 +38,7 @@ export function OverviewCards({
           <h3 className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">{site}</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {[...summary.by_site[site]]
-              .sort((a, b) => Number(a.online) - Number(b.online) || a.vendor.localeCompare(b.vendor))
+              .sort((a, b) => roleRank(a.vendor) - roleRank(b.vendor) || a.name.localeCompare(b.name))
               .map((d) => (
                 <DeviceCard key={d.source_ip} d={d} onSelect={onSelect} />
               ))}

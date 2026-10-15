@@ -17,6 +17,7 @@ export function InterfaceCharts({
   gteMs,
   lteMs,
   refreshMs = 0,
+  onRangeSelect,
 }: {
   source: string;
   iface: InterfaceBox;
@@ -24,6 +25,7 @@ export function InterfaceCharts({
   gteMs?: number;
   lteMs?: number;
   refreshMs?: number;
+  onRangeSelect?: (gteMs: number, lteMs: number) => void;  // drag-to-zoom
 }) {
   const [metric, setMetric] = useState<Metric>("mbps");
 
@@ -52,6 +54,8 @@ export function InterfaceCharts({
 
   const unit = metric === "mb" ? "MB" : "Mbps";
   const categories = metric === "mbps" && chart?.speed_mbps ? ["In", "Out", "Util %"] : ["In", "Out"];
+  // Drag-to-zoom maps the dragged pixels to epoch bounds via each datum's tsMs + bucket width.
+  const bucketMs = rows.length > 1 ? (rows[1].tsMs - rows[0].tsMs) || 60_000 : 60_000;
 
   return (
     <div className="mt-2 rounded-md border border-border p-3 bg-muted/20">
@@ -92,6 +96,8 @@ export function InterfaceCharts({
             valueFormatter={(v) => `${v.toFixed(2)} ${unit}`}
             showLegend
             className="h-full"
+            bucketMs={bucketMs}
+            onRangeSelect={onRangeSelect}
           />
         </ChartFrame>
       )}
