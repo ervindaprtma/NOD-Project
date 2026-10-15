@@ -5,6 +5,8 @@ import type { DeviceRow } from "./types";
 import { VENDOR_LABEL } from "./types";
 
 const SITE_ORDER = ["DC", "DRC", "Office"];
+// Within a site: firewall (FortiGate) first, then switches (H3C/Cisco).
+const roleRank = (vendor: string) => (vendor === "fortigate" ? 0 : 1);
 
 export function DeviceList({
   devices,
@@ -104,9 +106,9 @@ function GroupRows({
   toggle: () => void;
   onSelect: (source: string) => void;
 }) {
-  // offline first, then by vendor (plan §2).
+  // Firewall → Switch, then by name.
   const sorted = [...rows].sort(
-    (a, b) => Number(a.online) - Number(b.online) || a.vendor.localeCompare(b.vendor) || a.name.localeCompare(b.name),
+    (a, b) => roleRank(a.vendor) - roleRank(b.vendor) || a.name.localeCompare(b.name),
   );
   return (
     <>
