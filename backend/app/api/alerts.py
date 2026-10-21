@@ -717,7 +717,7 @@ async def test_alert_rule(
             states = await nd_qb.alert_interface_states(
                 source_ip=rule.site_name or "", gte_ms=gte_ms, lte_ms=lte_ms
             )
-            metric_value = _extract_interface_state(rule.target_key, states) if isinstance(states, dict) else 0.0
+            metric_value = _extract_interface_state(rule.metric_field, rule.target_key, states) if isinstance(states, dict) else 0.0
         elif rule.data_source == "interface_errors":
             from app.opensearch import network_devices as nd_qb
             from app.services.alert_engine import _extract_interface_errors
