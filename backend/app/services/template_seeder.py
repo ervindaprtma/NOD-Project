@@ -1161,11 +1161,24 @@ SEED_FIELD_CATALOG: list[dict] = [
     {
         "data_source": "interface_state",
         "field_key": "oper_down",
-        "display_name": "Interface Down",
-        "description": "1 when the targeted interface is operationally DOWN while admin-enabled "
-                       "(admin-disabled never fires). Blank/'*' interface = any port on the device "
-                       "(noisy on access switches — target a specific uplink). Pair with a "
-                       "sustained-for window to dampen flaps. Use == 1.",
+        "display_name": "Interface Up/Down (oper)",
+        "description": "Operational state: 1 when the interface is oper-DOWN while admin-enabled "
+                       "(a real link loss; admin-disabled is a separate metric). Use == 1 for Down, "
+                       "== 0 for Up. Blank/'*' interface = any port (noisy on access switches — "
+                       "target a specific uplink). Pair with a sustained-for window to dampen flaps.",
+        "unit": "state",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": ["==", ">="],
+        "example_threshold": 1,
+    },
+    {
+        "data_source": "interface_state",
+        "field_key": "admin_down",
+        "display_name": "Interface Up/Down (admin)",
+        "description": "Administrative state: 1 when the interface is admin-DISABLED (shut). "
+                       "Use == 1 for admin-Down, == 0 for admin-Up. Blank/'*' = any port on the "
+                       "device. FortiGate has no admin status, so this only applies to H3C/Cisco.",
         "unit": "state",
         "category": "state",
         "valid_aggregations": ["max"],

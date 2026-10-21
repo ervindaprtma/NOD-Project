@@ -473,21 +473,27 @@ def _extract_interface_stats(
     return float(iface.get(base, {}).get(agg, 0.0) or 0.0)
 
 
-def _extract_interface_state(target_key: str | None, group_result: dict[Any, Any]) -> float:
-    """1.0 if the targeted interface(s) are currently DOWN (oper down, admin up), else 0.0.
+def _extract_interface_state(metric_field: str | None, target_key: str | None,
+                             group_result: dict[Any, Any]) -> float:
+    """1.0 if the targeted interface(s) match the metric's down state, else 0.0.
 
-    target_key is the if_name; blank or "*" = "any interface on the device". admin_down
-    is NOT a firing state. Flap dampening is the rule's sustained_for_minutes (the down
-    level must hold N ticks). Missing interface → 0 (no false fire).
+    Two metrics over the 3-state enum (up / down / admin_down) from _derive_state:
+      - oper_down  (default): 1.0 when state == "down" — oper down while admin-ENABLED
+        (a real link loss). admin_down is NOT this state.
+      - admin_down:           1.0 when state == "admin_down" — admin-DISABLED port.
+    Condition picks the direction (== 1 = that down state, == 0 = up/not-that-state).
 
-    ponytail: level signal (current state), not edge — so a long outage keeps firing and
-    a flap clears on recovery. The trade-off is that an enabled-but-unused port reads as
-    `down`, so a wildcard ("*") rule is noisy on access switches; alert a specific uplink.
-    detect_transitions() (history endpoint) is the edge-based upgrade path for "*".
+    target_key is the if_name; blank or "*" = "any interface on the device". Flap dampening
+    is the rule's sustained_for_minutes. Missing interface → 0 (no false fire).
+
+    ponytail: level signal (current state), not edge — a long outage keeps firing and a flap
+    clears on recovery. An enabled-but-unused port reads oper `down`, so a wildcard ("*") oper
+    rule is noisy on access switches; alert a specific uplink, or use the iface edge monitor.
     """
+    want = "admin_down" if metric_field == "admin_down" else "down"
     if target_key in (None, "", "*"):
-        return 1.0 if any(v == "down" for v in group_result.values()) else 0.0
-    return 1.0 if group_result.get(target_key) == "down" else 0.0
+        return 1.0 if any(v == want for v in group_result.values()) else 0.0
+    return 1.0 if group_result.get(target_key) == want else 0.0
 
 
 def _extract_interface_errors(target_key: str | None, group_result: dict[Any, Any]) -> float:
@@ -611,7 +617,7 @@ def _extract_per_rule_value(
 
         if rule.data_source == "interface_state":
             if isinstance(group_result, dict):
-                return _extract_interface_state(rule.target_key, group_result)
+                return _extract_interface_state(rule.metric_field, rule.target_key, group_result)
             return None
 
         if rule.data_source == "interface_errors":
@@ -1297,7 +1303,7 @@ def _extract_per_rule_value_flat(
             return None
         if data_source == "interface_state":
             if isinstance(group_result, dict):
-                return _extract_interface_state(target_key, group_result)
+                return _extract_interface_state(metric_field, target_key, group_result)
             return None
         if data_source == "interface_errors":
             if isinstance(group_result, dict):

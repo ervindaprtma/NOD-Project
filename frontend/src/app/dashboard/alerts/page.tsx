@@ -127,7 +127,7 @@ interface ClauseForm {
 interface RuleForm {
   name: string;
   severity: string;
-  kind: "single" | "composite" | "session" | "reboot";
+  kind: "single" | "composite" | "session" | "reboot" | "iface";
   notify_when: "any" | "all";   // composite: Any=OR, All=AND
   clauses: ClauseForm[];
   data_source: string;
@@ -198,6 +198,7 @@ type AlertTemplateLite = {
   name: string;
   icon: string;
   category: string;
+  underlying_kind?: string;  // single | composite | session | reboot | iface
   locked_fields: Record<string, string | number | undefined>;
 };
 
@@ -450,6 +451,8 @@ export default function AlertsPage() {
   // the canonical site only scopes the device list (local state), the chosen device IP goes
   // into site_name, and the if_name (or "*") into target_key.
   const isIfaceState = form.data_source === "interface_state" || form.data_source === "interface_errors";
+  // Interface state-change (edge) monitor: fires on every transition, so no metric/threshold.
+  const isIfaceEdge = form.kind === "iface";
   const [ifaceSite, setIfaceSite] = useState(SITES[0]);
   const { data: ifaceDevData } = useSWR<{ data: { key: string; label: string }[] }>(
     showModal && isIfaceState && SITES.includes(ifaceSite)
@@ -855,6 +858,9 @@ export default function AlertsPage() {
                 setForm({
                   ...emptyForm,
                   name: `[Template] ${t.name}`,
+                  // Carry the template's kind (e.g. "iface" edge monitor) — without this the
+                  // rule defaulted to "single" and hit the threshold path instead.
+                  ...(t.underlying_kind ? { kind: t.underlying_kind as RuleForm["kind"] } : {}),
                   ...(lf.data_source ? { data_source: String(lf.data_source) } : {}),
                   ...(lf.metric_field ? { metric_field: String(lf.metric_field) } : {}),
                   ...(lf.aggregation ? { aggregation: String(lf.aggregation) } : {}),
@@ -1194,13 +1200,14 @@ export default function AlertsPage() {
                   <select
                     value={form.kind}
                     onChange={(e) => {
-                      const kind = e.target.value as "single" | "composite" | "session" | "reboot";
-                      // Session monitors only apply to SSL/IPsec; reboot monitors only to device_uptime
-                      // — snap the source when switching in.
+                      const kind = e.target.value as RuleForm["kind"];
+                      // Event monitors are tied to a source: session → SSL/IPsec, reboot →
+                      // device_uptime, iface (interface state-change) → interface_state. Snap it.
                       const vpn = form.data_source === "vpn_ssl" || form.data_source === "vpn_ipsec";
                       const data_source =
                         kind === "session" && !vpn ? "vpn_ssl"
                         : kind === "reboot" ? "device_uptime"
+                        : kind === "iface" ? "interface_state"
                         : form.data_source;
                       setForm({ ...form, kind, data_source });
                     }}
@@ -1210,6 +1217,7 @@ export default function AlertsPage() {
                     <option value="composite">Composite</option>
                     <option value="session">VPN Session Monitor</option>
                     <option value="reboot">Device Reboot Monitor</option>
+                    <option value="iface">Interface State Change</option>
                   </select>
                 </div>
                 {!isComposite ? (
@@ -1312,7 +1320,15 @@ export default function AlertsPage() {
               )}
 
               {!isComposite && !isSession && !isReboot && (<>
+              {/* Edge monitor: explain there is no metric to choose. */}
+              {isIfaceEdge && (
+                <p className="text-xs text-muted-foreground rounded-md border bg-muted/40 px-3 py-2">
+                  Fires on <b>every</b> interface state change — UP, DOWN, or ADMIN-DOWN, both
+                  directions. No metric or threshold; pick the device and interface below.
+                </p>
+              )}
               {/* Metric — catalog-driven (choose, don't type) */}
+              {!isIfaceEdge && (
               <div>
                 <label className="text-xs font-medium">Metric</label>
                 {fields.length === 0 ? (
@@ -1349,6 +1365,7 @@ export default function AlertsPage() {
                   <p className="text-[10px] text-muted-foreground mt-1">{selectedField.description}</p>
                 )}
               </div>
+              )}
 
               {/* SD-WAN link picker (sdwan_sla only) → target_key = link number */}
               {isSdwan && (
@@ -1453,8 +1470,9 @@ export default function AlertsPage() {
                 </div>
               )}
 
-              {/* Threshold controls — specialized for SD-WAN link state & interface throughput */}
-              {isSdwanStatus ? (
+              {/* Threshold controls — specialized for SD-WAN link state & interface throughput.
+                  Hidden for the iface edge monitor (fires per-transition, no threshold). */}
+              {!isIfaceEdge && (isSdwanStatus ? (
                 <div>
                   <label className="text-xs font-medium">Alert when link is</label>
                   <div className="flex mt-1 rounded-md border overflow-hidden w-fit">
@@ -1623,7 +1641,7 @@ export default function AlertsPage() {
                     )}
                   </div>
                 </div>
-              )}
+              ))}
 
               {/* appid_flow scoping — narrow the path metric to an app / protocol / dest port */}
               {isAppid && (
