@@ -217,6 +217,33 @@ SEED_TEMPLATES: list[dict] = [
         "is_default": True,
         "sort_order": 8,
     },
+    {
+        "name": "Interface State Change",
+        "category": "availability",
+        "icon": "🔌",
+        "description": "Alert on EVERY interface state transition — UP, DOWN, or ADMIN-DOWN (admin "
+                       "and oper, both directions). Event-based: fires on change, not on a sustained "
+                       "level, so monitoring all ports is safe. Enter the DEVICE IP as the target; the "
+                       "rule watches every interface on it. Uses the 'Interface State Change' message.",
+        # Edge rule (kind=iface): the engine diffs each poll's per-interface state and emits one
+        # message per transition via the notification template — the threshold fields below are
+        # inert (kept only to satisfy rule validation). site_name carries the device IP.
+        "body_template": "Interface {{ to_label }}: {{ target_name }} ({{ from_label }} → {{ to_label }})",
+        "underlying_kind": "iface",
+        "locked_fields": {
+            "data_source": "interface_state",
+            "metric_field": "oper_down",
+            "aggregation": "max",
+            "condition": "==",
+            "threshold_value": 1.0,
+            "evaluation_window_minutes": 5,
+            "sustained_for_minutes": 0,
+            "severity": "WARNING",
+        },
+        "exposed_fields": ["name", "site_name", "notify_channels"],
+        "is_default": True,
+        "sort_order": 9,
+    },
 ]
 
 
@@ -541,6 +568,35 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
             "🕐 <b>Detected at:</b> {{ fired_at }}\n"
             "⚠️ Operationally down while admin-enabled — check link / SFP / peer.\n"
             "━━━━━━━━━━━━━━━━━━{% endif %}"
+        ),
+        "line_template": None,
+        "is_default": False,
+        "is_user_created": False,
+    },
+    # Interface State Change (kind="iface"): one message per transition, branching on the
+    # destination state (event = to_state: up / down / admin_down). Shows from→to, so admin
+    # enable/disable and oper up/down all render. from_label/to_label are human forms.
+    {
+        "name": "Interface State Change",
+        "description": "Per-transition events for an interface state-change (kind=iface) rule — "
+                       "fires on every admin/oper change (UP, DOWN, ADMIN-DOWN) with the from→to.",
+        "subject_template": "{% if event == 'up' %}✅ Interface UP: {{ target_name|e }}"
+                            "{% elif event == 'admin_down' %}🟡 Interface ADMIN-DOWN: {{ target_name|e }}"
+                            "{% else %}🔴 Interface DOWN: {{ target_name|e }}{% endif %} — {{ site_name|e }}",
+        "body_template": (
+            "{% if event == 'up' %}✅ <b>INTERFACE UP</b>\n"
+            "{% elif event == 'admin_down' %}🟡 <b>INTERFACE ADMIN-DOWN</b>\n"
+            "{% else %}🔴 <b>INTERFACE DOWN</b>\n{% endif %}"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🔌 <b>Interface:</b> {{ target_name|e }}\n"
+            "{% if if_desc %}📝 <b>Description:</b> {{ if_desc|e }}\n{% endif %}"
+            "🖥️ <b>Device:</b> {{ device_name|e }}{% if device_ip %} ({{ device_ip|e }}){% endif %}\n"
+            "{% if site %}🏢 <b>Site:</b> {{ site|e }}\n{% endif %}"
+            "🔀 <b>Change:</b> {{ from_label }} → {{ to_label }}\n"
+            "📋 <b>Reason:</b> {{ change_reason|e }}\n"
+            "🏷️ <b>Rule:</b> {{ rule.name|e }} ({{ severity }})\n"
+            "🕐 <b>At:</b> {{ sent_at }}\n"
+            "━━━━━━━━━━━━━━━━━━"
         ),
         "line_template": None,
         "is_default": False,
