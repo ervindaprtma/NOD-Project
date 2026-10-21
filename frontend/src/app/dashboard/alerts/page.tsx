@@ -1435,7 +1435,7 @@ export default function AlertsPage() {
 
               {/* interface_state / interface_errors: device (→ site_name = IP) + interface (→ target_key) */}
               {isIfaceState && (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-3">
                   <div>
                     <label className="text-xs font-medium">Device</label>
                     {ifaceDevices.length === 0 ? (
@@ -1454,19 +1454,54 @@ export default function AlertsPage() {
                       </select>
                     )}
                   </div>
-                  <div>
-                    <label className="text-xs font-medium">Interface</label>
-                    <select
-                      value={form.target_key || "*"}
-                      onChange={(e) => setForm({ ...form, target_key: e.target.value })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                    >
-                      <option value="*">Any interface on this device</option>
-                      {deviceIfaces.map((i) => (
-                        <option key={i.key} value={i.key}>{i.label}</option>
-                      ))}
-                    </select>
-                  </div>
+                  {isIfaceEdge ? (
+                    // Edge monitor: multi-select — one rule can watch several interfaces.
+                    (() => {
+                      const allOn = !form.target_key || form.target_key === "*";
+                      const selected = new Set(allOn ? [] : form.target_key.split(",").map((s) => s.trim()).filter(Boolean));
+                      const setSel = (next: Set<string>) =>
+                        setForm({ ...form, target_key: next.size ? [...next].join(",") : "*" });
+                      return (
+                        <div>
+                          <label className="text-xs font-medium">Interfaces</label>
+                          <div className="mt-1 rounded-md border bg-background max-h-48 overflow-y-auto divide-y">
+                            <label className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-muted/50">
+                              <input type="checkbox" checked={allOn} onChange={() => setForm({ ...form, target_key: "*" })} />
+                              <span className="font-medium">All interfaces on this device</span>
+                            </label>
+                            {deviceIfaces.map((i) => (
+                              <label key={i.key} className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-muted/50">
+                                <input
+                                  type="checkbox"
+                                  checked={!allOn && selected.has(i.key)}
+                                  onChange={() => { const n = new Set(selected); n.has(i.key) ? n.delete(i.key) : n.add(i.key); setSel(n); }}
+                                />
+                                <span>{i.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-1">
+                            Pick one or more, or “All”. Each selected interface alerts on its own transitions.
+                          </p>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    // Level rule: single interface (or "*" = worst/any).
+                    <div>
+                      <label className="text-xs font-medium">Interface</label>
+                      <select
+                        value={form.target_key || "*"}
+                        onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                        className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      >
+                        <option value="*">Any interface on this device</option>
+                        {deviceIfaces.map((i) => (
+                          <option key={i.key} value={i.key}>{i.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
               )}
 

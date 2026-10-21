@@ -129,7 +129,7 @@ class AlertRule(Base):
     # Sub-entity selector (Phase E): for interface_stats holds the ifIndex (e.g. "3").
     # Null for sources that address a single metric or encode the sub-entity in
     # metric_field (sdwan link, traffic path).
-    target_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    target_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # interface_stats only: operator-entered link max (Mbps). When set, the % threshold is
     # stored as Mbps (threshold_value = link_max × %); this remembers the max so the UI can
     # show the % again on edit. Null = absolute-Mbps rule. Eval is unchanged (Mbps compare).

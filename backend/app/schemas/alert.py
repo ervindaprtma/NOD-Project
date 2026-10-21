@@ -37,7 +37,7 @@ class AlertClause(BaseModel):
     aggregation: str = Field(default="avg", pattern=r"^(avg|max|min|sum|count)$")
     condition: str = Field(..., pattern=r"^(>|<|>=|<=|==)$")
     threshold_value: float
-    target_key: Optional[str] = Field(default=None, max_length=64)
+    target_key: Optional[str] = Field(default=None, max_length=255)
     evaluation_window_minutes: Optional[int] = Field(default=None, ge=1)
 
 
@@ -58,7 +58,7 @@ class AlertRuleCreate(BaseModel):
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
-    target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
+    target_key: Optional[str] = Field(default=None, max_length=255)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
     kind: str = Field(default="single", pattern=r"^(single|composite|session|reboot|iface)$")
@@ -83,7 +83,7 @@ class AlertRuleUpdate(BaseModel):
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
-    target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
+    target_key: Optional[str] = Field(default=None, max_length=255)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
     kind: Optional[str] = Field(default=None, pattern=r"^(single|composite|session|reboot|iface)$")

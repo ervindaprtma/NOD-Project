@@ -2319,13 +2319,16 @@ async def _fetch_iface_states(rule: AlertRule) -> dict | None:
         return None
     if not dev or not dev.get("interfaces"):
         return None
-    glob = (rule.target_key or "").strip()
+    # target_key: "*"/blank = all interfaces; otherwise a comma-separated list of if_names
+    # (each matched as an fnmatch glob) → one rule can watch several specific interfaces.
+    raw = (rule.target_key or "").strip()
     import fnmatch
+    patterns = [t.strip() for t in raw.split(",") if t.strip()] if raw and raw != "*" else []
     states: dict[str, str] = {}
     descs: dict[str, str | None] = {}
     for i in dev["interfaces"]:
         nm = i["if_name"]
-        if glob and glob != "*" and not fnmatch.fnmatch(str(nm).lower(), glob.lower()):
+        if patterns and not any(fnmatch.fnmatch(str(nm).lower(), p.lower()) for p in patterns):
             continue
         states[nm] = i["state"]
         descs[nm] = i.get("description")
