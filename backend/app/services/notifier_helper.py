@@ -64,7 +64,7 @@ async def load_channel_configs(min_severity: str | None = None) -> dict[str, dic
 async def send_alert(
     channel: str, config: dict, subject: str, body: str,
     severity: str = "CRITICAL", raise_on_error: bool = False,
-    parse_mode: str | None = None,
+    parse_mode: str | None = None, thread_id: int | None = None,
 ) -> bool:
     """Dispatch an alert via the named channel. Returns True on success.
 
@@ -90,7 +90,7 @@ async def send_alert(
         if channel == "smtp":
             ok = await fn(subject=subject, body=body, config=config)
         elif channel == "telegram":
-            ok = await fn(message=body, config=config, parse_mode=parse_mode)
+            ok = await fn(message=body, config=config, parse_mode=parse_mode, thread_id=thread_id)
         else:
             ok = await fn(message=body, config=config)
     except NotifierError as e:

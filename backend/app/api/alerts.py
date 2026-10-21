@@ -247,6 +247,7 @@ async def create_rule_from_template(
         evaluation_window_minutes=rule_data.get("evaluation_window_minutes", 5),
         sustained_for_minutes=rule_data.get("sustained_for_minutes", 3),
         notify_channels=notify_channels,
+        telegram_thread_id=rule_data.get("telegram_thread_id"),
         site_name=rule_data.get("site_name"),
         enabled=True,
         created_by=current_user.id,
@@ -375,6 +376,7 @@ async def create_alert_rule(
         sustained_for_minutes=body.sustained_for_minutes,
         renotify_interval_minutes=body.renotify_interval_minutes,
         notify_channels=body.notify_channels,
+        telegram_thread_id=body.telegram_thread_id,
         template_id=body.template_id,
         notification_template_id=body.notification_template_id,
         site_name=body.site_name,
@@ -715,7 +717,7 @@ async def test_alert_rule(
             states = await nd_qb.alert_interface_states(
                 source_ip=rule.site_name or "", gte_ms=gte_ms, lte_ms=lte_ms
             )
-            metric_value = _extract_interface_state(rule.target_key, states) if isinstance(states, dict) else 0.0
+            metric_value = _extract_interface_state(rule.metric_field, rule.target_key, states) if isinstance(states, dict) else 0.0
         elif rule.data_source == "interface_errors":
             from app.opensearch import network_devices as nd_qb
             from app.services.alert_engine import _extract_interface_errors

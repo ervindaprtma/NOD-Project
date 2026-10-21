@@ -30,8 +30,9 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const [draftNodes, setDraftNodes] = useState<DraftNode[]>([]);
   const [draftLinks, setDraftLinks] = useState<DraftLink[]>([]);
   const [activeLink, setActiveLink] = useState<string | null>(null);
-  const [modal, setModal] = useState<null | "device">(null);
+  const [modal, setModal] = useState<null | "device" | "text">(null);
   const [saving, setSaving] = useState(false);
+  const [rotateMode, setRotateMode] = useState(false);  // toolbar toggle: drag a text node to rotate it
   // Right-click context menu + edit flows (edit mode only).
   const [ctx, setCtx] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
   const [editNode, setEditNode] = useState<DraftNode | null>(null);   // Edit Device modal
@@ -71,6 +72,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const cancelEdit = () => {
     setEditing(false);
     setModal(null);
+    setRotateMode(false);
   };
   const save = async () => {
     setSaving(true);
@@ -80,20 +82,91 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         body: JSON.stringify({
           nodes: draftNodes.map((n) => ({
             id: n.id, source_ip: n.source_ip, support: n.support,
-            display_name: n.display_name, icon_kind: n.icon_kind, icon_id: n.icon_id, x: n.x, y: n.y,
+            display_name: n.display_name, icon_kind: n.icon_kind, icon_id: n.icon_id,
+            x: n.x, y: n.y, rotation: n.rotation || 0,
           })),
           links: draftLinks.map((l) => ({
             id: l.id, a_node_id: l.a_node_id, a_if_name: l.a_if_name,
             b_node_id: l.b_node_id, b_if_name: l.b_if_name, link_type: l.link_type,
+            color: l.color || null,
           })),
         }),
       });
       setEditing(false);
+      setRotateMode(false);
       await mutate();
     } catch {
       alert("Save failed.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ── export / import (migration): dump or load the whole map as JSON ──
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const exportJson = () => {
+    const srcN = editing ? draftNodes : topo?.nodes || [];
+    const srcL = editing ? draftLinks : topo?.links || [];
+    const payload = {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      nodes: srcN.map((n) => ({
+        id: n.id, source_ip: n.source_ip, support: n.support, display_name: n.display_name,
+        icon_kind: n.icon_kind, icon_id: n.icon_id, x: n.x, y: n.y, rotation: n.rotation || 0,
+      })),
+      links: srcL.map((l) => ({
+        id: l.id, a_node_id: l.a_node_id, a_if_name: l.a_if_name, b_node_id: l.b_node_id,
+        b_if_name: l.b_if_name, link_type: l.link_type, color: l.color || null,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `topology-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    URL.revokeObjectURL(url);
+  };
+  // Import loads into the edit draft; the existing Save (PUT) persists it. Unknown icon_ids
+  // are nulled server-side (icon library is per-environment) → node falls back to its icon_kind.
+  const importJson = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        if (!Array.isArray(data?.nodes) || !Array.isArray(data?.links)) throw new Error("shape");
+        setDraftNodes(data.nodes.map((n: DraftNode) => ({ ...n, rotation: n.rotation || 0 })));
+        setDraftLinks(data.links.map((l: DraftLink) => ({
+          ...l, a_oper: null, b_oper: null, rx_mbps: 0, tx_mbps: 0,
+        })));
+        if (!editing) setEditing(true);
+      } catch {
+        alert("Invalid topology file — expected a JSON export with nodes and links.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // ── capture the full canvas (unscaled) to PNG/JPG ──
+  const captureRef = useRef<HTMLDivElement | null>(null);
+  const [capturing, setCapturing] = useState(false);
+  const capture = async (fmt: "png" | "jpg") => {
+    const node = captureRef.current;
+    if (!node) return;
+    setCapturing(true);
+    try {
+      const { toPng, toJpeg } = await import("html-to-image");  // code-split: only loaded on use
+      const bg = getComputedStyle(document.body).backgroundColor || "#ffffff";
+      // Override the live zoom transform so the export is always full-size at 2× for crispness.
+      const opts = {
+        width: w, height: h, pixelRatio: 2, backgroundColor: bg,
+        style: { transform: "scale(1)", transformOrigin: "0 0", width: `${w}px`, height: `${h}px` },
+      };
+      const dataUrl = fmt === "jpg" ? await toJpeg(node, { ...opts, quality: 0.95 }) : await toPng(node, opts);
+      const a = document.createElement("a");
+      a.href = dataUrl; a.download = `topology-${new Date().toISOString().slice(0, 10)}.${fmt}`; a.click();
+    } catch {
+      alert("Capture failed.");
+    } finally {
+      setCapturing(false);
     }
   };
 
@@ -116,20 +189,43 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
 
   // ── drag (edit mode only) — zoom-aware: screen delta ÷ zoom = canvas delta ──
   const dragRef = useRef<{ id: string; startX: number; startY: number; nodeX: number; nodeY: number } | null>(null);
+  // Rotate-drag for text nodes: store the node's on-screen centre, then angle = atan2(pointer−centre).
+  const rotRef = useRef<{ id: string; cx: number; cy: number } | null>(null);
+  const startRotate = (e: React.PointerEvent, n: DraftNode) => {
+    if (!editing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    const rect = captureRef.current?.getBoundingClientRect();
+    const cx = (rect ? rect.left : 0) + (n.x + NODE_W / 2) * zoom;
+    const cy = (rect ? rect.top : 0) + (n.y + NODE_H / 2) * zoom;
+    rotRef.current = { id: n.id, cx, cy };
+  };
   const onNodePointerDown = (e: React.PointerEvent, n: DraftNode) => {
     if (!editing) return;
+    // Rotate mode: dragging a text node's body rotates it instead of moving.
+    if (rotateMode && n.icon_kind === "text") { startRotate(e, n); return; }
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     dragRef.current = { id: n.id, startX: e.clientX, startY: e.clientY, nodeX: n.x, nodeY: n.y };
   };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
+    const r = rotRef.current;
+    if (r) {
+      // Handle points up at 0°; add 90 so "up" reads as upright. Snap 15° unless Shift held.
+      let deg = Math.atan2(e.clientY - r.cy, e.clientX - r.cx) * 180 / Math.PI + 90;
+      if (!e.shiftKey) deg = Math.round(deg / 15) * 15;
+      deg = ((Math.round(deg) % 360) + 360) % 360;
+      setDraftNodes((prev) => prev.map((n) => (n.id === r.id ? { ...n, rotation: deg } : n)));
+      return;
+    }
     const d = dragRef.current;
     if (!d) return;
     const nx = Math.max(0, snap(d.nodeX + (e.clientX - d.startX) / zoom));
     const ny = Math.max(0, snap(d.nodeY + (e.clientY - d.startY) / zoom));
     setDraftNodes((prev) => prev.map((n) => (n.id === d.id ? { ...n, x: nx, y: ny } : n)));
   };
-  const onCanvasPointerUp = () => { dragRef.current = null; };
+  const onCanvasPointerUp = () => { dragRef.current = null; rotRef.current = null; };
 
   const { w, h } = useMemo(() => {
     let mw = 600, mh = 400;
@@ -183,11 +279,26 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
             <button onClick={() => setZoom((z) => clampZoom(z * 1.1))} className="px-2 py-1 hover:bg-muted/50" title="Zoom in">+</button>
             <button onClick={fitZoom} className="px-2 py-1 hover:bg-muted/50 border-l border-border" title="Fit to screen">Fit</button>
           </div>
+          {/* Migration: export the whole map to JSON, or import one (superadmin → loads into edit). */}
+          <ToolbarBtn onClick={exportJson}>⬇ Export</ToolbarBtn>
+          {canEdit ? <ToolbarBtn onClick={() => fileRef.current?.click()}>⬆ Import</ToolbarBtn> : null}
+          {/* Capture a clean image — view mode only (edit mode shows the delete-× overlays). */}
+          {!editing && nodes.length > 0 ? (
+            <>
+              <ToolbarBtn onClick={() => capture("png")} disabled={capturing}>{capturing ? "…" : "📷 PNG"}</ToolbarBtn>
+              <ToolbarBtn onClick={() => capture("jpg")} disabled={capturing}>JPG</ToolbarBtn>
+            </>
+          ) : null}
+          <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) importJson(f); e.target.value = ""; }} />
           {canEdit ? (
             editing ? (
               <div className="flex gap-2">
                 <ToolbarBtn onClick={() => setModal("device")}>+ Device</ToolbarBtn>
                 <ToolbarBtn onClick={() => setLinkEdit({})}>+ Link</ToolbarBtn>
+                <ToolbarBtn onClick={() => setModal("text")}>+ Text</ToolbarBtn>
+                <ToolbarBtn onClick={() => setRotateMode((v) => !v)} primary={rotateMode}
+                  title="Rotate mode: drag a text node to rotate it">⟳ Rotate</ToolbarBtn>
                 <ToolbarBtn onClick={save} disabled={saving} primary>{saving ? "Saving…" : "Save"}</ToolbarBtn>
                 <ToolbarBtn onClick={cancelEdit}>Cancel</ToolbarBtn>
               </div>
@@ -217,7 +328,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         >
           {/* Outer box reserves the scaled size so scrollbars track the zoom; inner scales. */}
           <div style={{ width: w * zoom, height: h * zoom }}>
-          <div className="relative" style={{ width: w, height: h, transform: `scale(${zoom})`, transformOrigin: "0 0" }}>
+          <div ref={captureRef} className="relative" style={{ width: w, height: h, transform: `scale(${zoom})`, transformOrigin: "0 0" }}>
             <svg className="absolute inset-0" width={w} height={h}>
               {links.map((lk) => {
                 const a = nodeById[lk.a_node_id], b = nodeById[lk.b_node_id];
@@ -239,8 +350,8 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 const bLbl = { x: dbp.x - ux * IN_OFF + nx * PERP_OFF * sp, y: dbp.y - uy * IN_OFF + ny * PERP_OFF * sp };
                 return (
                   <g key={lk.id} className="cursor-pointer" onClick={() => setActiveLink(activeLink === lk.id ? null : lk.id)}>
-                    <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="currentColor"
-                      className="text-muted-foreground" strokeWidth={style.width} strokeDasharray={style.dash} />
+                    <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={lk.color || "currentColor"}
+                      className={lk.color ? "" : "text-muted-foreground"} strokeWidth={style.width} strokeDasharray={style.dash} />
                     <circle cx={da.x} cy={da.y} r={5} fill={dotColor(lkR.a_oper, a.support)}
                       stroke={a.support ? "#a1a1aa" : "none"} strokeDasharray={a.support ? "2 2" : undefined} />
                     <circle cx={dbp.x} cy={dbp.y} r={5} fill={dotColor(lkR.b_oper, b.support)}
@@ -270,23 +381,48 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 }`}
                 style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H, touchAction: "none" }}
               >
-                {/* No box/border — just the icon. Status (online/offline) sits as a dot on
-                    the icon's corner; support nodes have no state so no dot. */}
-                <span className="relative inline-flex">
-                  {n.icon_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- SVG via <img> can't run script
-                    <img src={n.icon_url} alt="" className="h-8 w-8 object-contain pointer-events-none" />
-                  ) : (
-                    <DeviceIcon kind={n.icon_kind} className="h-8 w-8 pointer-events-none" />
-                  )}
-                  {!n.support ? (
-                    <span className="absolute -top-0.5 -right-1 w-2.5 h-2.5 rounded-full ring-2 ring-background"
-                      style={{ background: n.online ? "#10b981" : "#ef4444" }} />
-                  ) : null}
-                </span>
-                <span className="mt-0.5 text-[11px] font-medium truncate max-w-full rounded bg-background/70 px-1">
-                  {n.display_name || n.source_ip}
-                </span>
+                {n.icon_kind === "text" ? (
+                  /* Text annotation node — text + (edit mode) a drag-to-rotate handle. */
+                  <>
+                    <span className="inline-block text-[12px] font-semibold text-foreground whitespace-pre-wrap break-words max-w-full rounded bg-background/70 px-1.5 py-0.5"
+                      style={{ transform: `rotate(${n.rotation || 0}deg)` }}>
+                      {n.display_name || "Text"}
+                    </span>
+                    {editing ? (
+                      <>
+                        <span
+                          onPointerDown={(e) => startRotate(e, n as DraftNode)}
+                          title="Drag to rotate (hold Shift for free angle)"
+                          className="absolute left-1/2 -translate-x-1/2 -top-3 w-3 h-3 rounded-full bg-primary ring-2 ring-background cursor-grab"
+                          style={{ touchAction: "none" }}
+                        />
+                        <span className="absolute left-1/2 -translate-x-1/2 -top-7 text-[9px] tabular-nums px-1 rounded bg-background/80 text-muted-foreground pointer-events-none">
+                          {n.rotation || 0}°
+                        </span>
+                      </>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {/* No box/border — just the icon. Status (online/offline) sits as a dot on
+                        the icon's corner; support nodes have no state so no dot. */}
+                    <span className="relative inline-flex">
+                      {n.icon_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- SVG via <img> can't run script
+                        <img src={n.icon_url} alt="" className="h-8 w-8 object-contain pointer-events-none" />
+                      ) : (
+                        <DeviceIcon kind={n.icon_kind} className="h-8 w-8 pointer-events-none" />
+                      )}
+                      {!n.support ? (
+                        <span className="absolute -top-0.5 -right-1 w-2.5 h-2.5 rounded-full ring-2 ring-background"
+                          style={{ background: n.online ? "#10b981" : "#ef4444" }} />
+                      ) : null}
+                    </span>
+                    <span className="mt-0.5 text-[11px] font-medium truncate max-w-full rounded bg-background/70 px-1">
+                      {n.display_name || n.source_ip}
+                    </span>
+                  </>
+                )}
                 {editing ? (
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteNode(n.id); }}
@@ -312,7 +448,25 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         <AddDeviceModal
           placed={new Set(draftNodes.map((n) => n.source_ip).filter(Boolean) as string[])}
           onClose={() => setModal(null)}
-          onAdd={(node) => { setDraftNodes((p) => [...p, node]); setModal(null); }}
+          onAdd={(node) => {
+            // Stagger each add onto a free grid slot (modal hands x:40,y:40 — would stack).
+            setDraftNodes((p) => [...p, { ...node, x: 40 + (p.length % 5) * 150, y: 40 + Math.floor(p.length / 5) * 100 }]);
+            setModal(null);
+          }}
+        />
+      ) : null}
+
+      {modal === "text" ? (
+        <TextModal
+          onClose={() => setModal(null)}
+          onAdd={(text, rotation) => {
+            setDraftNodes((p) => [...p, {
+              id: newId(), source_ip: null, support: true, display_name: text,
+              icon_kind: "text", icon_id: null, rotation,
+              x: 40 + (p.length % 5) * 150, y: 40 + Math.floor(p.length / 5) * 100,
+            }]);
+            setModal(null);
+          }}
         />
       ) : null}
 
@@ -329,12 +483,18 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
               ? [
                   { label: "➕ Add Device", on: () => setModal("device") },
                   { label: "🔗 Add Link", on: () => setLinkEdit({}) },
+                  { label: "📝 Add Text", on: () => setModal("text") },
                 ]
-              : [
-                  { label: "✎ Edit Device", on: () => setEditNode((draftNodes.find((n) => n.id === ctx.nodeId) as DraftNode) || null) },
-                  { label: "🔗 Edit Link", on: () => setLinksForNode(ctx.nodeId) },
-                  { label: "🗑 Delete Device", on: () => deleteNode(ctx.nodeId as string), danger: true },
-                ]
+              : (() => {
+                  const tn = draftNodes.find((n) => n.id === ctx.nodeId) as DraftNode | undefined;
+                  const isText = tn?.icon_kind === "text";
+                  return [
+                    { label: isText ? "✎ Edit Text" : "✎ Edit Device", on: () => setEditNode(tn || null) },
+                    // Text annotations don't carry interfaces, so no link management.
+                    ...(isText ? [] : [{ label: "🔗 Edit Link", on: () => setLinksForNode(ctx.nodeId as string) }]),
+                    { label: isText ? "🗑 Delete Text" : "🗑 Delete Device", on: () => deleteNode(ctx.nodeId as string), danger: true },
+                  ];
+                })()
           }
         />
       ) : null}
@@ -409,9 +569,9 @@ function addDeviceNode(d: DeviceRow, setNodes: React.Dispatch<React.SetStateActi
   }]);
 }
 
-function ToolbarBtn({ children, onClick, primary, disabled }: { children: React.ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean }) {
+function ToolbarBtn({ children, onClick, primary, disabled, title }: { children: React.ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean; title?: string }) {
   return (
-    <button onClick={onClick} disabled={disabled}
+    <button onClick={onClick} disabled={disabled} title={title}
       className={`px-2.5 py-1 text-xs rounded-md border transition disabled:opacity-50 ${
         primary ? "bg-foreground text-background border-foreground" : "border-border hover:bg-muted/50"
       }`}>{children}</button>
@@ -550,8 +710,9 @@ function AddDeviceModal({ placed, onClose, onAdd }: {
           <select value={sel} onChange={(e) => setSel(e.target.value)} className="w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background">
             <option value="">Select a monitored device…</option>
             {devices.map((d) => (
-              <option key={d.source_ip} value={d.source_ip} disabled={placed.has(d.source_ip)}>
-                {d.site} · {d.name} ({d.source_ip}){placed.has(d.source_ip) ? " — on map" : ""}
+              // Not disabled when already placed — the same device may be added more than once.
+              <option key={d.source_ip} value={d.source_ip}>
+                {d.site} · {d.name} ({d.source_ip}){placed.has(d.source_ip) ? " — already on map" : ""}
               </option>
             ))}
           </select>
@@ -585,6 +746,41 @@ function AddDeviceModal({ placed, onClose, onAdd }: {
   );
 }
 
+// Enter the text first, then add the annotation node to the canvas.
+function TextModal({ onClose, onAdd }: { onClose: () => void; onAdd: (text: string, rotation: number) => void }) {
+  const [text, setText] = useState("");
+  const [rotation, setRotation] = useState(0);
+  const add = () => { const t = text.trim(); if (t) onAdd(t, rotation); };
+  return (
+    <Modal title="Add Text" onClose={onClose}>
+      <label className="text-xs text-muted-foreground">Text</label>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus
+        placeholder="Annotation text (e.g. “Core Ring”, “To ISP”)"
+        className="w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background mt-1" />
+      <RotationField value={rotation} onChange={setRotation} />
+      <p className="text-[11px] text-muted-foreground mt-1">Free-text label — drag it anywhere on the canvas after adding.</p>
+      <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={add} disabled={!text.trim()}>Add to Canvas</ToolbarBtn></div>
+    </Modal>
+  );
+}
+
+// Rotation picker (degrees clockwise) — slider + number, shared by Add/Edit Text.
+function RotationField({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const clamp = (v: number) => ((Math.round(v) % 360) + 360) % 360;
+  return (
+    <div className="mt-3">
+      <span className="text-xs text-muted-foreground">Rotation: {value}°</span>
+      <div className="flex items-center gap-2 mt-1">
+        <input type="range" min={0} max={359} step={1} value={value}
+          onChange={(e) => onChange(clamp(Number(e.target.value)))} className="flex-1" />
+        <input type="number" min={0} max={359} value={value}
+          onChange={(e) => onChange(clamp(Number(e.target.value)))}
+          className="w-16 px-2 py-1 text-sm rounded-md border border-border bg-background" />
+      </div>
+    </div>
+  );
+}
+
 // Create a link, or edit an existing one (initial), or start a link from a fixed node (lockA).
 function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
   nodes: DraftNode[]; initial?: DraftLink; lockA?: string; onClose: () => void; onSave: (l: DraftLink) => void;
@@ -594,6 +790,7 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
   const [bId, setBId] = useState(initial?.b_node_id || "");
   const [bIf, setBIf] = useState(initial?.b_if_name || "");
   const [type, setType] = useState<"lan" | "wan" | "mpls" | "wireless">(initial?.link_type || "lan");
+  const [color, setColor] = useState<string | null>(initial?.color ?? null);
 
   const aNode = nodes.find((n) => n.id === aId);
   const bNode = nodes.find((n) => n.id === bId);
@@ -606,6 +803,7 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
     onSave({
       id: initial?.id || newId(), a_node_id: aId, a_if_name: aNode?.support ? null : aIf || null,
       b_node_id: bId, b_if_name: bNode?.support ? null : bIf || null, link_type: type,
+      color: color,
       a_oper: initial?.a_oper ?? null, b_oper: initial?.b_oper ?? null,
       rx_mbps: initial?.rx_mbps ?? 0, tx_mbps: initial?.tx_mbps ?? 0,
     });
@@ -626,6 +824,19 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
             ))}
           </div>
         </div>
+        <div>
+          <span className="text-xs text-muted-foreground">Line colour</span>
+          <div className="flex items-center gap-2 mt-1">
+            <input type="color" value={color || "#64748b"} onChange={(e) => setColor(e.target.value)}
+              className="h-7 w-10 rounded border border-border bg-background p-0.5" />
+            <span className="text-xs tabular-nums">{color || "default"}</span>
+            {color ? (
+              <button type="button" onClick={() => setColor(null)} className="text-xs text-muted-foreground hover:underline">
+                Reset to default
+              </button>
+            ) : null}
+          </div>
+        </div>
       </div>
       <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={save}>{editing ? "Save Link" : "Create Link"}</ToolbarBtn></div>
     </Modal>
@@ -637,13 +848,19 @@ function EditDeviceModal({ node, onClose, onSave }: {
   node: DraftNode; onClose: () => void; onSave: (patch: Partial<DraftNode>) => void;
 }) {
   const [name, setName] = useState(node.display_name || "");
+  const isText = node.icon_kind === "text";
   const isCustom = node.icon_kind === "custom";
   const [icon, setIcon] = useState<IconData | null>(
     isCustom && node.icon_url ? { id: node.icon_id || "", name: "", url: node.icon_url } : null,
   );
   // Built-in default type: seed from the node unless it was a custom upload.
   const [kind, setKind] = useState(isCustom ? "sw_l2" : node.icon_kind);
+  const [rotation, setRotation] = useState(node.rotation || 0);
   const save = () => {
+    if (isText) {
+      onSave({ display_name: name.trim() || "Text", rotation });  // text node: text + rotation
+      return;
+    }
     onSave({
       display_name: name.trim() || node.display_name,
       // A picked custom icon wins; otherwise store the chosen default type.
@@ -652,6 +869,19 @@ function EditDeviceModal({ node, onClose, onSave }: {
         : { icon_kind: kind, icon_id: null, icon_url: null }),
     });
   };
+  if (isText) {
+    return (
+      <Modal title="Edit Text" onClose={onClose}>
+        <label className="text-xs text-muted-foreground">Text</label>
+        <textarea value={name} onChange={(e) => setName(e.target.value)} rows={3}
+          placeholder="Annotation text"
+          className="w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background mt-1" />
+        <RotationField value={rotation} onChange={setRotation} />
+        <p className="text-[11px] text-muted-foreground mt-1">Free-text label — place it anywhere on the canvas.</p>
+        <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={save}>Save</ToolbarBtn></div>
+      </Modal>
+    );
+  }
   return (
     <Modal title="Edit Device" onClose={onClose}>
       <label className="text-xs text-muted-foreground">Display name</label>

@@ -195,6 +195,10 @@ def sample_render_ctx(
         "downtime_seconds": 150, "downtime": "2m 30s",
         "new_uptime_seconds": 240, "new_uptime": "4m",
         "prev_uptime_seconds": 3_218_400, "prev_uptime": "37d 6h",
+        # Interface state-change events (kind="iface"): from/to transition fields.
+        "from_state": "up", "to_state": "down", "from_label": "UP", "to_label": "DOWN",
+        "device_name": "SW-CORE-01", "site": "Site_FGT-DC", "if_desc": "Uplink to DC core",
+        "change_reason": "Potential physical-link or misconfiguration issue — check the cable.",
     }
 
 
@@ -469,21 +473,27 @@ def _extract_interface_stats(
     return float(iface.get(base, {}).get(agg, 0.0) or 0.0)
 
 
-def _extract_interface_state(target_key: str | None, group_result: dict[Any, Any]) -> float:
-    """1.0 if the targeted interface(s) are currently DOWN (oper down, admin up), else 0.0.
+def _extract_interface_state(metric_field: str | None, target_key: str | None,
+                             group_result: dict[Any, Any]) -> float:
+    """1.0 if the targeted interface(s) match the metric's down state, else 0.0.
 
-    target_key is the if_name; blank or "*" = "any interface on the device". admin_down
-    is NOT a firing state. Flap dampening is the rule's sustained_for_minutes (the down
-    level must hold N ticks). Missing interface → 0 (no false fire).
+    Two metrics over the 3-state enum (up / down / admin_down) from _derive_state:
+      - oper_down  (default): 1.0 when state == "down" — oper down while admin-ENABLED
+        (a real link loss). admin_down is NOT this state.
+      - admin_down:           1.0 when state == "admin_down" — admin-DISABLED port.
+    Condition picks the direction (== 1 = that down state, == 0 = up/not-that-state).
 
-    ponytail: level signal (current state), not edge — so a long outage keeps firing and
-    a flap clears on recovery. The trade-off is that an enabled-but-unused port reads as
-    `down`, so a wildcard ("*") rule is noisy on access switches; alert a specific uplink.
-    detect_transitions() (history endpoint) is the edge-based upgrade path for "*".
+    target_key is the if_name; blank or "*" = "any interface on the device". Flap dampening
+    is the rule's sustained_for_minutes. Missing interface → 0 (no false fire).
+
+    ponytail: level signal (current state), not edge — a long outage keeps firing and a flap
+    clears on recovery. An enabled-but-unused port reads oper `down`, so a wildcard ("*") oper
+    rule is noisy on access switches; alert a specific uplink, or use the iface edge monitor.
     """
+    want = "admin_down" if metric_field == "admin_down" else "down"
     if target_key in (None, "", "*"):
-        return 1.0 if any(v == "down" for v in group_result.values()) else 0.0
-    return 1.0 if group_result.get(target_key) == "down" else 0.0
+        return 1.0 if any(v == want for v in group_result.values()) else 0.0
+    return 1.0 if group_result.get(target_key) == want else 0.0
 
 
 def _extract_interface_errors(target_key: str | None, group_result: dict[Any, Any]) -> float:
@@ -607,7 +617,7 @@ def _extract_per_rule_value(
 
         if rule.data_source == "interface_state":
             if isinstance(group_result, dict):
-                return _extract_interface_state(rule.target_key, group_result)
+                return _extract_interface_state(rule.metric_field, rule.target_key, group_result)
             return None
 
         if rule.data_source == "interface_errors":
@@ -1293,7 +1303,7 @@ def _extract_per_rule_value_flat(
             return None
         if data_source == "interface_state":
             if isinstance(group_result, dict):
-                return _extract_interface_state(target_key, group_result)
+                return _extract_interface_state(metric_field, target_key, group_result)
             return None
         if data_source == "interface_errors":
             if isinstance(group_result, dict):
@@ -1705,6 +1715,13 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         _primary_rule_id = notify_queue[0][0].id if len(notify_queue) == 1 else None
         _send_meta = {"firing": n_fire, "resolved": n_res, "rules": _rule_names[:8], "subject": title}
         sent_results: dict[str, bool] = {}
+
+        def _assemble(idxs: list[int]) -> str:
+            # Rebuild a body from a subset of per-rule segments (outputs are 1:1 with notify_queue).
+            # HTML batches drop the plain header (matches the full-batch body); plain keep lines[0:2].
+            segs = [outputs[i] for i in idxs]
+            return "\n\n".join(segs) if is_html else "\n".join(lines[:2] + segs)
+
         for channel in fired_channels:
             cfg = db_configs.get(channel)
             if not cfg:
@@ -1712,12 +1729,25 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                           message=f"Channel '{channel}' wanted by a firing rule is not enabled/configured",
                           username="system", rule_id=_primary_rule_id, details=_send_meta)
                 continue  # channel not enabled/configured in Settings → nothing to send to
+            # Telegram routes per forum topic: group the firing rules by telegram_thread_id and
+            # send ONE message per topic (None → General). Other channels get one merged message.
+            if channel == "telegram":
+                topic_groups: dict = defaultdict(list)
+                for _i, (_r, _mv, _ev, _ft) in enumerate(notify_queue):
+                    topic_groups[_r.telegram_thread_id].append(_i)
+                sends = [(_assemble(idxs), tid) for tid, idxs in topic_groups.items()]
+            else:
+                sends = [(body, None)]
             try:
-                ok = await send_alert(channel, cfg, subject=title, body=body, parse_mode=parse_mode)
-                sent_results[channel] = bool(ok)
-                if ok:
+                ch_ok = True
+                for sub_body, tid in sends:
+                    ok = await send_alert(channel, cfg, subject=title, body=sub_body,
+                                          parse_mode=parse_mode, thread_id=tid)
+                    ch_ok = ch_ok and bool(ok)
+                sent_results[channel] = ch_ok
+                if ch_ok:
                     log_event(level="INFO", category="notify", event=f"{channel}.sent",
-                              message=f"{title} → {channel} ({n_fire} firing, {n_res} resolved)",
+                              message=f"{title} → {channel} ({n_fire} firing, {n_res} resolved, {len(sends)} topic(s))",
                               username="system", rule_id=_primary_rule_id, details=_send_meta)
                 else:
                     log_event(level="ERROR", category="notify", event=f"{channel}.send_failed",
@@ -1950,7 +1980,8 @@ async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict
             if not cfg:
                 continue
             try:
-                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode,
+                                      thread_id=rule.telegram_thread_id)
                 sent_results[channel] = bool(ok)
             except Exception as e:
                 sent_results[channel] = False
@@ -2186,7 +2217,8 @@ async def _send_reboot_event(rule: AlertRule, device_key: str, info: dict) -> No
             if not cfg:
                 continue
             try:
-                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode,
+                                      thread_id=rule.telegram_thread_id)
                 sent_results[channel] = bool(ok)
             except Exception as e:
                 sent_results[channel] = False
@@ -2245,6 +2277,207 @@ async def _evaluate_reboot_rule(rule: AlertRule, db: AsyncSession) -> None:
             logger.error("Reboot event send failed for %s/%s: %s", rule.id, device_key, e)
 
 
+# ── Interface State Change (kind="iface") ───────────────────────
+# Event-on-transition, not threshold: each poll snapshots every monitored interface's state
+# (up / down / admin_down, straight from alert_interface_states → _derive_state) and diffs
+# against the previous snapshot. Any change emits one event carrying from→to, so a flap, a
+# recovery, and an admin disable/enable all alert — admin AND oper, every direction. Because it
+# fires only on CHANGE, a blank/"*" interface (all ports) is safe here (unlike the level-based
+# interface_state threshold rule, which reads every enabled-but-idle port as "down").
+# rule.site_name carries the DEVICE IP (tag.source); rule.target_key is an optional if_name glob.
+
+_IFACE_STATE_LABEL = {"up": "UP", "down": "DOWN", "admin_down": "ADMIN-DOWN"}
+
+
+def _iface_change_reason(from_state: str, to_state: str) -> str:
+    """Human 'why' for a transition, by its oper/admin semantics (covers all 6 pairs)."""
+    if to_state == "admin_down":
+        return "Interface was administratively disabled by admin."
+    if to_state == "up" and from_state == "admin_down":
+        return "Interface was administratively enabled by admin."
+    if to_state == "down":
+        return ("Potential physical-link or misconfiguration issue — "
+                "check the cable or the existing configuration.")
+    # to_state == "up" from an operational down
+    return ("Resolved from a physical-link or configuration issue — "
+            "may also be a cable newly connected to another device.")
+
+
+async def _fetch_iface_states(rule: AlertRule) -> dict | None:
+    """{device_name, states:{if_name: state}, descs:{if_name: description}} for a device.
+    Uses device_interfaces (not the thin alert_interface_states) so the message can show the
+    device NAME and the interface DESCRIPTION alongside the state. None on read failure or no
+    data → caller HOLDS (never emit a phantom transition on a bad read)."""
+    now_ms = int(_time.time() * 1000)
+    window = max(rule.evaluation_window_minutes or 5, 2)
+    gte_ms = now_ms - window * 60 * 1000
+    try:
+        from app.opensearch import network_devices as nd_qb
+        dev = await nd_qb.device_interfaces(source_ip=rule.site_name or "", gte_ms=gte_ms, lte_ms=now_ms)
+    except Exception as e:
+        logger.error("Iface-state fetch failed for rule %s (%s): %s", rule.id, rule.name, e)
+        return None
+    if not dev or not dev.get("interfaces"):
+        return None
+    # target_key: "*"/blank = all interfaces; otherwise a comma-separated list of if_names
+    # (each matched as an fnmatch glob) → one rule can watch several specific interfaces.
+    raw = (rule.target_key or "").strip()
+    import fnmatch
+    patterns = [t.strip() for t in raw.split(",") if t.strip()] if raw and raw != "*" else []
+    states: dict[str, str] = {}
+    descs: dict[str, str | None] = {}
+    for i in dev["interfaces"]:
+        nm = i["if_name"]
+        if patterns and not any(fnmatch.fnmatch(str(nm).lower(), p.lower()) for p in patterns):
+            continue
+        states[nm] = i["state"]
+        descs[nm] = i.get("description")
+    if not states:
+        return None
+    return {"device_name": dev.get("name") or rule.site_name or "", "site": dev.get("site") or "",
+            "states": states, "descs": descs}
+
+
+def _diff_iface_states(
+    prev: dict[str, str], current: dict[str, str],
+) -> tuple[list[tuple[str, dict]], dict[str, str]]:
+    """Pure diff of two {if_name: state} snapshots → (events, new_state). A changed state emits
+    an event {from, to}; an interface new to `current` is baselined silently (first sighting ≠
+    transition). Pure — no cluster, no DB."""
+    events: list[tuple[str, dict]] = []
+    for name, cur in current.items():
+        old = prev.get(name)
+        if old is not None and old != cur:
+            events.append((name, {"from": old, "to": cur}))
+    return events, dict(current)
+
+
+async def _evaluate_iface_rule(rule: AlertRule, db: AsyncSession) -> None:
+    """Diff current interface states vs the previous poll → transition events."""
+    current = await _fetch_iface_states(rule)
+    state = (await db.execute(select(AlertState).where(AlertState.rule_id == rule.id))).scalar_one_or_none()
+    if not state:
+        state = AlertState(rule_id=rule.id, state="INACTIVE")
+        db.add(state)
+    now = datetime.now(timezone.utc)
+    state.last_evaluated_at = now
+
+    if current is None:  # read failed / no data → hold
+        state.last_read_degraded = True
+        await db.commit()
+        return
+    state.last_read_degraded = False
+    states = current["states"]
+    state.last_value = float(sum(1 for v in states.values() if v != "up"))  # # of non-up ports
+    prev = state.session_state
+
+    if prev is None:  # first run (or after enable): baseline only
+        state.session_state = states
+        state.last_state_change_at = now
+        await db.commit()
+        return
+
+    events, new_state = _diff_iface_states(prev, states)
+    state.session_state = new_state
+    if events:
+        state.last_state_change_at = now
+    await db.commit()
+
+    for if_name, info in events:
+        try:
+            await _send_iface_event(rule, if_name, info,
+                                    device_name=current["device_name"], site=current["site"],
+                                    if_desc=current["descs"].get(if_name))
+        except Exception as e:
+            logger.error("Iface event send failed for %s/%s: %s", rule.id, if_name, e)
+
+
+async def _send_iface_event(rule: AlertRule, if_name: str, info: dict,
+                            device_name: str | None = None, site: str | None = None,
+                            if_desc: str | None = None) -> None:
+    """Render + send ONE message for a single interface state transition."""
+    from_state, to_state = info["from"], info["to"]
+    now_str = datetime.now(_WIB).strftime("%d %b %Y %H:%M:%S WIB")
+    dev_name = device_name or rule.site_name or "—"
+    ctx = {
+        "rule": {"name": rule.name, "severity": rule.severity, "site_name": rule.site_name},
+        "name": rule.name, "severity": rule.severity, "site_name": rule.site_name,
+        "target_name": if_name, "target_key": if_name,
+        "device_name": dev_name, "device_ip": rule.site_name or "",
+        "site": site or "", "if_desc": if_desc or "",
+        "from_state": from_state, "to_state": to_state,
+        "from_label": _IFACE_STATE_LABEL.get(from_state, from_state.upper()),
+        "to_label": _IFACE_STATE_LABEL.get(to_state, to_state.upper()),
+        "change_reason": _iface_change_reason(from_state, to_state),
+        # `event` is the destination state so templates branch on up/down/admin_down.
+        "event": to_state, "event_label": _IFACE_STATE_LABEL.get(to_state, to_state),
+        "fired_at": now_str, "sent_at": now_str,
+    }
+    # Template: assigned (active) → seeded "Interface State Change" → hardcoded fallback.
+    tmpl_text: str | None = None
+    try:
+        async with AsyncSessionLocal() as tdb:
+            if rule.notification_template_id:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.id == rule.notification_template_id)
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+            if not tmpl_text:
+                row = (await tdb.execute(
+                    select(NotificationTemplate.body_template)
+                    .where(NotificationTemplate.name == "Interface State Change")
+                    .where(NotificationTemplate.is_active == True)  # noqa: E712
+                )).first()
+                tmpl_text = row[0] if row else None
+    except Exception as e:
+        logger.error("Iface template fetch failed: %s", e)
+
+    body: str | None = None
+    if tmpl_text:
+        try:
+            body = _render_template(tmpl_text, ctx)
+        except Exception as e:
+            logger.error("Iface template render failed for rule %s: %s", rule.id, e)
+    if body is None:
+        nm = html.escape(if_name)
+        dev = html.escape(f"{dev_name} ({rule.site_name})" if rule.site_name else dev_name)
+        desc_line = f"📝 <b>Description:</b> {html.escape(if_desc)}\n" if if_desc else ""
+        site_line = f"🏢 <b>Site:</b> {html.escape(site)}\n" if site else ""
+        body = (f"🔌 <b>Interface {ctx['to_label']}</b>\n"
+                f"🔌 <b>Interface:</b> {nm}\n{desc_line}🖥️ <b>Device:</b> {dev}\n{site_line}"
+                f"🔀 <b>Change:</b> {ctx['from_label']} → {ctx['to_label']}\n"
+                f"📋 <b>Reason:</b> {html.escape(ctx['change_reason'])}\n"
+                f"🏷️ <b>Rule:</b> {html.escape(rule.name)} ({rule.severity})\n"
+                f"🕐 <b>At:</b> {now_str}")
+    parse_mode = "HTML" if "<b>" in body else None
+    subject = f"Interface {ctx['to_label']}: {if_name} ({ctx['from_label']}→{ctx['to_label']})"
+    sent_results: dict[str, bool] = {}
+    try:
+        from app.services.notifier_helper import send_alert, load_channel_configs
+        db_configs = await load_channel_configs()
+        for channel in rule.notify_channels:
+            cfg = db_configs.get(channel)
+            if not cfg:
+                continue
+            try:
+                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode,
+                                      thread_id=rule.telegram_thread_id)
+                sent_results[channel] = bool(ok)
+            except Exception as e:
+                sent_results[channel] = False
+                logger.error("Iface notify failed for %s: %s", channel, e)
+    except Exception as e:
+        logger.error("Iface notify error: %s", e)
+
+    snap = {"site_name": rule.site_name, "interface": if_name, "device_ip": rule.site_name,
+            "from_state": from_state, "to_state": to_state, "at": now_str,
+            "_code_key": f"iface:{rule.site_name}:{if_name}"}
+    await _log_event_history(rule, to_state, datetime.now(timezone.utc), 0.0,
+                             snap, subject, body, sent_results, list(rule.notify_channels))
+
+
 async def _run_evaluation_cycle() -> None:
     """One tick: enabled rules → grouped OS queries → state machine → batched notify.
 
@@ -2277,10 +2510,11 @@ async def _run_evaluation_cycle() -> None:
                 logger.info("Maintenance window active — skipping %s rule(s)", skipped)
 
             # Split single vs composite
-            single_rules = [r for r in active_rules if r.kind not in ("composite", "session", "reboot")]
+            single_rules = [r for r in active_rules if r.kind not in ("composite", "session", "reboot", "iface")]
             composite_rules = [r for r in active_rules if r.kind == "composite"]
             session_rules = [r for r in active_rules if r.kind == "session"]
             reboot_rules = [r for r in active_rules if r.kind == "reboot"]
+            iface_rules = [r for r in active_rules if r.kind == "iface"]
 
             # ── 1. Single rules (P1 batched) ──
             # Group key is (ds, site, window, appid_sig): appid_flow rules with a distinct
@@ -2412,6 +2646,14 @@ async def _run_evaluation_cycle() -> None:
                     await _evaluate_reboot_rule(rule, db)
                 except Exception as e:
                     logger.error("Error evaluating reboot rule %s (%s): %s", rule.id, rule.name, e)
+                    await db.rollback()
+
+            # ── 5a. Interface state-change monitors (event-on-transition, sent inline) ──
+            for rule in iface_rules:
+                try:
+                    await _evaluate_iface_rule(rule, db)
+                except Exception as e:
+                    logger.error("Error evaluating iface rule %s (%s): %s", rule.id, rule.name, e)
                     await db.rollback()
 
             # ── 5b. Counter-wrap detector (independent of any rule — point-event, no resolve).

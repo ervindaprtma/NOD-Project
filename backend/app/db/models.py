@@ -129,7 +129,7 @@ class AlertRule(Base):
     # Sub-entity selector (Phase E): for interface_stats holds the ifIndex (e.g. "3").
     # Null for sources that address a single metric or encode the sub-entity in
     # metric_field (sdwan link, traffic path).
-    target_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    target_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # interface_stats only: operator-entered link max (Mbps). When set, the % threshold is
     # stored as Mbps (threshold_value = link_max × %); this remembers the max so the UI can
     # show the % again on edit. Null = absolute-Mbps rule. Eval is unchanged (Mbps compare).
@@ -150,6 +150,10 @@ class AlertRule(Base):
     # ALERT_RENOTIFY_INTERVAL_MINUTES; 0 = notify once (no reminders); N>0 = every N min.
     renotify_interval_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     notify_channels: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    telegram_thread_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Telegram forum topic (message_thread_id); NULL = General topic",
+    )
     clauses: Mapped[list[dict]] = mapped_column(
         JSONB, nullable=False, default=list,
         comment="Composite rule clauses (P5). List of {\"data_source\", \"metric_field\", ...} dicts.",
@@ -734,8 +738,9 @@ class TopologyNode(Base):
         UUID(as_uuid=False), primary_key=True, default=_new_uuid
     )
     source_ip: Mapped[Optional[str]] = mapped_column(
-        String(45), unique=True, nullable=True
-    )  # NULL for support nodes; = tag.source for data nodes
+        String(45), nullable=True
+    )  # NULL for support/text nodes; = tag.source for data nodes (may repeat — same device can
+       # be placed on the map more than once)
     support: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     icon_kind: Mapped[str] = mapped_column(
@@ -746,6 +751,10 @@ class TopologyNode(Base):
     )  # overrides icon_kind art when set
     x: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     y: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rotation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Degrees clockwise (text annotation nodes); 0 = upright",
+    )
 
 
 class TopologyLink(Base):
@@ -771,6 +780,10 @@ class TopologyLink(Base):
     link_type: Mapped[str] = mapped_column(
         String(16), nullable=False, default="lan"
     )  # lan, wan, mpls, wireless
+    color: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True,
+        comment="Optional per-link stroke colour (hex); NULL = default muted stroke",
+    )
 
 
 class DeviceOverride(Base):

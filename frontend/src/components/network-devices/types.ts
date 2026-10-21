@@ -121,6 +121,7 @@ export interface TopologyNode {
   icon_url?: string | null; // resolved uploaded-icon URL
   x: number;
   y: number;
+  rotation?: number; // degrees clockwise (text annotation nodes); 0 = upright
   online: boolean | null; // support nodes: null (never state-coloured)
 }
 
@@ -137,6 +138,7 @@ export interface TopologyLink {
   b_node_id: string;
   b_if_name: string | null;
   link_type: "lan" | "wan" | "mpls" | "wireless";
+  color?: string | null; // optional per-link stroke colour (hex); null = default muted
   a_oper: string | null;
   b_oper: string | null;
   rx_mbps: number;

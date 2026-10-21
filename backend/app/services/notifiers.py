@@ -129,7 +129,7 @@ async def _email_with_attachment(subject: str, body: str, file_path: str, recipi
 
 
 async def _telegram_alert(message: str, config: dict | None = None,
-                          parse_mode: str | None = None) -> bool:
+                          parse_mode: str | None = None, thread_id: int | None = None) -> bool:
     token = (config or {}).get("bot_token", settings.TELEGRAM_BOT_TOKEN)
     chat = (config or {}).get("chat_id", settings.TELEGRAM_CHAT_ID)
     # parse_mode comes from the explicit arg or the channel config; "HTML" enables the
@@ -146,6 +146,9 @@ async def _telegram_alert(message: str, config: dict | None = None,
             payload = {"chat_id": chat, "text": message}
             if mode:
                 payload["parse_mode"] = mode
+            # Forum/topic routing: a message_thread_id sends into that topic; omitted = General.
+            if thread_id:
+                payload["message_thread_id"] = thread_id
             r = await c.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json=payload,
@@ -164,9 +167,12 @@ async def _telegram_alert(message: str, config: dict | None = None,
         # alert. Retry once as plain text — tags show literally, but the message gets there.
         if mode and r.status_code == 400 and "parse" in desc.lower():
             async with httpx.AsyncClient(timeout=_T) as c:
+                retry = {"chat_id": chat, "text": message}
+                if thread_id:
+                    retry["message_thread_id"] = thread_id
                 r2 = await c.post(
                     f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={"chat_id": chat, "text": message},
+                    json=retry,
                 )
             if r2.status_code == 200:
                 return True

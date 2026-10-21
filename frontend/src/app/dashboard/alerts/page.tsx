@@ -127,7 +127,7 @@ interface ClauseForm {
 interface RuleForm {
   name: string;
   severity: string;
-  kind: "single" | "composite" | "session" | "reboot";
+  kind: "single" | "composite" | "session" | "reboot" | "iface";
   notify_when: "any" | "all";   // composite: Any=OR, All=AND
   clauses: ClauseForm[];
   data_source: string;
@@ -152,6 +152,7 @@ interface RuleForm {
   sustained_for_minutes: number;
   renotify_interval_minutes: number;   // reminder cadence while firing; 0 = notify once
   notify_channels: string[];
+  telegram_thread_id: string;   // Telegram forum topic (message_thread_id); "" = General
   notification_template_id: string;
   site_name: string;
   enabled: boolean;
@@ -183,6 +184,7 @@ const emptyForm: RuleForm = {
   sustained_for_minutes: 2,
   renotify_interval_minutes: 30,
   notify_channels: ["telegram"],
+  telegram_thread_id: "",
   notification_template_id: "",
   site_name: "Site_FGT-DC",
   enabled: true,
@@ -196,6 +198,7 @@ type AlertTemplateLite = {
   name: string;
   icon: string;
   category: string;
+  underlying_kind?: string;  // single | composite | session | reboot | iface
   locked_fields: Record<string, string | number | undefined>;
 };
 
@@ -448,6 +451,8 @@ export default function AlertsPage() {
   // the canonical site only scopes the device list (local state), the chosen device IP goes
   // into site_name, and the if_name (or "*") into target_key.
   const isIfaceState = form.data_source === "interface_state" || form.data_source === "interface_errors";
+  // Interface state-change (edge) monitor: fires on every transition, so no metric/threshold.
+  const isIfaceEdge = form.kind === "iface";
   const [ifaceSite, setIfaceSite] = useState(SITES[0]);
   const { data: ifaceDevData } = useSWR<{ data: { key: string; label: string }[] }>(
     showModal && isIfaceState && SITES.includes(ifaceSite)
@@ -617,6 +622,7 @@ export default function AlertsPage() {
       // null (inherit the global default) surfaces as the default value in the form.
       renotify_interval_minutes: rule.renotify_interval_minutes ?? 30,
       notify_channels: rule.notify_channels,
+      telegram_thread_id: rule.telegram_thread_id != null ? String(rule.telegram_thread_id) : "",
       notification_template_id: rule.notification_template_id || "",
       site_name: rule.site_name || "",
       enabled: rule.enabled,
@@ -688,6 +694,8 @@ export default function AlertsPage() {
       target_key: keepsTargetKey ? (form.target_key || null) : null,
       link_max_mbps: keepsLinkMax ? form.link_max_mbps : null,
       appid_filter,
+      // Telegram topic: "" → null (General); otherwise the integer message_thread_id.
+      telegram_thread_id: form.telegram_thread_id.trim() ? Number(form.telegram_thread_id) : null,
       notification_template_id: form.notification_template_id || null,
       clauses: form.kind === "composite" ? cleanClauses : [],
       ...composite,
@@ -850,6 +858,9 @@ export default function AlertsPage() {
                 setForm({
                   ...emptyForm,
                   name: `[Template] ${t.name}`,
+                  // Carry the template's kind (e.g. "iface" edge monitor) — without this the
+                  // rule defaulted to "single" and hit the threshold path instead.
+                  ...(t.underlying_kind ? { kind: t.underlying_kind as RuleForm["kind"] } : {}),
                   ...(lf.data_source ? { data_source: String(lf.data_source) } : {}),
                   ...(lf.metric_field ? { metric_field: String(lf.metric_field) } : {}),
                   ...(lf.aggregation ? { aggregation: String(lf.aggregation) } : {}),
@@ -1189,13 +1200,14 @@ export default function AlertsPage() {
                   <select
                     value={form.kind}
                     onChange={(e) => {
-                      const kind = e.target.value as "single" | "composite" | "session" | "reboot";
-                      // Session monitors only apply to SSL/IPsec; reboot monitors only to device_uptime
-                      // — snap the source when switching in.
+                      const kind = e.target.value as RuleForm["kind"];
+                      // Event monitors are tied to a source: session → SSL/IPsec, reboot →
+                      // device_uptime, iface (interface state-change) → interface_state. Snap it.
                       const vpn = form.data_source === "vpn_ssl" || form.data_source === "vpn_ipsec";
                       const data_source =
                         kind === "session" && !vpn ? "vpn_ssl"
                         : kind === "reboot" ? "device_uptime"
+                        : kind === "iface" ? "interface_state"
                         : form.data_source;
                       setForm({ ...form, kind, data_source });
                     }}
@@ -1205,6 +1217,7 @@ export default function AlertsPage() {
                     <option value="composite">Composite</option>
                     <option value="session">VPN Session Monitor</option>
                     <option value="reboot">Device Reboot Monitor</option>
+                    <option value="iface">Interface State Change</option>
                   </select>
                 </div>
                 {!isComposite ? (
@@ -1307,7 +1320,15 @@ export default function AlertsPage() {
               )}
 
               {!isComposite && !isSession && !isReboot && (<>
+              {/* Edge monitor: explain there is no metric to choose. */}
+              {isIfaceEdge && (
+                <p className="text-xs text-muted-foreground rounded-md border bg-muted/40 px-3 py-2">
+                  Fires on <b>every</b> interface state change — UP, DOWN, or ADMIN-DOWN, both
+                  directions. No metric or threshold; pick the device and interface below.
+                </p>
+              )}
               {/* Metric — catalog-driven (choose, don't type) */}
+              {!isIfaceEdge && (
               <div>
                 <label className="text-xs font-medium">Metric</label>
                 {fields.length === 0 ? (
@@ -1344,6 +1365,7 @@ export default function AlertsPage() {
                   <p className="text-[10px] text-muted-foreground mt-1">{selectedField.description}</p>
                 )}
               </div>
+              )}
 
               {/* SD-WAN link picker (sdwan_sla only) → target_key = link number */}
               {isSdwan && (
@@ -1413,7 +1435,7 @@ export default function AlertsPage() {
 
               {/* interface_state / interface_errors: device (→ site_name = IP) + interface (→ target_key) */}
               {isIfaceState && (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-3">
                   <div>
                     <label className="text-xs font-medium">Device</label>
                     {ifaceDevices.length === 0 ? (
@@ -1432,24 +1454,60 @@ export default function AlertsPage() {
                       </select>
                     )}
                   </div>
-                  <div>
-                    <label className="text-xs font-medium">Interface</label>
-                    <select
-                      value={form.target_key || "*"}
-                      onChange={(e) => setForm({ ...form, target_key: e.target.value })}
-                      className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
-                    >
-                      <option value="*">Any interface on this device</option>
-                      {deviceIfaces.map((i) => (
-                        <option key={i.key} value={i.key}>{i.label}</option>
-                      ))}
-                    </select>
-                  </div>
+                  {isIfaceEdge ? (
+                    // Edge monitor: multi-select — one rule can watch several interfaces.
+                    (() => {
+                      const allOn = !form.target_key || form.target_key === "*";
+                      const selected = new Set(allOn ? [] : form.target_key.split(",").map((s) => s.trim()).filter(Boolean));
+                      const setSel = (next: Set<string>) =>
+                        setForm({ ...form, target_key: next.size ? [...next].join(",") : "*" });
+                      return (
+                        <div>
+                          <label className="text-xs font-medium">Interfaces</label>
+                          <div className="mt-1 rounded-md border bg-background max-h-48 overflow-y-auto divide-y">
+                            <label className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-muted/50">
+                              <input type="checkbox" checked={allOn} onChange={() => setForm({ ...form, target_key: "*" })} />
+                              <span className="font-medium">All interfaces on this device</span>
+                            </label>
+                            {deviceIfaces.map((i) => (
+                              <label key={i.key} className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-muted/50">
+                                <input
+                                  type="checkbox"
+                                  checked={!allOn && selected.has(i.key)}
+                                  onChange={() => { const n = new Set(selected); n.has(i.key) ? n.delete(i.key) : n.add(i.key); setSel(n); }}
+                                />
+                                <span>{i.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-1">
+                            Pick one or more, or “All”. Each selected interface alerts on its own transitions.
+                          </p>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    // Level rule: single interface (or "*" = worst/any).
+                    <div>
+                      <label className="text-xs font-medium">Interface</label>
+                      <select
+                        value={form.target_key || "*"}
+                        onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                        className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                      >
+                        <option value="*">Any interface on this device</option>
+                        {deviceIfaces.map((i) => (
+                          <option key={i.key} value={i.key}>{i.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Threshold controls — specialized for SD-WAN link state & interface throughput */}
-              {isSdwanStatus ? (
+              {/* Threshold controls — specialized for SD-WAN link state & interface throughput.
+                  Hidden for the iface edge monitor (fires per-transition, no threshold). */}
+              {!isIfaceEdge && (isSdwanStatus ? (
                 <div>
                   <label className="text-xs font-medium">Alert when link is</label>
                   <div className="flex mt-1 rounded-md border overflow-hidden w-fit">
@@ -1618,7 +1676,7 @@ export default function AlertsPage() {
                     )}
                   </div>
                 </div>
-              )}
+              ))}
 
               {/* appid_flow scoping — narrow the path metric to an app / protocol / dest port */}
               {isAppid && (
@@ -1856,6 +1914,25 @@ export default function AlertsPage() {
                   ))}
                 </div>
               </div>
+
+              {/* Telegram forum topic (message_thread_id) — only meaningful when Telegram is on. */}
+              {form.notify_channels.includes("telegram") ? (
+                <div>
+                  <label className="text-xs font-medium">Telegram topic ID</label>
+                  <input
+                    type="number"
+                    min={1}
+                    inputMode="numeric"
+                    value={form.telegram_thread_id}
+                    onChange={(e) => setForm({ ...form, telegram_thread_id: e.target.value })}
+                    placeholder="e.g. 37506 — blank = General topic"
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    message_thread_id of the supergroup topic this alert posts to. Leave blank for the General topic.
+                  </p>
+                </div>
+              ) : null}
 
               {/* Message template assignment (§11.1) */}
               <div>

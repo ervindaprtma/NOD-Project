@@ -37,7 +37,7 @@ class AlertClause(BaseModel):
     aggregation: str = Field(default="avg", pattern=r"^(avg|max|min|sum|count)$")
     condition: str = Field(..., pattern=r"^(>|<|>=|<=|==)$")
     threshold_value: float
-    target_key: Optional[str] = Field(default=None, max_length=64)
+    target_key: Optional[str] = Field(default=None, max_length=255)
     evaluation_window_minutes: Optional[int] = Field(default=None, ge=1)
 
 
@@ -54,13 +54,14 @@ class AlertRuleCreate(BaseModel):
     # Re-notify cadence while FIRING: None = inherit global default, 0 = notify once, N = every N min.
     renotify_interval_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     notify_channels: list[str] = Field(default_factory=list)
+    telegram_thread_id: Optional[int] = Field(default=None, ge=1)  # Telegram forum topic
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
-    target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
+    target_key: Optional[str] = Field(default=None, max_length=255)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
-    kind: str = Field(default="single", pattern=r"^(single|composite|session|reboot)$")
+    kind: str = Field(default="single", pattern=r"^(single|composite|session|reboot|iface)$")
     notify_when: str = Field(default="any", pattern=r"^(any|all)$")  # composite: OR / AND
     clauses: list[AlertClause] = Field(default_factory=list)
     enabled: bool = True
@@ -78,13 +79,14 @@ class AlertRuleUpdate(BaseModel):
     sustained_for_minutes: Optional[int] = Field(default=None, ge=0)
     renotify_interval_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     notify_channels: Optional[list[str]] = None
+    telegram_thread_id: Optional[int] = Field(default=None, ge=1)  # Telegram forum topic
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
-    target_key: Optional[str] = Field(default=None, max_length=64)  # interface_stats ifIndex
+    target_key: Optional[str] = Field(default=None, max_length=255)  # interface_stats ifIndex
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
-    kind: Optional[str] = Field(default=None, pattern=r"^(single|composite|session|reboot)$")
+    kind: Optional[str] = Field(default=None, pattern=r"^(single|composite|session|reboot|iface)$")
     notify_when: Optional[str] = Field(default=None, pattern=r"^(any|all)$")
     clauses: Optional[list[AlertClause]] = None
     enabled: Optional[bool] = None
@@ -109,6 +111,7 @@ class AlertRuleRead(BaseModel):
     sustained_for_minutes: int
     renotify_interval_minutes: Optional[int] = None
     notify_channels: list[str]
+    telegram_thread_id: Optional[int] = None
     template_id: Optional[str] = None
     notification_template_id: Optional[str] = None
     enabled: bool
