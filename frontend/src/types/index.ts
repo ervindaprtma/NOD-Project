@@ -384,6 +384,7 @@ export interface AlertRule {
   sustained_for_minutes: number;
   renotify_interval_minutes?: number | null;
   notify_channels: string[];
+  telegram_thread_id?: number | null;
   site_name: string | null;
   enabled: boolean;
   state?: string | null; // live state machine: INACTIVE | PENDING | FIRING | RESOLVED

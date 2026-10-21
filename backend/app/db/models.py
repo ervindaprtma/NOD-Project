@@ -150,6 +150,10 @@ class AlertRule(Base):
     # ALERT_RENOTIFY_INTERVAL_MINUTES; 0 = notify once (no reminders); N>0 = every N min.
     renotify_interval_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     notify_channels: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    telegram_thread_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Telegram forum topic (message_thread_id); NULL = General topic",
+    )
     clauses: Mapped[list[dict]] = mapped_column(
         JSONB, nullable=False, default=list,
         comment="Composite rule clauses (P5). List of {\"data_source\", \"metric_field\", ...} dicts.",

@@ -54,6 +54,7 @@ class AlertRuleCreate(BaseModel):
     # Re-notify cadence while FIRING: None = inherit global default, 0 = notify once, N = every N min.
     renotify_interval_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     notify_channels: list[str] = Field(default_factory=list)
+    telegram_thread_id: Optional[int] = Field(default=None, ge=1)  # Telegram forum topic
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
@@ -78,6 +79,7 @@ class AlertRuleUpdate(BaseModel):
     sustained_for_minutes: Optional[int] = Field(default=None, ge=0)
     renotify_interval_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     notify_channels: Optional[list[str]] = None
+    telegram_thread_id: Optional[int] = Field(default=None, ge=1)  # Telegram forum topic
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
@@ -109,6 +111,7 @@ class AlertRuleRead(BaseModel):
     sustained_for_minutes: int
     renotify_interval_minutes: Optional[int] = None
     notify_channels: list[str]
+    telegram_thread_id: Optional[int] = None
     template_id: Optional[str] = None
     notification_template_id: Optional[str] = None
     enabled: bool

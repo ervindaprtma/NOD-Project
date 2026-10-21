@@ -152,6 +152,7 @@ interface RuleForm {
   sustained_for_minutes: number;
   renotify_interval_minutes: number;   // reminder cadence while firing; 0 = notify once
   notify_channels: string[];
+  telegram_thread_id: string;   // Telegram forum topic (message_thread_id); "" = General
   notification_template_id: string;
   site_name: string;
   enabled: boolean;
@@ -183,6 +184,7 @@ const emptyForm: RuleForm = {
   sustained_for_minutes: 2,
   renotify_interval_minutes: 30,
   notify_channels: ["telegram"],
+  telegram_thread_id: "",
   notification_template_id: "",
   site_name: "Site_FGT-DC",
   enabled: true,
@@ -617,6 +619,7 @@ export default function AlertsPage() {
       // null (inherit the global default) surfaces as the default value in the form.
       renotify_interval_minutes: rule.renotify_interval_minutes ?? 30,
       notify_channels: rule.notify_channels,
+      telegram_thread_id: rule.telegram_thread_id != null ? String(rule.telegram_thread_id) : "",
       notification_template_id: rule.notification_template_id || "",
       site_name: rule.site_name || "",
       enabled: rule.enabled,
@@ -688,6 +691,8 @@ export default function AlertsPage() {
       target_key: keepsTargetKey ? (form.target_key || null) : null,
       link_max_mbps: keepsLinkMax ? form.link_max_mbps : null,
       appid_filter,
+      // Telegram topic: "" → null (General); otherwise the integer message_thread_id.
+      telegram_thread_id: form.telegram_thread_id.trim() ? Number(form.telegram_thread_id) : null,
       notification_template_id: form.notification_template_id || null,
       clauses: form.kind === "composite" ? cleanClauses : [],
       ...composite,
@@ -1856,6 +1861,25 @@ export default function AlertsPage() {
                   ))}
                 </div>
               </div>
+
+              {/* Telegram forum topic (message_thread_id) — only meaningful when Telegram is on. */}
+              {form.notify_channels.includes("telegram") ? (
+                <div>
+                  <label className="text-xs font-medium">Telegram topic ID</label>
+                  <input
+                    type="number"
+                    min={1}
+                    inputMode="numeric"
+                    value={form.telegram_thread_id}
+                    onChange={(e) => setForm({ ...form, telegram_thread_id: e.target.value })}
+                    placeholder="e.g. 37506 — blank = General topic"
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    message_thread_id of the supergroup topic this alert posts to. Leave blank for the General topic.
+                  </p>
+                </div>
+              ) : null}
 
               {/* Message template assignment (§11.1) */}
               <div>

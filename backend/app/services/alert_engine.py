@@ -1709,6 +1709,13 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         _primary_rule_id = notify_queue[0][0].id if len(notify_queue) == 1 else None
         _send_meta = {"firing": n_fire, "resolved": n_res, "rules": _rule_names[:8], "subject": title}
         sent_results: dict[str, bool] = {}
+
+        def _assemble(idxs: list[int]) -> str:
+            # Rebuild a body from a subset of per-rule segments (outputs are 1:1 with notify_queue).
+            # HTML batches drop the plain header (matches the full-batch body); plain keep lines[0:2].
+            segs = [outputs[i] for i in idxs]
+            return "\n\n".join(segs) if is_html else "\n".join(lines[:2] + segs)
+
         for channel in fired_channels:
             cfg = db_configs.get(channel)
             if not cfg:
@@ -1716,12 +1723,25 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                           message=f"Channel '{channel}' wanted by a firing rule is not enabled/configured",
                           username="system", rule_id=_primary_rule_id, details=_send_meta)
                 continue  # channel not enabled/configured in Settings → nothing to send to
+            # Telegram routes per forum topic: group the firing rules by telegram_thread_id and
+            # send ONE message per topic (None → General). Other channels get one merged message.
+            if channel == "telegram":
+                topic_groups: dict = defaultdict(list)
+                for _i, (_r, _mv, _ev, _ft) in enumerate(notify_queue):
+                    topic_groups[_r.telegram_thread_id].append(_i)
+                sends = [(_assemble(idxs), tid) for tid, idxs in topic_groups.items()]
+            else:
+                sends = [(body, None)]
             try:
-                ok = await send_alert(channel, cfg, subject=title, body=body, parse_mode=parse_mode)
-                sent_results[channel] = bool(ok)
-                if ok:
+                ch_ok = True
+                for sub_body, tid in sends:
+                    ok = await send_alert(channel, cfg, subject=title, body=sub_body,
+                                          parse_mode=parse_mode, thread_id=tid)
+                    ch_ok = ch_ok and bool(ok)
+                sent_results[channel] = ch_ok
+                if ch_ok:
                     log_event(level="INFO", category="notify", event=f"{channel}.sent",
-                              message=f"{title} → {channel} ({n_fire} firing, {n_res} resolved)",
+                              message=f"{title} → {channel} ({n_fire} firing, {n_res} resolved, {len(sends)} topic(s))",
                               username="system", rule_id=_primary_rule_id, details=_send_meta)
                 else:
                     log_event(level="ERROR", category="notify", event=f"{channel}.send_failed",
@@ -1954,7 +1974,8 @@ async def _send_session_event(rule: AlertRule, event: str, user: str, info: dict
             if not cfg:
                 continue
             try:
-                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode,
+                                      thread_id=rule.telegram_thread_id)
                 sent_results[channel] = bool(ok)
             except Exception as e:
                 sent_results[channel] = False
@@ -2190,7 +2211,8 @@ async def _send_reboot_event(rule: AlertRule, device_key: str, info: dict) -> No
             if not cfg:
                 continue
             try:
-                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode,
+                                      thread_id=rule.telegram_thread_id)
                 sent_results[channel] = bool(ok)
             except Exception as e:
                 sent_results[channel] = False
@@ -2431,7 +2453,8 @@ async def _send_iface_event(rule: AlertRule, if_name: str, info: dict,
             if not cfg:
                 continue
             try:
-                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode)
+                ok = await send_alert(channel, cfg, subject=subject, body=body, parse_mode=parse_mode,
+                                      thread_id=rule.telegram_thread_id)
                 sent_results[channel] = bool(ok)
             except Exception as e:
                 sent_results[channel] = False
