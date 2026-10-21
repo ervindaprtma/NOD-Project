@@ -99,6 +99,74 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
     }
   };
 
+  // ── export / import (migration): dump or load the whole map as JSON ──
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const exportJson = () => {
+    const srcN = editing ? draftNodes : topo?.nodes || [];
+    const srcL = editing ? draftLinks : topo?.links || [];
+    const payload = {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      nodes: srcN.map((n) => ({
+        id: n.id, source_ip: n.source_ip, support: n.support, display_name: n.display_name,
+        icon_kind: n.icon_kind, icon_id: n.icon_id, x: n.x, y: n.y, rotation: n.rotation || 0,
+      })),
+      links: srcL.map((l) => ({
+        id: l.id, a_node_id: l.a_node_id, a_if_name: l.a_if_name, b_node_id: l.b_node_id,
+        b_if_name: l.b_if_name, link_type: l.link_type, color: l.color || null,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `topology-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    URL.revokeObjectURL(url);
+  };
+  // Import loads into the edit draft; the existing Save (PUT) persists it. Unknown icon_ids
+  // are nulled server-side (icon library is per-environment) → node falls back to its icon_kind.
+  const importJson = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        if (!Array.isArray(data?.nodes) || !Array.isArray(data?.links)) throw new Error("shape");
+        setDraftNodes(data.nodes.map((n: DraftNode) => ({ ...n, rotation: n.rotation || 0 })));
+        setDraftLinks(data.links.map((l: DraftLink) => ({
+          ...l, a_oper: null, b_oper: null, rx_mbps: 0, tx_mbps: 0,
+        })));
+        if (!editing) setEditing(true);
+      } catch {
+        alert("Invalid topology file — expected a JSON export with nodes and links.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // ── capture the full canvas (unscaled) to PNG/JPG ──
+  const captureRef = useRef<HTMLDivElement | null>(null);
+  const [capturing, setCapturing] = useState(false);
+  const capture = async (fmt: "png" | "jpg") => {
+    const node = captureRef.current;
+    if (!node) return;
+    setCapturing(true);
+    try {
+      const { toPng, toJpeg } = await import("html-to-image");  // code-split: only loaded on use
+      const bg = getComputedStyle(document.body).backgroundColor || "#ffffff";
+      // Override the live zoom transform so the export is always full-size at 2× for crispness.
+      const opts = {
+        width: w, height: h, pixelRatio: 2, backgroundColor: bg,
+        style: { transform: "scale(1)", transformOrigin: "0 0", width: `${w}px`, height: `${h}px` },
+      };
+      const dataUrl = fmt === "jpg" ? await toJpeg(node, { ...opts, quality: 0.95 }) : await toPng(node, opts);
+      const a = document.createElement("a");
+      a.href = dataUrl; a.download = `topology-${new Date().toISOString().slice(0, 10)}.${fmt}`; a.click();
+    } catch {
+      alert("Capture failed.");
+    } finally {
+      setCapturing(false);
+    }
+  };
+
   // ── pan-zoom ──
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -185,6 +253,18 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
             <button onClick={() => setZoom((z) => clampZoom(z * 1.1))} className="px-2 py-1 hover:bg-muted/50" title="Zoom in">+</button>
             <button onClick={fitZoom} className="px-2 py-1 hover:bg-muted/50 border-l border-border" title="Fit to screen">Fit</button>
           </div>
+          {/* Migration: export the whole map to JSON, or import one (superadmin → loads into edit). */}
+          <ToolbarBtn onClick={exportJson}>⬇ Export</ToolbarBtn>
+          {canEdit ? <ToolbarBtn onClick={() => fileRef.current?.click()}>⬆ Import</ToolbarBtn> : null}
+          {/* Capture a clean image — view mode only (edit mode shows the delete-× overlays). */}
+          {!editing && nodes.length > 0 ? (
+            <>
+              <ToolbarBtn onClick={() => capture("png")} disabled={capturing}>{capturing ? "…" : "📷 PNG"}</ToolbarBtn>
+              <ToolbarBtn onClick={() => capture("jpg")} disabled={capturing}>JPG</ToolbarBtn>
+            </>
+          ) : null}
+          <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) importJson(f); e.target.value = ""; }} />
           {canEdit ? (
             editing ? (
               <div className="flex gap-2">
@@ -220,7 +300,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         >
           {/* Outer box reserves the scaled size so scrollbars track the zoom; inner scales. */}
           <div style={{ width: w * zoom, height: h * zoom }}>
-          <div className="relative" style={{ width: w, height: h, transform: `scale(${zoom})`, transformOrigin: "0 0" }}>
+          <div ref={captureRef} className="relative" style={{ width: w, height: h, transform: `scale(${zoom})`, transformOrigin: "0 0" }}>
             <svg className="absolute inset-0" width={w} height={h}>
               {links.map((lk) => {
                 const a = nodeById[lk.a_node_id], b = nodeById[lk.b_node_id];
