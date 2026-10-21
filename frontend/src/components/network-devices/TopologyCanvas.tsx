@@ -30,7 +30,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const [draftNodes, setDraftNodes] = useState<DraftNode[]>([]);
   const [draftLinks, setDraftLinks] = useState<DraftLink[]>([]);
   const [activeLink, setActiveLink] = useState<string | null>(null);
-  const [modal, setModal] = useState<null | "device">(null);
+  const [modal, setModal] = useState<null | "device" | "text">(null);
   const [saving, setSaving] = useState(false);
   // Right-click context menu + edit flows (edit mode only).
   const [ctx, setCtx] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
@@ -80,11 +80,13 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         body: JSON.stringify({
           nodes: draftNodes.map((n) => ({
             id: n.id, source_ip: n.source_ip, support: n.support,
-            display_name: n.display_name, icon_kind: n.icon_kind, icon_id: n.icon_id, x: n.x, y: n.y,
+            display_name: n.display_name, icon_kind: n.icon_kind, icon_id: n.icon_id,
+            x: n.x, y: n.y, rotation: n.rotation || 0,
           })),
           links: draftLinks.map((l) => ({
             id: l.id, a_node_id: l.a_node_id, a_if_name: l.a_if_name,
             b_node_id: l.b_node_id, b_if_name: l.b_if_name, link_type: l.link_type,
+            color: l.color || null,
           })),
         }),
       });
@@ -188,6 +190,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
               <div className="flex gap-2">
                 <ToolbarBtn onClick={() => setModal("device")}>+ Device</ToolbarBtn>
                 <ToolbarBtn onClick={() => setLinkEdit({})}>+ Link</ToolbarBtn>
+                <ToolbarBtn onClick={() => setModal("text")}>+ Text</ToolbarBtn>
                 <ToolbarBtn onClick={save} disabled={saving} primary>{saving ? "Saving…" : "Save"}</ToolbarBtn>
                 <ToolbarBtn onClick={cancelEdit}>Cancel</ToolbarBtn>
               </div>
@@ -239,8 +242,8 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 const bLbl = { x: dbp.x - ux * IN_OFF + nx * PERP_OFF * sp, y: dbp.y - uy * IN_OFF + ny * PERP_OFF * sp };
                 return (
                   <g key={lk.id} className="cursor-pointer" onClick={() => setActiveLink(activeLink === lk.id ? null : lk.id)}>
-                    <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="currentColor"
-                      className="text-muted-foreground" strokeWidth={style.width} strokeDasharray={style.dash} />
+                    <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={lk.color || "currentColor"}
+                      className={lk.color ? "" : "text-muted-foreground"} strokeWidth={style.width} strokeDasharray={style.dash} />
                     <circle cx={da.x} cy={da.y} r={5} fill={dotColor(lkR.a_oper, a.support)}
                       stroke={a.support ? "#a1a1aa" : "none"} strokeDasharray={a.support ? "2 2" : undefined} />
                     <circle cx={dbp.x} cy={dbp.y} r={5} fill={dotColor(lkR.b_oper, b.support)}
@@ -270,23 +273,33 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 }`}
                 style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H, touchAction: "none" }}
               >
-                {/* No box/border — just the icon. Status (online/offline) sits as a dot on
-                    the icon's corner; support nodes have no state so no dot. */}
-                <span className="relative inline-flex">
-                  {n.icon_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- SVG via <img> can't run script
-                    <img src={n.icon_url} alt="" className="h-8 w-8 object-contain pointer-events-none" />
-                  ) : (
-                    <DeviceIcon kind={n.icon_kind} className="h-8 w-8 pointer-events-none" />
-                  )}
-                  {!n.support ? (
-                    <span className="absolute -top-0.5 -right-1 w-2.5 h-2.5 rounded-full ring-2 ring-background"
-                      style={{ background: n.online ? "#10b981" : "#ef4444" }} />
-                  ) : null}
-                </span>
-                <span className="mt-0.5 text-[11px] font-medium truncate max-w-full rounded bg-background/70 px-1">
-                  {n.display_name || n.source_ip}
-                </span>
+                {n.icon_kind === "text" ? (
+                  /* Text annotation node — just the text, no icon/status dot. Rotated in place. */
+                  <span className="inline-block text-[12px] font-semibold text-foreground whitespace-pre-wrap break-words max-w-full rounded bg-background/70 px-1.5 py-0.5"
+                    style={{ transform: `rotate(${n.rotation || 0}deg)` }}>
+                    {n.display_name || "Text"}
+                  </span>
+                ) : (
+                  <>
+                    {/* No box/border — just the icon. Status (online/offline) sits as a dot on
+                        the icon's corner; support nodes have no state so no dot. */}
+                    <span className="relative inline-flex">
+                      {n.icon_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- SVG via <img> can't run script
+                        <img src={n.icon_url} alt="" className="h-8 w-8 object-contain pointer-events-none" />
+                      ) : (
+                        <DeviceIcon kind={n.icon_kind} className="h-8 w-8 pointer-events-none" />
+                      )}
+                      {!n.support ? (
+                        <span className="absolute -top-0.5 -right-1 w-2.5 h-2.5 rounded-full ring-2 ring-background"
+                          style={{ background: n.online ? "#10b981" : "#ef4444" }} />
+                      ) : null}
+                    </span>
+                    <span className="mt-0.5 text-[11px] font-medium truncate max-w-full rounded bg-background/70 px-1">
+                      {n.display_name || n.source_ip}
+                    </span>
+                  </>
+                )}
                 {editing ? (
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteNode(n.id); }}
@@ -312,7 +325,25 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         <AddDeviceModal
           placed={new Set(draftNodes.map((n) => n.source_ip).filter(Boolean) as string[])}
           onClose={() => setModal(null)}
-          onAdd={(node) => { setDraftNodes((p) => [...p, node]); setModal(null); }}
+          onAdd={(node) => {
+            // Stagger each add onto a free grid slot (modal hands x:40,y:40 — would stack).
+            setDraftNodes((p) => [...p, { ...node, x: 40 + (p.length % 5) * 150, y: 40 + Math.floor(p.length / 5) * 100 }]);
+            setModal(null);
+          }}
+        />
+      ) : null}
+
+      {modal === "text" ? (
+        <TextModal
+          onClose={() => setModal(null)}
+          onAdd={(text, rotation) => {
+            setDraftNodes((p) => [...p, {
+              id: newId(), source_ip: null, support: true, display_name: text,
+              icon_kind: "text", icon_id: null, rotation,
+              x: 40 + (p.length % 5) * 150, y: 40 + Math.floor(p.length / 5) * 100,
+            }]);
+            setModal(null);
+          }}
         />
       ) : null}
 
@@ -329,12 +360,18 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
               ? [
                   { label: "➕ Add Device", on: () => setModal("device") },
                   { label: "🔗 Add Link", on: () => setLinkEdit({}) },
+                  { label: "📝 Add Text", on: () => setModal("text") },
                 ]
-              : [
-                  { label: "✎ Edit Device", on: () => setEditNode((draftNodes.find((n) => n.id === ctx.nodeId) as DraftNode) || null) },
-                  { label: "🔗 Edit Link", on: () => setLinksForNode(ctx.nodeId) },
-                  { label: "🗑 Delete Device", on: () => deleteNode(ctx.nodeId as string), danger: true },
-                ]
+              : (() => {
+                  const tn = draftNodes.find((n) => n.id === ctx.nodeId) as DraftNode | undefined;
+                  const isText = tn?.icon_kind === "text";
+                  return [
+                    { label: isText ? "✎ Edit Text" : "✎ Edit Device", on: () => setEditNode(tn || null) },
+                    // Text annotations don't carry interfaces, so no link management.
+                    ...(isText ? [] : [{ label: "🔗 Edit Link", on: () => setLinksForNode(ctx.nodeId as string) }]),
+                    { label: isText ? "🗑 Delete Text" : "🗑 Delete Device", on: () => deleteNode(ctx.nodeId as string), danger: true },
+                  ];
+                })()
           }
         />
       ) : null}
@@ -550,8 +587,9 @@ function AddDeviceModal({ placed, onClose, onAdd }: {
           <select value={sel} onChange={(e) => setSel(e.target.value)} className="w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background">
             <option value="">Select a monitored device…</option>
             {devices.map((d) => (
-              <option key={d.source_ip} value={d.source_ip} disabled={placed.has(d.source_ip)}>
-                {d.site} · {d.name} ({d.source_ip}){placed.has(d.source_ip) ? " — on map" : ""}
+              // Not disabled when already placed — the same device may be added more than once.
+              <option key={d.source_ip} value={d.source_ip}>
+                {d.site} · {d.name} ({d.source_ip}){placed.has(d.source_ip) ? " — already on map" : ""}
               </option>
             ))}
           </select>
@@ -585,6 +623,41 @@ function AddDeviceModal({ placed, onClose, onAdd }: {
   );
 }
 
+// Enter the text first, then add the annotation node to the canvas.
+function TextModal({ onClose, onAdd }: { onClose: () => void; onAdd: (text: string, rotation: number) => void }) {
+  const [text, setText] = useState("");
+  const [rotation, setRotation] = useState(0);
+  const add = () => { const t = text.trim(); if (t) onAdd(t, rotation); };
+  return (
+    <Modal title="Add Text" onClose={onClose}>
+      <label className="text-xs text-muted-foreground">Text</label>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus
+        placeholder="Annotation text (e.g. “Core Ring”, “To ISP”)"
+        className="w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background mt-1" />
+      <RotationField value={rotation} onChange={setRotation} />
+      <p className="text-[11px] text-muted-foreground mt-1">Free-text label — drag it anywhere on the canvas after adding.</p>
+      <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={add} disabled={!text.trim()}>Add to Canvas</ToolbarBtn></div>
+    </Modal>
+  );
+}
+
+// Rotation picker (degrees clockwise) — slider + number, shared by Add/Edit Text.
+function RotationField({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const clamp = (v: number) => ((Math.round(v) % 360) + 360) % 360;
+  return (
+    <div className="mt-3">
+      <span className="text-xs text-muted-foreground">Rotation: {value}°</span>
+      <div className="flex items-center gap-2 mt-1">
+        <input type="range" min={0} max={359} step={1} value={value}
+          onChange={(e) => onChange(clamp(Number(e.target.value)))} className="flex-1" />
+        <input type="number" min={0} max={359} value={value}
+          onChange={(e) => onChange(clamp(Number(e.target.value)))}
+          className="w-16 px-2 py-1 text-sm rounded-md border border-border bg-background" />
+      </div>
+    </div>
+  );
+}
+
 // Create a link, or edit an existing one (initial), or start a link from a fixed node (lockA).
 function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
   nodes: DraftNode[]; initial?: DraftLink; lockA?: string; onClose: () => void; onSave: (l: DraftLink) => void;
@@ -594,6 +667,7 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
   const [bId, setBId] = useState(initial?.b_node_id || "");
   const [bIf, setBIf] = useState(initial?.b_if_name || "");
   const [type, setType] = useState<"lan" | "wan" | "mpls" | "wireless">(initial?.link_type || "lan");
+  const [color, setColor] = useState<string | null>(initial?.color ?? null);
 
   const aNode = nodes.find((n) => n.id === aId);
   const bNode = nodes.find((n) => n.id === bId);
@@ -606,6 +680,7 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
     onSave({
       id: initial?.id || newId(), a_node_id: aId, a_if_name: aNode?.support ? null : aIf || null,
       b_node_id: bId, b_if_name: bNode?.support ? null : bIf || null, link_type: type,
+      color: color,
       a_oper: initial?.a_oper ?? null, b_oper: initial?.b_oper ?? null,
       rx_mbps: initial?.rx_mbps ?? 0, tx_mbps: initial?.tx_mbps ?? 0,
     });
@@ -626,6 +701,19 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
             ))}
           </div>
         </div>
+        <div>
+          <span className="text-xs text-muted-foreground">Line colour</span>
+          <div className="flex items-center gap-2 mt-1">
+            <input type="color" value={color || "#64748b"} onChange={(e) => setColor(e.target.value)}
+              className="h-7 w-10 rounded border border-border bg-background p-0.5" />
+            <span className="text-xs tabular-nums">{color || "default"}</span>
+            {color ? (
+              <button type="button" onClick={() => setColor(null)} className="text-xs text-muted-foreground hover:underline">
+                Reset to default
+              </button>
+            ) : null}
+          </div>
+        </div>
       </div>
       <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={save}>{editing ? "Save Link" : "Create Link"}</ToolbarBtn></div>
     </Modal>
@@ -637,13 +725,19 @@ function EditDeviceModal({ node, onClose, onSave }: {
   node: DraftNode; onClose: () => void; onSave: (patch: Partial<DraftNode>) => void;
 }) {
   const [name, setName] = useState(node.display_name || "");
+  const isText = node.icon_kind === "text";
   const isCustom = node.icon_kind === "custom";
   const [icon, setIcon] = useState<IconData | null>(
     isCustom && node.icon_url ? { id: node.icon_id || "", name: "", url: node.icon_url } : null,
   );
   // Built-in default type: seed from the node unless it was a custom upload.
   const [kind, setKind] = useState(isCustom ? "sw_l2" : node.icon_kind);
+  const [rotation, setRotation] = useState(node.rotation || 0);
   const save = () => {
+    if (isText) {
+      onSave({ display_name: name.trim() || "Text", rotation });  // text node: text + rotation
+      return;
+    }
     onSave({
       display_name: name.trim() || node.display_name,
       // A picked custom icon wins; otherwise store the chosen default type.
@@ -652,6 +746,19 @@ function EditDeviceModal({ node, onClose, onSave }: {
         : { icon_kind: kind, icon_id: null, icon_url: null }),
     });
   };
+  if (isText) {
+    return (
+      <Modal title="Edit Text" onClose={onClose}>
+        <label className="text-xs text-muted-foreground">Text</label>
+        <textarea value={name} onChange={(e) => setName(e.target.value)} rows={3}
+          placeholder="Annotation text"
+          className="w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background mt-1" />
+        <RotationField value={rotation} onChange={setRotation} />
+        <p className="text-[11px] text-muted-foreground mt-1">Free-text label — place it anywhere on the canvas.</p>
+        <div className="mt-3 flex justify-end"><ToolbarBtn primary onClick={save}>Save</ToolbarBtn></div>
+      </Modal>
+    );
+  }
   return (
     <Modal title="Edit Device" onClose={onClose}>
       <label className="text-xs text-muted-foreground">Display name</label>

@@ -35,7 +35,11 @@ _ICON_KINDS = {
     "fg", "sw", "srv", "custom",
     # built-in default-icon picker (Add/Edit Device dialog)
     "pc", "ap", "router", "fw", "cloud", "srv_tower", "srv_rack", "sw_l2", "sw_l3",
+    # text annotation node (support=true, no source_ip, renders display_name as a text block)
+    "text",
 }
+# Per-link colour: a #RGB / #RRGGBB hex, or empty → default stroke.
+_COLOR_RE = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
 _LINK_TYPES = {"lan", "wan", "mpls", "wireless"}
 
 
@@ -52,6 +56,7 @@ class TopologyNodeRead(BaseModel):
     icon_url: str | None = None  # resolved uploaded-icon URL (all viewers; /icons list is superadmin)
     x: int
     y: int
+    rotation: int = 0  # degrees clockwise (text annotation nodes)
     online: bool | None = None  # data nodes only; support nodes None (never state-coloured)
 
 
@@ -62,6 +67,7 @@ class TopologyLinkRead(BaseModel):
     b_node_id: str
     b_if_name: str | None
     link_type: str
+    color: str | None = None    # per-link stroke colour (hex); None = default muted
     a_oper: str | None = None   # per-end interface oper (support end → None)
     b_oper: str | None = None
     rx_mbps: float = 0.0        # data-bearing end's live rate (carrier; back-compat)
@@ -113,7 +119,7 @@ async def get_topology(db: AsyncSession = Depends(get_db), current_user=Depends(
             id=n.id, source_ip=n.source_ip, support=n.support, display_name=n.display_name,
             icon_kind=n.icon_kind, icon_id=n.icon_id,
             icon_url=icon_url_by_id.get(n.icon_id) if n.icon_id else None,
-            x=n.x, y=n.y,
+            x=n.x, y=n.y, rotation=n.rotation or 0,
             online=None if n.support else bool(live.get(n.source_ip or "", {}).get("online", False)),
         )
         for n in nodes
@@ -133,6 +139,7 @@ async def get_topology(db: AsyncSession = Depends(get_db), current_user=Depends(
         out_links.append(TopologyLinkRead(
             id=lk.id, a_node_id=lk.a_node_id, a_if_name=lk.a_if_name,
             b_node_id=lk.b_node_id, b_if_name=lk.b_if_name, link_type=lk.link_type,
+            color=lk.color,
             a_oper=(a or {}).get("oper"), b_oper=(b or {}).get("oper"),
             rx_mbps=carrier.get("rx_mbps", 0.0), tx_mbps=carrier.get("tx_mbps", 0.0),
             a_rx_mbps=(a or {}).get("rx_mbps") if a else None,
@@ -162,6 +169,7 @@ class NodeSave(BaseModel):
     icon_id: str | None = Field(default=None, pattern=_UUID_RE)
     x: int = 0
     y: int = 0
+    rotation: int = Field(default=0, ge=0, le=359)
 
 
 class LinkSave(BaseModel):
@@ -171,6 +179,7 @@ class LinkSave(BaseModel):
     b_node_id: str = Field(..., pattern=_UUID_RE)
     b_if_name: str | None = Field(default=None, max_length=255)
     link_type: str = Field(default="lan", max_length=16)
+    color: str | None = Field(default=None, pattern=_COLOR_RE)
 
 
 class TopologySave(BaseModel):
@@ -204,12 +213,14 @@ async def save_topology(body: TopologySave, db: AsyncSession = Depends(get_db)):
             id=n.id, source_ip=n.source_ip or None, support=n.support,
             display_name=n.display_name, icon_kind=n.icon_kind,
             icon_id=n.icon_id if n.icon_id in valid_icons else None, x=n.x, y=n.y,
+            rotation=n.rotation,
         ))
     await db.flush()  # nodes must exist before links (FK)
     for lk in body.links:
         db.add(TopologyLink(
             id=lk.id, a_node_id=lk.a_node_id, a_if_name=lk.a_if_name,
             b_node_id=lk.b_node_id, b_if_name=lk.b_if_name, link_type=lk.link_type,
+            color=lk.color,
         ))
     await db.commit()
     return APIResponse.ok(data={"nodes": len(body.nodes), "links": len(body.links)})

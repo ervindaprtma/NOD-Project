@@ -734,8 +734,9 @@ class TopologyNode(Base):
         UUID(as_uuid=False), primary_key=True, default=_new_uuid
     )
     source_ip: Mapped[Optional[str]] = mapped_column(
-        String(45), unique=True, nullable=True
-    )  # NULL for support nodes; = tag.source for data nodes
+        String(45), nullable=True
+    )  # NULL for support/text nodes; = tag.source for data nodes (may repeat — same device can
+       # be placed on the map more than once)
     support: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     icon_kind: Mapped[str] = mapped_column(
@@ -746,6 +747,10 @@ class TopologyNode(Base):
     )  # overrides icon_kind art when set
     x: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     y: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rotation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Degrees clockwise (text annotation nodes); 0 = upright",
+    )
 
 
 class TopologyLink(Base):
@@ -771,6 +776,10 @@ class TopologyLink(Base):
     link_type: Mapped[str] = mapped_column(
         String(16), nullable=False, default="lan"
     )  # lan, wan, mpls, wireless
+    color: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True,
+        comment="Optional per-link stroke colour (hex); NULL = default muted stroke",
+    )
 
 
 class DeviceOverride(Base):
