@@ -32,6 +32,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const [activeLink, setActiveLink] = useState<string | null>(null);
   const [modal, setModal] = useState<null | "device" | "text">(null);
   const [saving, setSaving] = useState(false);
+  const [rotateMode, setRotateMode] = useState(false);  // toolbar toggle: drag a text node to rotate it
   // Right-click context menu + edit flows (edit mode only).
   const [ctx, setCtx] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
   const [editNode, setEditNode] = useState<DraftNode | null>(null);   // Edit Device modal
@@ -71,6 +72,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const cancelEdit = () => {
     setEditing(false);
     setModal(null);
+    setRotateMode(false);
   };
   const save = async () => {
     setSaving(true);
@@ -91,6 +93,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         }),
       });
       setEditing(false);
+      setRotateMode(false);
       await mutate();
     } catch {
       alert("Save failed.");
@@ -186,20 +189,43 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
 
   // ── drag (edit mode only) — zoom-aware: screen delta ÷ zoom = canvas delta ──
   const dragRef = useRef<{ id: string; startX: number; startY: number; nodeX: number; nodeY: number } | null>(null);
+  // Rotate-drag for text nodes: store the node's on-screen centre, then angle = atan2(pointer−centre).
+  const rotRef = useRef<{ id: string; cx: number; cy: number } | null>(null);
+  const startRotate = (e: React.PointerEvent, n: DraftNode) => {
+    if (!editing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    const rect = captureRef.current?.getBoundingClientRect();
+    const cx = (rect ? rect.left : 0) + (n.x + NODE_W / 2) * zoom;
+    const cy = (rect ? rect.top : 0) + (n.y + NODE_H / 2) * zoom;
+    rotRef.current = { id: n.id, cx, cy };
+  };
   const onNodePointerDown = (e: React.PointerEvent, n: DraftNode) => {
     if (!editing) return;
+    // Rotate mode: dragging a text node's body rotates it instead of moving.
+    if (rotateMode && n.icon_kind === "text") { startRotate(e, n); return; }
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     dragRef.current = { id: n.id, startX: e.clientX, startY: e.clientY, nodeX: n.x, nodeY: n.y };
   };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
+    const r = rotRef.current;
+    if (r) {
+      // Handle points up at 0°; add 90 so "up" reads as upright. Snap 15° unless Shift held.
+      let deg = Math.atan2(e.clientY - r.cy, e.clientX - r.cx) * 180 / Math.PI + 90;
+      if (!e.shiftKey) deg = Math.round(deg / 15) * 15;
+      deg = ((Math.round(deg) % 360) + 360) % 360;
+      setDraftNodes((prev) => prev.map((n) => (n.id === r.id ? { ...n, rotation: deg } : n)));
+      return;
+    }
     const d = dragRef.current;
     if (!d) return;
     const nx = Math.max(0, snap(d.nodeX + (e.clientX - d.startX) / zoom));
     const ny = Math.max(0, snap(d.nodeY + (e.clientY - d.startY) / zoom));
     setDraftNodes((prev) => prev.map((n) => (n.id === d.id ? { ...n, x: nx, y: ny } : n)));
   };
-  const onCanvasPointerUp = () => { dragRef.current = null; };
+  const onCanvasPointerUp = () => { dragRef.current = null; rotRef.current = null; };
 
   const { w, h } = useMemo(() => {
     let mw = 600, mh = 400;
@@ -271,6 +297,8 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 <ToolbarBtn onClick={() => setModal("device")}>+ Device</ToolbarBtn>
                 <ToolbarBtn onClick={() => setLinkEdit({})}>+ Link</ToolbarBtn>
                 <ToolbarBtn onClick={() => setModal("text")}>+ Text</ToolbarBtn>
+                <ToolbarBtn onClick={() => setRotateMode((v) => !v)} primary={rotateMode}
+                  title="Rotate mode: drag a text node to rotate it">⟳ Rotate</ToolbarBtn>
                 <ToolbarBtn onClick={save} disabled={saving} primary>{saving ? "Saving…" : "Save"}</ToolbarBtn>
                 <ToolbarBtn onClick={cancelEdit}>Cancel</ToolbarBtn>
               </div>
@@ -354,11 +382,26 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H, touchAction: "none" }}
               >
                 {n.icon_kind === "text" ? (
-                  /* Text annotation node — just the text, no icon/status dot. Rotated in place. */
-                  <span className="inline-block text-[12px] font-semibold text-foreground whitespace-pre-wrap break-words max-w-full rounded bg-background/70 px-1.5 py-0.5"
-                    style={{ transform: `rotate(${n.rotation || 0}deg)` }}>
-                    {n.display_name || "Text"}
-                  </span>
+                  /* Text annotation node — text + (edit mode) a drag-to-rotate handle. */
+                  <>
+                    <span className="inline-block text-[12px] font-semibold text-foreground whitespace-pre-wrap break-words max-w-full rounded bg-background/70 px-1.5 py-0.5"
+                      style={{ transform: `rotate(${n.rotation || 0}deg)` }}>
+                      {n.display_name || "Text"}
+                    </span>
+                    {editing ? (
+                      <>
+                        <span
+                          onPointerDown={(e) => startRotate(e, n as DraftNode)}
+                          title="Drag to rotate (hold Shift for free angle)"
+                          className="absolute left-1/2 -translate-x-1/2 -top-3 w-3 h-3 rounded-full bg-primary ring-2 ring-background cursor-grab"
+                          style={{ touchAction: "none" }}
+                        />
+                        <span className="absolute left-1/2 -translate-x-1/2 -top-7 text-[9px] tabular-nums px-1 rounded bg-background/80 text-muted-foreground pointer-events-none">
+                          {n.rotation || 0}°
+                        </span>
+                      </>
+                    ) : null}
+                  </>
                 ) : (
                   <>
                     {/* No box/border — just the icon. Status (online/offline) sits as a dot on
@@ -526,9 +569,9 @@ function addDeviceNode(d: DeviceRow, setNodes: React.Dispatch<React.SetStateActi
   }]);
 }
 
-function ToolbarBtn({ children, onClick, primary, disabled }: { children: React.ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean }) {
+function ToolbarBtn({ children, onClick, primary, disabled, title }: { children: React.ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean; title?: string }) {
   return (
-    <button onClick={onClick} disabled={disabled}
+    <button onClick={onClick} disabled={disabled} title={title}
       className={`px-2.5 py-1 text-xs rounded-md border transition disabled:opacity-50 ${
         primary ? "bg-foreground text-background border-foreground" : "border-border hover:bg-muted/50"
       }`}>{children}</button>
