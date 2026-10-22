@@ -238,9 +238,12 @@ class IconRead(BaseModel):
 @router.get("/icons", response_model=APIResponse[list[IconRead]],
             dependencies=[Depends(require_role("superadmin"))])
 async def list_icons(db: AsyncSession = Depends(get_db)):
+    # Only list icons whose file still exists — rows left dangling by a redeploy (files lost,
+    # DB kept) would otherwise appear in the picker as broken options. Mirrors GET /topology.
     rows = (await db.execute(select(IconLibrary))).scalars().all()
     return APIResponse.ok(data=[
-        IconRead(id=r.id, name=r.name, url=f"{ICON_URL_PREFIX}/{Path(r.file_path).name}") for r in rows
+        IconRead(id=r.id, name=r.name, url=f"{ICON_URL_PREFIX}/{Path(r.file_path).name}")
+        for r in rows if (ICON_DIR / Path(r.file_path).name).exists()
     ])
 
 
@@ -263,6 +266,15 @@ async def upload_icon(
     ICON_DIR.mkdir(parents=True, exist_ok=True)
     fname = f"{icon_id}.{ext}"
     (ICON_DIR / fname).write_bytes(content)
+
+    # The write above proves storage is mounted + writable, so any row whose file is now
+    # missing is genuinely orphaned (e.g. lost to an earlier redeploy) — prune it. FK
+    # ondelete=SET NULL clears icon_id on referencing nodes (→ built-in fallback). Safe to
+    # do here precisely because storage is known-good; never on a read (a transient unmount
+    # would look like every file is gone).
+    for r in (await db.execute(select(IconLibrary))).scalars().all():
+        if not (ICON_DIR / Path(r.file_path).name).exists():
+            await db.delete(r)
 
     name = (file.filename or fname)[:120]
     if (await db.execute(select(IconLibrary.id).where(IconLibrary.name == name))).first():
