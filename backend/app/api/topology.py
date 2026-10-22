@@ -91,9 +91,12 @@ async def get_topology(db: AsyncSession = Depends(get_db), current_user=Depends(
     links = (await db.execute(select(TopologyLink))).scalars().all()
     node_by_id = {n.id: n for n in nodes}
     # Resolve uploaded-icon URLs so every viewer sees custom icons (GET /icons is superadmin).
+    # Only serve a URL when the file still exists on disk — a stale DB row (file lost to a
+    # redeploy) must fall back to the built-in icon, not a broken <img>.
     icon_url_by_id = {
         r.id: f"{ICON_URL_PREFIX}/{Path(r.file_path).name}"
         for r in (await db.execute(select(IconLibrary))).scalars().all()
+        if (ICON_DIR / Path(r.file_path).name).exists()
     }
 
     # Which {source_ip: [if_name]} does the map reference? (data nodes with a link end).

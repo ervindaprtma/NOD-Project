@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
-import { apiFetch, swrFetcher, hasMinRole } from "@/lib/api";
+import { apiFetch, swrFetcher, swrFetcherLong, hasMinRole } from "@/lib/api";
 import type { DeviceRow, Envelope, IconData, TopologyData, TopologyLink, TopologyNode } from "./types";
 import { DEFAULT_ICONS, LINK_STYLE, fmtRate } from "./types";
 import { IconPicker } from "./IconPicker";
@@ -22,7 +22,10 @@ const snap = (v: number) => Math.round(v / GRID) * GRID;
 export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDevice: (source: string) => void; refreshMs?: number }) {
   const { data, error, isLoading, mutate } = useSWR<Envelope<TopologyData>>(
     "/api/v1/topology",
-    swrFetcher,
+    // topology_live is a multi-device OpenSearch aggregation — use the long (120s) fetcher
+    // like the other heavy device components, so a slow poll doesn't abort at 30s and freeze
+    // the map (which looked like "auto-refresh not working" on busier remote deployments).
+    swrFetcherLong,
     { refreshInterval: refreshMs },
   );
   const canEdit = hasMinRole("superadmin");
@@ -469,12 +472,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                     {/* No box/border — just the icon. Status (online/offline) sits as a dot on
                         the icon's corner; support nodes have no state so no dot. */}
                     <span className="relative inline-flex">
-                      {n.icon_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element -- SVG via <img> can't run script
-                        <img src={n.icon_url} alt="" className="h-8 w-8 object-contain pointer-events-none" />
-                      ) : (
-                        <DeviceIcon kind={n.icon_kind} className="h-8 w-8 pointer-events-none" />
-                      )}
+                      <NodeGlyph iconUrl={n.icon_url} iconKind={n.icon_kind} />
                       {!n.support ? (
                         <span className="absolute -top-0.5 -right-1 w-2.5 h-2.5 rounded-full ring-2 ring-background"
                           style={{ background: n.online ? "#10b981" : "#ef4444" }} />
@@ -637,6 +635,20 @@ function addDeviceNode(d: DeviceRow, setNodes: React.Dispatch<React.SetStateActi
     icon_kind: d.vendor === "fortigate" ? "fg" : "sw", icon_id: null,
     x: 40 + (n % 5) * 150, y: 40 + Math.floor(n / 5) * 100,
   }]);
+}
+
+// A node's glyph: the uploaded icon, or the built-in default. If the uploaded file 404s
+// (deleted from storage, or a stale DB row after a redeploy), fall back to the default
+// instead of a broken image.
+function NodeGlyph({ iconUrl, iconKind }: { iconUrl?: string | null; iconKind: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [iconUrl]);  // retry when the url changes
+  if (iconUrl && !failed) {
+    // eslint-disable-next-line @next/next/no-img-element -- SVG via <img> can't run script
+    return <img src={iconUrl} alt="" onError={() => setFailed(true)}
+      className="h-8 w-8 object-contain pointer-events-none" />;
+  }
+  return <DeviceIcon kind={iconKind} className="h-8 w-8 pointer-events-none" />;
 }
 
 function ToolbarBtn({ children, onClick, primary, disabled, title }: { children: React.ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean; title?: string }) {

@@ -80,6 +80,10 @@ services:
       start_period: 60s
     volumes:
       - ./logs:/app/logs
+      # Uploaded topology icons live on disk (DB only stores the path). Bind-mount so
+      # they survive image rebuilds — otherwise a redeploy wipes them and the map shows
+      # broken <img> for every custom icon. Host dir is gitignored.
+      - ./backend/static/icons:/app/static/icons
     networks:
       - nod_net
     logging:
