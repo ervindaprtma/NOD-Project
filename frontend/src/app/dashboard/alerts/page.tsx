@@ -232,6 +232,9 @@ export default function AlertsPage() {
   } | null>(null);
   const canManageAlerts = hasMinRole("admin");
   const [testing, setTesting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());  // bulk-action selection
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const importRef = useRef<HTMLInputElement | null>(null);
   // Tab (like Resources): admin lands on Rules; viewer/operator get History only.
   const [tab, setTab] = useState<"rules" | "history">(canManageAlerts ? "rules" : "history");
   // Deep link from Overview (KPI card / bell): ?tab=history[&rule_id=…] opens History
@@ -744,6 +747,95 @@ export default function AlertsPage() {
     }
   }
 
+  // ── bulk actions over the row selection ──
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const toggleSelectAll = () =>
+    setSelectedIds((prev) => (prev.size === rules.length ? new Set() : new Set(rules.map((r) => r.id))));
+
+  async function bulkDelete() {
+    const ids = [...selectedIds];
+    if (ids.length === 0 || !confirm(`Delete ${ids.length} selected rule(s)? This cannot be undone.`)) return;
+    setBulkBusy(true);
+    try {
+      await Promise.all(ids.map((id) => apiFetch(`/api/v1/alerts/rules/${id}`, { method: "DELETE" })));
+      setSelectedIds(new Set());
+      mutate("/api/v1/alerts/rules");
+    } catch (e: unknown) { alert(`Failed: ${(e as Error).message}`); }
+    finally { setBulkBusy(false); }
+  }
+
+  async function bulkDisable() {
+    const targets = rules.filter((r) => selectedIds.has(r.id) && r.enabled);
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    try {
+      await Promise.all(targets.map((r) =>
+        apiFetch(`/api/v1/alerts/rules/${r.id}`, { method: "PUT", body: JSON.stringify({ enabled: false }) })));
+      mutate("/api/v1/alerts/rules");
+    } catch (e: unknown) { alert(`Failed: ${(e as Error).message}`); }
+    finally { setBulkBusy(false); }
+  }
+
+  // Map a rule to the create-endpoint payload (drop id/state/timestamps — not portable).
+  const toRulePayload = (r: AlertRule) => ({
+    name: r.name, severity: r.severity, data_source: r.data_source, metric_field: r.metric_field,
+    aggregation: r.aggregation, condition: r.condition, threshold_value: r.threshold_value,
+    evaluation_window_minutes: r.evaluation_window_minutes, sustained_for_minutes: r.sustained_for_minutes,
+    renotify_interval_minutes: r.renotify_interval_minutes, notify_channels: r.notify_channels,
+    telegram_thread_id: r.telegram_thread_id, notification_template_id: r.notification_template_id,
+    site_name: r.site_name, target_key: r.target_key, link_max_mbps: r.link_max_mbps,
+    appid_filter: r.appid_filter, kind: r.kind, notify_when: r.notify_when, clauses: r.clauses,
+    enabled: r.enabled,
+  });
+
+  // Export selected rules (or all if none selected) as a portable JSON file.
+  function exportRules() {
+    const chosen = selectedIds.size ? rules.filter((r) => selectedIds.has(r.id)) : rules;
+    if (chosen.length === 0) return;
+    const payload = { version: 1, exported_at: new Date().toISOString(), rules: chosen.map(toRulePayload) };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `alert-rules-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Import rules from a JSON export — each becomes a new rule (POST). Notification-template
+  // and site references are environment-specific; a missing one just won't resolve on fire.
+  function importRules(file: File) {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      let parsed: { rules?: unknown };
+      try { parsed = JSON.parse(String(reader.result)); }
+      catch { alert("Invalid file — expected a JSON rule export."); return; }
+      const list = Array.isArray(parsed?.rules) ? parsed.rules : null;
+      if (!list) { alert("Invalid file — expected a JSON export with a 'rules' array."); return; }
+      setBulkBusy(true);
+      // Validate notification_template_id against THIS environment — a dangling id would break
+      // message rendering on fire, so null the unknowns (rule falls back to the default template).
+      // site_name is left as-is: a non-matching scope is harmless (rule just matches nothing).
+      let known = new Set<string>();
+      try {
+        const tpl = await apiFetch<{ data: NotificationTemplate[] }>("/api/v1/config/notification-templates");
+        known = new Set((tpl?.data || []).map((t) => t.id));
+      } catch { /* can't list → leave ids as-is rather than wiping them all */ known = new Set(); }
+      const validate = known.size > 0;
+      let ok = 0, reset = 0; const fails: string[] = [];
+      for (const r of list as Record<string, unknown>[]) {
+        const tid = r.notification_template_id as string | null | undefined;
+        if (validate && tid && !known.has(tid)) { r.notification_template_id = null; reset++; }
+        try { await apiFetch("/api/v1/alerts/rules", { method: "POST", body: JSON.stringify(r) }); ok++; }
+        catch (e: unknown) { fails.push(`${(r?.name as string) || "?"}: ${(e as Error).message}`); }
+      }
+      setBulkBusy(false);
+      mutate("/api/v1/alerts/rules");
+      alert(`Imported ${ok}/${list.length} rule(s).` +
+        `${reset ? `\n${reset} rule(s) had an unknown notification template → reset to default.` : ""}` +
+        `${fails.length ? `\n\nFailed:\n${fails.join("\n")}` : ""}`);
+    };
+    reader.readAsText(file);
+  }
+
   async function testRule(rule: AlertRule) {
     setTesting(true);
     try {
@@ -903,12 +995,62 @@ export default function AlertsPage() {
         </div>
       )}
 
+      {/* Bulk-action toolbar (admin). Export/Import always available; Disable/Delete act on the selection. */}
+      {canManageAlerts ? (
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <span className="text-xs text-muted-foreground mr-1">
+            {selectedIds.size > 0 ? `${selectedIds.size} selected` : "No rows selected"}
+          </span>
+          <button
+            onClick={bulkDisable}
+            disabled={bulkBusy || selectedIds.size === 0}
+            className="px-2.5 py-1 text-xs rounded border bg-background hover:bg-muted disabled:opacity-40"
+          >
+            Disable
+          </button>
+          <button
+            onClick={bulkDelete}
+            disabled={bulkBusy || selectedIds.size === 0}
+            className="px-2.5 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 disabled:opacity-40"
+          >
+            Delete
+          </button>
+          <span className="w-px h-5 bg-border mx-1" />
+          <button
+            onClick={exportRules}
+            disabled={bulkBusy || rules.length === 0}
+            className="px-2.5 py-1 text-xs rounded border bg-background hover:bg-muted disabled:opacity-40"
+            title={selectedIds.size ? "Export selected rules" : "Export all rules"}
+          >
+            ⬇ Export{selectedIds.size ? ` (${selectedIds.size})` : ""}
+          </button>
+          <button
+            onClick={() => importRef.current?.click()}
+            disabled={bulkBusy}
+            className="px-2.5 py-1 text-xs rounded border bg-background hover:bg-muted disabled:opacity-40"
+          >
+            ⬆ Import
+          </button>
+          <input ref={importRef} type="file" accept="application/json,.json" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) importRules(f); e.target.value = ""; }} />
+          {bulkBusy ? <span className="text-xs text-muted-foreground">working…</span> : null}
+        </div>
+      ) : null}
+
       {/* Rules Table */}
       <div className="bg-card border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50 text-muted-foreground">
+                    {canManageAlerts ? (
+                      <th className="w-8 py-3 px-3 text-center">
+                        <input type="checkbox" aria-label="Select all rules"
+                          checked={rules.length > 0 && selectedIds.size === rules.length}
+                          ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < rules.length; }}
+                          onChange={toggleSelectAll} className="cursor-pointer" />
+                      </th>
+                    ) : null}
                     <th className="text-left py-3 px-3 text-xs font-medium">Name</th>
                     <th className="text-left py-3 px-3 text-xs font-medium">Site</th>
                     <th className="text-left py-3 px-3 text-xs font-medium">Severity</th>
@@ -924,20 +1066,26 @@ export default function AlertsPage() {
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i} className="border-b animate-pulse">
-                    {Array.from({ length: 9 }).map((_, j) => (
+                    {Array.from({ length: canManageAlerts ? 10 : 9 }).map((_, j) => (
                       <td key={j} className="py-3 px-3"><div className="h-4 bg-muted rounded" /></td>
                     ))}
                   </tr>
                 ))
               ) : rules.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-muted-foreground">
+                  <td colSpan={canManageAlerts ? 10 : 9} className="py-12 text-center text-muted-foreground">
                     No alert rules configured. Create your first rule to get started.
                   </td>
                 </tr>
               ) : (
                 rules.map((rule) => (
-                  <tr key={rule.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                  <tr key={rule.id} className={cn("border-b last:border-0 hover:bg-muted/30 transition-colors", selectedIds.has(rule.id) && "bg-primary/5")}>
+                    {canManageAlerts ? (
+                      <td className="py-2.5 px-3 text-center">
+                        <input type="checkbox" aria-label={`Select ${rule.name}`}
+                          checked={selectedIds.has(rule.id)} onChange={() => toggleSelect(rule.id)} className="cursor-pointer" />
+                      </td>
+                    ) : null}
                     <td className="py-2.5 px-3 font-medium">{rule.name}</td>
                     <td className="py-2.5 px-3 text-xs text-muted-foreground">{rule.site_name || "\u2014"}</td>
                     <td className="py-2.5 px-3">

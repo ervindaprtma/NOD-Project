@@ -46,6 +46,11 @@ export default function NetworkDevicesPage() {
   const [device, setDevice] = useState<string | null>(null);
   // Auto-refresh cadence for every tab (Off/15s/30s/60s), same control as the Traffic pages.
   const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
+  // Topology is near-real-time, so it gets an extra 5s option the other tabs don't have —
+  // slotted right after "Off" so the list stays in ascending order (Off, 5s, 15s, 30s, 60s).
+  const refreshOptions = tab === "topology"
+    ? [REFRESH_INTERVALS[0], { label: "5s", value: 5_000 }, ...REFRESH_INTERVALS.slice(1)]
+    : REFRESH_INTERVALS;
 
   // Hydrate from URL after mount (reading it in a useState initializer mismatches SSR).
   useEffect(() => {
@@ -79,9 +84,11 @@ export default function NetworkDevicesPage() {
     (t: TabKey, d: string | null) => {
       setTab(t);
       setDevice(d);
+      // 5s is a Topology-only cadence; drop back to the default when leaving that tab.
+      if (t !== "topology" && refreshMs === 5_000) setRefreshMs(DEFAULT_REFRESH_MS);
       syncUrl(t, d);
     },
-    [syncUrl],
+    [syncUrl, refreshMs],
   );
 
   const openDevice = useCallback((source: string) => go("devices", source), [go]);
@@ -113,7 +120,7 @@ export default function NetworkDevicesPage() {
           title="Auto-refresh interval"
           className="h-7 px-2 text-xs border border-border/60 dark:border-border/40 rounded-md bg-card text-muted-foreground cursor-pointer shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/20"
         >
-          {REFRESH_INTERVALS.map((ri) => (
+          {refreshOptions.map((ri) => (
             <option key={ri.value} value={ri.value}>
               {ri.label === "Off" ? "⏸ Off" : `↻ ${ri.label}`}
             </option>

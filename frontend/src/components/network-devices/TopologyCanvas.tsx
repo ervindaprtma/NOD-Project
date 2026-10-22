@@ -33,6 +33,8 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const [modal, setModal] = useState<null | "device" | "text">(null);
   const [saving, setSaving] = useState(false);
   const [rotateMode, setRotateMode] = useState(false);  // toolbar toggle: drag a text node to rotate it
+  const [selected, setSelected] = useState<Set<string>>(() => new Set()); // multi-select (edit mode)
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   // Right-click context menu + edit flows (edit mode only).
   const [ctx, setCtx] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
   const [editNode, setEditNode] = useState<DraftNode | null>(null);   // Edit Device modal
@@ -73,6 +75,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
     setEditing(false);
     setModal(null);
     setRotateMode(false);
+    setSelected(new Set());
   };
   const save = async () => {
     setSaving(true);
@@ -94,6 +97,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
       });
       setEditing(false);
       setRotateMode(false);
+      setSelected(new Set());
       await mutate();
     } catch {
       alert("Save failed.");
@@ -188,9 +192,17 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   }, []);
 
   // ── drag (edit mode only) — zoom-aware: screen delta ÷ zoom = canvas delta ──
-  const dragRef = useRef<{ id: string; startX: number; startY: number; nodeX: number; nodeY: number } | null>(null);
+  // A drag moves every selected node together (items = their start positions).
+  const dragRef = useRef<{ startX: number; startY: number; items: { id: string; x: number; y: number }[] } | null>(null);
   // Rotate-drag for text nodes: store the node's on-screen centre, then angle = atan2(pointer−centre).
   const rotRef = useRef<{ id: string; cx: number; cy: number } | null>(null);
+  // Marquee (rubber-band) selection: start corner in canvas coords + whether to add to the set.
+  const marqRef = useRef<{ x0: number; y0: number; additive: boolean } | null>(null);
+  // Screen (client) point → canvas coords: captureRef is the scaled inner layer.
+  const toCanvas = (clientX: number, clientY: number) => {
+    const r = captureRef.current?.getBoundingClientRect();
+    return { x: (clientX - (r?.left ?? 0)) / zoom, y: (clientY - (r?.top ?? 0)) / zoom };
+  };
   const startRotate = (e: React.PointerEvent, n: DraftNode) => {
     if (!editing) return;
     e.preventDefault();
@@ -202,14 +214,45 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
     rotRef.current = { id: n.id, cx, cy };
   };
   const onNodePointerDown = (e: React.PointerEvent, n: DraftNode) => {
-    if (!editing) return;
+    if (!editing || e.button !== 0) return;
     // Rotate mode: dragging a text node's body rotates it instead of moving.
     if (rotateMode && n.icon_kind === "text") { startRotate(e, n); return; }
     e.preventDefault();
+    e.stopPropagation();  // don't let the background start a marquee underneath
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    dragRef.current = { id: n.id, startX: e.clientX, startY: e.clientY, nodeX: n.x, nodeY: n.y };
+    // Selection: Shift toggles; plain click on an unselected node selects just it;
+    // plain click on an already-selected node keeps the group (so you can drag it).
+    let ids = selected;
+    if (e.shiftKey) {
+      ids = new Set(selected);
+      if (ids.has(n.id)) ids.delete(n.id); else ids.add(n.id);
+      setSelected(ids);
+    } else if (!selected.has(n.id)) {
+      ids = new Set([n.id]);
+      setSelected(ids);
+    }
+    const moveIds = ids.size ? ids : new Set([n.id]);
+    dragRef.current = {
+      startX: e.clientX, startY: e.clientY,
+      items: draftNodes.filter((m) => moveIds.has(m.id)).map((m) => ({ id: m.id, x: m.x, y: m.y })),
+    };
+  };
+  // Pointer down on empty canvas → begin a marquee (Shift adds to the current selection).
+  const onCanvasPointerDown = (e: React.PointerEvent) => {
+    if (!editing || e.button !== 0) return;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    const { x, y } = toCanvas(e.clientX, e.clientY);
+    marqRef.current = { x0: x, y0: y, additive: e.shiftKey };
+    setMarquee({ x0: x, y0: y, x1: x, y1: y });
+    if (!e.shiftKey) setSelected(new Set());
   };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
+    const m = marqRef.current;
+    if (m) {
+      const { x, y } = toCanvas(e.clientX, e.clientY);
+      setMarquee({ x0: m.x0, y0: m.y0, x1: x, y1: y });
+      return;
+    }
     const r = rotRef.current;
     if (r) {
       // Handle points up at 0°; add 90 so "up" reads as upright. Snap 15° unless Shift held.
@@ -221,11 +264,29 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
     }
     const d = dragRef.current;
     if (!d) return;
-    const nx = Math.max(0, snap(d.nodeX + (e.clientX - d.startX) / zoom));
-    const ny = Math.max(0, snap(d.nodeY + (e.clientY - d.startY) / zoom));
-    setDraftNodes((prev) => prev.map((n) => (n.id === d.id ? { ...n, x: nx, y: ny } : n)));
+    const dx = (e.clientX - d.startX) / zoom, dy = (e.clientY - d.startY) / zoom;
+    setDraftNodes((prev) => prev.map((n) => {
+      const it = d.items.find((i) => i.id === n.id);
+      return it ? { ...n, x: Math.max(0, snap(it.x + dx)), y: Math.max(0, snap(it.y + dy)) } : n;
+    }));
   };
-  const onCanvasPointerUp = () => { dragRef.current = null; rotRef.current = null; };
+  const onCanvasPointerUp = () => {
+    const m = marqRef.current;
+    if (m && marquee) {
+      const minX = Math.min(m.x0, marquee.x1), maxX = Math.max(m.x0, marquee.x1);
+      const minY = Math.min(m.y0, marquee.y1), maxY = Math.max(m.y0, marquee.y1);
+      const hit = draftNodes
+        .filter((n) => n.x < maxX && n.x + NODE_W > minX && n.y < maxY && n.y + NODE_H > minY)
+        .map((n) => n.id);
+      setSelected((prev) => {
+        const s = m.additive ? new Set(prev) : new Set<string>();
+        hit.forEach((id) => s.add(id));
+        return s;
+      });
+    }
+    marqRef.current = null; setMarquee(null);
+    dragRef.current = null; rotRef.current = null;
+  };
 
   const { w, h } = useMemo(() => {
     let mw = 600, mh = 400;
@@ -322,6 +383,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
           // Viewport-sized box: scroll (both axes) stays INSIDE the topology, so the page
           // doesn't grow with the map. Height tracks the viewport (dynamic).
           style={{ height: "calc(100vh - 16rem)", minHeight: 420 }}
+          onPointerDown={onCanvasPointerDown}
           onPointerMove={onCanvasPointerMove}
           onPointerUp={onCanvasPointerUp}
           onContextMenu={(e) => openCtx(e, null)}
@@ -378,7 +440,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 title={n.display_name || n.source_ip || ""}
                 className={`absolute flex flex-col items-center justify-center text-center px-1 ${
                   editing ? "cursor-move" : n.source_ip ? "cursor-pointer hover:opacity-80" : ""
-                }`}
+                } ${editing && selected.has(n.id) ? "rounded ring-2 ring-primary ring-offset-1 ring-offset-background" : ""}`}
                 style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H, touchAction: "none" }}
               >
                 {n.icon_kind === "text" ? (
@@ -432,6 +494,14 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 ) : null}
               </div>
             ))}
+
+            {marquee ? (
+              <div className="absolute border border-primary bg-primary/10 pointer-events-none"
+                style={{
+                  left: Math.min(marquee.x0, marquee.x1), top: Math.min(marquee.y0, marquee.y1),
+                  width: Math.abs(marquee.x1 - marquee.x0), height: Math.abs(marquee.y1 - marquee.y0),
+                }} />
+            ) : null}
           </div>
           </div>
         </div>

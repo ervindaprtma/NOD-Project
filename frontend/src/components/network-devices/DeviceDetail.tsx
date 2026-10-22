@@ -59,10 +59,14 @@ export function DeviceDetail({ source, onBack, refreshMs = 0 }: { source: string
     else setZoomed(false);
   }
 
+  // A custom / drag-zoom range (activeSeconds === 0) pins the window, so auto-refresh is
+  // turned OFF for it — same as the Traffic pages. Presets keep refreshing + sliding.
+  const effRefresh = activeSeconds > 0 ? refreshMs : 0;
+
   const { data, error, isLoading } = useSWR<Envelope<DeviceDetailData>>(
     `/api/v1/network-devices/devices/${encodeURIComponent(source)}/interfaces`,
     swrFetcherLong,
-    { refreshInterval: refreshMs },
+    { refreshInterval: effRefresh },
   );
 
   const dev = data?.data;
@@ -123,7 +127,7 @@ export function DeviceDetail({ source, onBack, refreshMs = 0 }: { source: string
         <p className="text-sm text-red-500 py-8 text-center">Device not found or no current data.</p>
       ) : (
         <>
-          {dev.vendor === "fortigate" ? <FortiGateBoxHealth site={dev.site} window={preset} gteMs={gteMs} lteMs={lteMs} refreshMs={refreshMs} onRangeSelect={applyZoom} /> : null}
+          {dev.vendor === "fortigate" ? <FortiGateBoxHealth site={dev.site} window={preset} gteMs={gteMs} lteMs={lteMs} refreshMs={effRefresh} onRangeSelect={applyZoom} /> : null}
 
           <div className="flex items-center gap-3 text-xs text-muted-foreground mb-2">
             <span className="flex items-center gap-1"><i className={`w-2 h-2 rounded-full ${STATE_DOT.up}`} /> {dev.counts.up} up</span>
@@ -137,8 +141,8 @@ export function DeviceDetail({ source, onBack, refreshMs = 0 }: { source: string
             onToggle={toggleIface}
             renderDetail={(i) => (
               <>
-                <InterfaceCharts source={source} iface={i} window={preset} gteMs={gteMs} lteMs={lteMs} refreshMs={refreshMs} onRangeSelect={applyZoom} />
-                <StateHistory source={source} window={preset} gteMs={gteMs} lteMs={lteMs} ifName={i.if_name} refreshMs={refreshMs} />
+                <InterfaceCharts source={source} iface={i} window={preset} gteMs={gteMs} lteMs={lteMs} refreshMs={effRefresh} onRangeSelect={applyZoom} />
+                <StateHistory source={source} window={preset} gteMs={gteMs} lteMs={lteMs} ifName={i.if_name} refreshMs={effRefresh} />
               </>
             )}
           />
