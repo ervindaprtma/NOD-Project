@@ -29,6 +29,20 @@ const newId = () =>
   (crypto.randomUUID?.() || `${Date.now()}${Math.random()}`).replace(/-/g, "").slice(0, 32).padEnd(32, "0");
 const snap = (v: number) => Math.round(v / GRID) * GRID;
 
+// Canvas-only, display-only abbreviation of SNMP interface names (H3C/Comware style),
+// used for the on-map Iface labels. Never applied to the stored if_name or the detail
+// table — topology_live matches live traffic on the full tag.if_name, so the real value
+// must stay intact. e.g. "Ten-GigabitEthernet3/1/20" → "XGE-3/1/20".
+const shortIface = (n: string): string =>
+  n.replace(/^Ten-?GigabitEthernet/i, "XGE-")
+    .replace(/^(?:Forty-?GigabitEthernet|FortyGigE)/i, "FGE-")
+    .replace(/^(?:Hundred-?GigabitEthernet|HundredGigE)/i, "HGE-")
+    .replace(/^TwentyFive-?GigE/i, "XGE25-")
+    .replace(/^GigabitEthernet/i, "GE-")
+    .replace(/^Bridge-Aggregation/i, "BAGG")
+    .replace(/^Route-Aggregation/i, "RAGG")
+    .replace(/^Vlan-?interface/i, "Vlan");
+
 export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDevice: (source: string) => void; refreshMs?: number }) {
   const { data, error, isLoading, mutate } = useSWR<Envelope<TopologyData>>(
     "/api/v1/topology",
@@ -475,10 +489,10 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                       <LinkEndRate x={bLbl.x} y={bLbl.y} rx={lkR.b_rx_mbps} tx={lkR.b_tx_mbps ?? 0} />
                     ) : null}
                     {!editing && linkLabel === "iface" && lk.a_if_name ? (
-                      <LinkEndLabel x={aLbl.x} y={aLbl.y} text={lk.a_if_name} />
+                      <LinkEndLabel x={aLbl.x} y={aLbl.y} text={shortIface(lk.a_if_name)} />
                     ) : null}
                     {!editing && linkLabel === "iface" && lk.b_if_name ? (
-                      <LinkEndLabel x={bLbl.x} y={bLbl.y} text={lk.b_if_name} />
+                      <LinkEndLabel x={bLbl.x} y={bLbl.y} text={shortIface(lk.b_if_name)} />
                     ) : null}
                   </g>
                 );
