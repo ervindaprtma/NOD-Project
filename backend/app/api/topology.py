@@ -68,6 +68,8 @@ class TopologyLinkRead(BaseModel):
     b_if_name: str | None
     link_type: str
     color: str | None = None    # per-link stroke colour (hex); None = default muted
+    curve_dx: float = 0.0       # Bézier control-point offset from midpoint (0,0 = straight)
+    curve_dy: float = 0.0
     a_oper: str | None = None   # per-end interface oper (support end → None)
     b_oper: str | None = None
     rx_mbps: float = 0.0        # data-bearing end's live rate (carrier; back-compat)
@@ -148,7 +150,7 @@ async def get_topology(current_user=Depends(get_current_user)):
         out_links.append(TopologyLinkRead(
             id=lk.id, a_node_id=lk.a_node_id, a_if_name=lk.a_if_name,
             b_node_id=lk.b_node_id, b_if_name=lk.b_if_name, link_type=lk.link_type,
-            color=lk.color,
+            color=lk.color, curve_dx=lk.curve_dx, curve_dy=lk.curve_dy,
             a_oper=(a or {}).get("oper"), b_oper=(b or {}).get("oper"),
             rx_mbps=carrier.get("rx_mbps", 0.0), tx_mbps=carrier.get("tx_mbps", 0.0),
             a_rx_mbps=(a or {}).get("rx_mbps") if a else None,
@@ -189,6 +191,10 @@ class LinkSave(BaseModel):
     b_if_name: str | None = Field(default=None, max_length=255)
     link_type: str = Field(default="lan", max_length=16)
     color: str | None = Field(default=None, pattern=_COLOR_RE)
+    # Bézier control-point offset from the link midpoint (canvas px); 0,0 = straight.
+    # Bounded so a bad client can't push the handle off into nonsense coordinates.
+    curve_dx: float = Field(default=0.0, ge=-5000, le=5000)
+    curve_dy: float = Field(default=0.0, ge=-5000, le=5000)
 
 
 class TopologySave(BaseModel):
@@ -229,7 +235,7 @@ async def save_topology(body: TopologySave, db: AsyncSession = Depends(get_db)):
         db.add(TopologyLink(
             id=lk.id, a_node_id=lk.a_node_id, a_if_name=lk.a_if_name,
             b_node_id=lk.b_node_id, b_if_name=lk.b_if_name, link_type=lk.link_type,
-            color=lk.color,
+            color=lk.color, curve_dx=lk.curve_dx, curve_dy=lk.curve_dy,
         ))
     await db.commit()
     return APIResponse.ok(data={"nodes": len(body.nodes), "links": len(body.links)})

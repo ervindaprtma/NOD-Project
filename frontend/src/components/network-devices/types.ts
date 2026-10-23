@@ -139,6 +139,8 @@ export interface TopologyLink {
   b_if_name: string | null;
   link_type: "lan" | "wan" | "mpls" | "wireless";
   color?: string | null; // optional per-link stroke colour (hex); null = default muted
+  curve_dx?: number; // Bézier control-point offset from midpoint (canvas px); 0 = straight
+  curve_dy?: number;
   a_oper: string | null;
   b_oper: string | null;
   rx_mbps: number;

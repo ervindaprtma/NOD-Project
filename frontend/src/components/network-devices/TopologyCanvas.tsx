@@ -131,7 +131,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
           links: draftLinks.map((l) => ({
             id: l.id, a_node_id: l.a_node_id, a_if_name: l.a_if_name,
             b_node_id: l.b_node_id, b_if_name: l.b_if_name, link_type: l.link_type,
-            color: l.color || null,
+            color: l.color || null, curve_dx: l.curve_dx ?? 0, curve_dy: l.curve_dy ?? 0,
           })),
         }),
       });
@@ -161,6 +161,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
       links: srcL.map((l) => ({
         id: l.id, a_node_id: l.a_node_id, a_if_name: l.a_if_name, b_node_id: l.b_node_id,
         b_if_name: l.b_if_name, link_type: l.link_type, color: l.color || null,
+        curve_dx: l.curve_dx ?? 0, curve_dy: l.curve_dy ?? 0,
       })),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -238,6 +239,9 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const rotRef = useRef<{ id: string; cx: number; cy: number } | null>(null);
   // Marquee (rubber-band) selection: start corner in canvas coords + whether to add to the set.
   const marqRef = useRef<{ x0: number; y0: number; additive: boolean } | null>(null);
+  // Curve-drag: the link being bent + its straight-line midpoint (canvas coords, fixed during drag).
+  // curve_dx/dy store the apex offset from that midpoint; (0,0) = straight.
+  const curveRef = useRef<{ id: string; midx: number; midy: number } | null>(null);
   // Screen (client) point → canvas coords: captureRef is the scaled inner layer.
   const toCanvas = (clientX: number, clientY: number) => {
     const r = captureRef.current?.getBoundingClientRect();
@@ -286,7 +290,24 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
     setMarquee({ x0: x, y0: y, x1: x, y1: y });
     if (!e.shiftKey) setSelected(new Set());
   };
+  // Begin bending a link: remember its straight midpoint, then drag sets the apex offset.
+  const startCurve = (e: React.PointerEvent, lk: TopologyLink, midx: number, midy: number) => {
+    if (!editing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    curveRef.current = { id: lk.id, midx, midy };
+  };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
+    const cv = curveRef.current;
+    if (cv) {
+      const { x, y } = toCanvas(e.clientX, e.clientY);
+      // Apex offset = pointer − straight midpoint. Shift = free; else snap to the grid.
+      let dx = x - cv.midx, dy = y - cv.midy;
+      if (!e.shiftKey) { dx = snap(dx); dy = snap(dy); }
+      setDraftLinks((prev) => prev.map((l) => (l.id === cv.id ? { ...l, curve_dx: dx, curve_dy: dy } : l)));
+      return;
+    }
     const m = marqRef.current;
     if (m) {
       const { x, y } = toCanvas(e.clientX, e.clientY);
@@ -325,7 +346,7 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
       });
     }
     marqRef.current = null; setMarquee(null);
-    dragRef.current = null; rotRef.current = null;
+    dragRef.current = null; rotRef.current = null; curveRef.current = null;
   };
 
   const { w, h } = useMemo(() => {
@@ -463,19 +484,35 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 const IN_OFF = 22, PERP_OFF = 13, sp = slot >= 0 ? 1 : -1;
                 const aLbl = { x: da.x + ux * IN_OFF + nx * PERP_OFF * sp, y: da.y + uy * IN_OFF + ny * PERP_OFF * sp };
                 const bLbl = { x: dbp.x - ux * IN_OFF + nx * PERP_OFF * sp, y: dbp.y - uy * IN_OFF + ny * PERP_OFF * sp };
-                // Curved mode: quadratic bézier bowed perpendicular from the midpoint; parallel
-                // links bow on their fan side so they stay separated. Straight mode: a plain line.
-                const bend = Math.min(70, vlen * 0.2) * (slot >= 0 ? 1 : -1);
-                const mx = (p1.x + p2.x) / 2 + nx * bend, my = (p1.y + p2.y) / 2 + ny * bend;
-                const d = curved
-                  ? `M ${p1.x} ${p1.y} Q ${mx} ${my} ${p2.x} ${p2.y}`
+                // Curve shape. A per-link apex offset (curve_dx/dy, dragged in edit mode) wins;
+                // else the global Curved toggle auto-bows zero-offset links on their fan side;
+                // else straight. Control point = mid + 2·(apex−mid) so the curve passes the apex.
+                const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+                const cdx = lkR.curve_dx ?? 0, cdy = lkR.curve_dy ?? 0;
+                const hasManual = cdx !== 0 || cdy !== 0;
+                const autoBend = Math.min(70, vlen * 0.2) * (slot >= 0 ? 1 : -1);
+                const apex = hasManual ? { x: mid.x + cdx, y: mid.y + cdy }
+                  : curved ? { x: mid.x + nx * autoBend, y: mid.y + ny * autoBend } : null;
+                const d = apex
+                  ? `M ${p1.x} ${p1.y} Q ${mid.x + 2 * (apex.x - mid.x)} ${mid.y + 2 * (apex.y - mid.y)} ${p2.x} ${p2.y}`
                   : `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
+                const handle = editing ? (apex ?? mid) : null;  // drag point (apex, or midpoint when straight)
                 return (
                   <g key={lk.id} className="cursor-pointer" onClick={() => editing
                     ? setActiveLink(activeLink === lk.id ? null : lk.id)
                     : setDetail((d) => d?.kind === "link" && d.id === lk.id ? null : { kind: "link", id: lk.id })}>
                     <path d={d} fill="none" stroke={lk.color || "currentColor"}
                       className={lk.color ? "" : "text-muted-foreground"} strokeWidth={style.width} strokeDasharray={style.dash} />
+                    {handle ? (
+                      <circle cx={handle.x} cy={handle.y} r={6} fill="hsl(var(--primary))"
+                        stroke="hsl(var(--background))" strokeWidth={2} style={{ cursor: "grab" }}
+                        onClick={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => startCurve(e, lkR, mid.x, mid.y)}
+                        onDoubleClick={(e) => { e.stopPropagation();
+                          setDraftLinks((prev) => prev.map((l) => l.id === lk.id ? { ...l, curve_dx: 0, curve_dy: 0 } : l)); }}>
+                        <title>Drag to bend · double-click to straighten</title>
+                      </circle>
+                    ) : null}
                     <circle cx={da.x} cy={da.y} r={5} fill={dotColor(lkR.a_oper, a.support)}
                       stroke={a.support ? "#a1a1aa" : "none"} strokeDasharray={a.support ? "2 2" : undefined} />
                     <circle cx={dbp.x} cy={dbp.y} r={5} fill={dotColor(lkR.b_oper, b.support)}
