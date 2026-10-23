@@ -12,6 +12,16 @@ const NODE_W = 120;
 const NODE_H = 56;
 const GRID = 20;
 
+// Preset link colours (each hex passes the backend _COLOR_RE). Default = null →
+// the line inherits the muted colour, shown here as the grey swatch.
+const LINK_COLORS: { label: string; value: string | null; swatch: string }[] = [
+  { label: "Default (grey)", value: null, swatch: "#64748b" },
+  { label: "Green", value: "#10b981", swatch: "#10b981" },
+  { label: "Red", value: "#ef4444", swatch: "#ef4444" },
+  { label: "Blue", value: "#3b82f6", swatch: "#3b82f6" },
+  { label: "Purple", value: "#8b5cf6", swatch: "#8b5cf6" },
+];
+
 type DraftNode = Omit<TopologyNode, "online"> & { online?: boolean | null };
 type DraftLink = TopologyLink;
 
@@ -33,6 +43,9 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const [draftNodes, setDraftNodes] = useState<DraftNode[]>([]);
   const [draftLinks, setDraftLinks] = useState<DraftLink[]>([]);
   const [activeLink, setActiveLink] = useState<string | null>(null);
+  // View-mode detail panel docked at the bottom: a clicked device (all its canvas cables)
+  // or a single clicked cable. Replaces jumping to the Devices tab on node click.
+  const [detail, setDetail] = useState<{ kind: "device" | "link"; id: string } | null>(null);
   const [modal, setModal] = useState<null | "device" | "text">(null);
   const [saving, setSaving] = useState(false);
   const [rotateMode, setRotateMode] = useState(false);  // toolbar toggle: drag a text node to rotate it
@@ -43,6 +56,16 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const [editNode, setEditNode] = useState<DraftNode | null>(null);   // Edit Device modal
   const [linksForNode, setLinksForNode] = useState<string | null>(null); // Edit Links manager (node id)
   const [linkEdit, setLinkEdit] = useState<null | { initial?: DraftLink; lockA?: string }>(null); // LinkModal
+  // View toggles (per-viewer, persisted): link label = live traffic rate vs SNMP interface
+  // name (e.g. xge-0/0/1); link shape = straight vs curved. localStorage is per-browser only.
+  const [linkLabel, setLinkLabel] = useState<"speed" | "iface">(() => {
+    try { return localStorage.getItem("nod.topo.linkLabel") === "iface" ? "iface" : "speed"; } catch { return "speed"; }
+  });
+  const [curved, setCurved] = useState(() => {
+    try { return localStorage.getItem("nod.topo.curved") === "1"; } catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem("nod.topo.linkLabel", linkLabel); } catch { /* private mode */ } }, [linkLabel]);
+  useEffect(() => { try { localStorage.setItem("nod.topo.curved", curved ? "1" : "0"); } catch { /* private mode */ } }, [curved]);
 
   const updateNode = (id: string, patch: Partial<DraftNode>) =>
     setDraftNodes((p) => p.map((n) => (n.id === id ? { ...n, ...patch } : n)));
@@ -343,6 +366,19 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
             <button onClick={() => setZoom((z) => clampZoom(z * 1.1))} className="px-2 py-1 hover:bg-muted/50" title="Zoom in">+</button>
             <button onClick={fitZoom} className="px-2 py-1 hover:bg-muted/50 border-l border-border" title="Fit to screen">Fit</button>
           </div>
+          {/* Link display toggles (view mode): label = speed/interface, shape = straight/curved. */}
+          {!editing ? (
+            <>
+              <ToolbarBtn onClick={() => setLinkLabel((m) => (m === "speed" ? "iface" : "speed"))}
+                title="Link labels: live traffic speed or SNMP interface name">
+                {linkLabel === "speed" ? "🏷 Speed" : "🏷 Iface"}
+              </ToolbarBtn>
+              <ToolbarBtn onClick={() => setCurved((v) => !v)} primary={curved}
+                title="Link shape: straight or curved">
+                {curved ? "⌇ Curved" : "╱ Straight"}
+              </ToolbarBtn>
+            </>
+          ) : null}
           {/* Migration: export the whole map to JSON, or import one (superadmin → loads into edit). */}
           <ToolbarBtn onClick={exportJson}>⬇ Export</ToolbarBtn>
           {canEdit ? <ToolbarBtn onClick={() => fileRef.current?.click()}>⬆ Import</ToolbarBtn> : null}
@@ -413,21 +449,36 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 const IN_OFF = 22, PERP_OFF = 13, sp = slot >= 0 ? 1 : -1;
                 const aLbl = { x: da.x + ux * IN_OFF + nx * PERP_OFF * sp, y: da.y + uy * IN_OFF + ny * PERP_OFF * sp };
                 const bLbl = { x: dbp.x - ux * IN_OFF + nx * PERP_OFF * sp, y: dbp.y - uy * IN_OFF + ny * PERP_OFF * sp };
+                // Curved mode: quadratic bézier bowed perpendicular from the midpoint; parallel
+                // links bow on their fan side so they stay separated. Straight mode: a plain line.
+                const bend = Math.min(70, vlen * 0.2) * (slot >= 0 ? 1 : -1);
+                const mx = (p1.x + p2.x) / 2 + nx * bend, my = (p1.y + p2.y) / 2 + ny * bend;
+                const d = curved
+                  ? `M ${p1.x} ${p1.y} Q ${mx} ${my} ${p2.x} ${p2.y}`
+                  : `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
                 return (
-                  <g key={lk.id} className="cursor-pointer" onClick={() => setActiveLink(activeLink === lk.id ? null : lk.id)}>
-                    <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={lk.color || "currentColor"}
+                  <g key={lk.id} className="cursor-pointer" onClick={() => editing
+                    ? setActiveLink(activeLink === lk.id ? null : lk.id)
+                    : setDetail((d) => d?.kind === "link" && d.id === lk.id ? null : { kind: "link", id: lk.id })}>
+                    <path d={d} fill="none" stroke={lk.color || "currentColor"}
                       className={lk.color ? "" : "text-muted-foreground"} strokeWidth={style.width} strokeDasharray={style.dash} />
                     <circle cx={da.x} cy={da.y} r={5} fill={dotColor(lkR.a_oper, a.support)}
                       stroke={a.support ? "#a1a1aa" : "none"} strokeDasharray={a.support ? "2 2" : undefined} />
                     <circle cx={dbp.x} cy={dbp.y} r={5} fill={dotColor(lkR.b_oper, b.support)}
                       stroke={b.support ? "#a1a1aa" : "none"} strokeDasharray={b.support ? "2 2" : undefined} />
-                    {/* Per-interface speed near each data end: ↓ IN blue, ↑ OUT orange
-                        (same colours as the Interface Bandwidth tab). Support ends have no rate. */}
-                    {!editing && lkR.a_rx_mbps != null ? (
+                    {/* Per end: either live traffic (↓ IN blue, ↑ OUT orange — support ends have
+                        no rate) or the SNMP interface name, driven by the label toggle. */}
+                    {!editing && linkLabel === "speed" && lkR.a_rx_mbps != null ? (
                       <LinkEndRate x={aLbl.x} y={aLbl.y} rx={lkR.a_rx_mbps} tx={lkR.a_tx_mbps ?? 0} />
                     ) : null}
-                    {!editing && lkR.b_rx_mbps != null ? (
+                    {!editing && linkLabel === "speed" && lkR.b_rx_mbps != null ? (
                       <LinkEndRate x={bLbl.x} y={bLbl.y} rx={lkR.b_rx_mbps} tx={lkR.b_tx_mbps ?? 0} />
+                    ) : null}
+                    {!editing && linkLabel === "iface" && lk.a_if_name ? (
+                      <LinkEndLabel x={aLbl.x} y={aLbl.y} text={lk.a_if_name} />
+                    ) : null}
+                    {!editing && linkLabel === "iface" && lk.b_if_name ? (
+                      <LinkEndLabel x={bLbl.x} y={bLbl.y} text={lk.b_if_name} />
                     ) : null}
                   </g>
                 );
@@ -438,12 +489,12 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
               <div
                 key={n.id}
                 onPointerDown={(e) => onNodePointerDown(e, n as DraftNode)}
-                onClick={() => !editing && n.source_ip && onOpenDevice(n.source_ip)}
+                onClick={() => { if (!editing && n.icon_kind !== "text") setDetail((d) => d?.kind === "device" && d.id === n.id ? null : { kind: "device", id: n.id }); }}
                 onContextMenu={(e) => openCtx(e, n.id)}
                 title={n.display_name || n.source_ip || ""}
                 className={`absolute flex flex-col items-center justify-center text-center px-1 ${
-                  editing ? "cursor-move" : n.source_ip ? "cursor-pointer hover:opacity-80" : ""
-                } ${editing && selected.has(n.id) ? "rounded ring-2 ring-primary ring-offset-1 ring-offset-background" : ""}`}
+                  editing ? "cursor-move" : n.icon_kind !== "text" ? "cursor-pointer hover:opacity-80" : ""
+                } ${(editing && selected.has(n.id)) || (!editing && detail?.kind === "device" && detail.id === n.id) ? "rounded ring-2 ring-primary ring-offset-1 ring-offset-background" : ""}`}
                 style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H, touchAction: "none" }}
               >
                 {n.icon_kind === "text" ? (
@@ -505,12 +556,17 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         </div>
       )}
 
-      {activeLink ? (() => {
+      {editing && activeLink ? (() => {
         const lk = links.find((l) => l.id === activeLink);
         if (!lk) return null;
         return <LinkPanel link={lk as TopologyLink} nodeById={nodeById} editing={editing}
           onClose={() => setActiveLink(null)} onDelete={() => { deleteLink(lk.id); setActiveLink(null); }} />;
       })() : null}
+
+      {!editing && detail ? (
+        <LinkDetailTable detail={detail} links={links as TopologyLink[]} nodeById={nodeById}
+          onClose={() => setDetail(null)} onOpenDevice={onOpenDevice} />
+      ) : null}
 
       {modal === "device" ? (
         <AddDeviceModal
@@ -673,6 +729,18 @@ function LinkEndRate({ x, y, rx, tx }: { x: number; y: number; rx: number; tx: n
   );
 }
 
+// SNMP interface-name label on a link end (if_name verbatim, e.g. "xge-0/0/1"). Same
+// background stroke as the rate label so it stays readable over the link.
+function LinkEndLabel({ x, y, text }: { x: number; y: number; text: string }) {
+  return (
+    <text x={x} y={y} textAnchor="middle" className="text-[10px] font-semibold"
+      fill="hsl(var(--foreground))" style={{ paintOrder: "stroke" }}
+      stroke="hsl(var(--background))" strokeWidth={3.5}>
+      {text}
+    </text>
+  );
+}
+
 function Legend() {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
@@ -720,6 +788,107 @@ function LinkPanel({ link, nodeById, editing, onClose, onDelete }: {
         ) : null}
       </div>
       {editing ? <button onClick={onDelete} className="mt-2 text-red-500 hover:underline">Delete link</button> : null}
+    </div>
+  );
+}
+
+// One end of a link, normalised so the clicked device is always "near".
+function linkEnd(lk: TopologyLink, side: "a" | "b") {
+  return side === "a"
+    ? { nodeId: lk.a_node_id, iff: lk.a_if_name, oper: lk.a_oper, rx: lk.a_rx_mbps, tx: lk.a_tx_mbps }
+    : { nodeId: lk.b_node_id, iff: lk.b_if_name, oper: lk.b_oper, rx: lk.b_rx_mbps, tx: lk.b_tx_mbps };
+}
+
+// Bottom detail table: for a clicked DEVICE, every canvas cable touching it (clicked device =
+// "near", the other end = "connected"); for a clicked LINK, that one cable. Status + live
+// traffic come straight off the link — no extra fetch. ↗ opens the full device detail.
+function LinkDetailTable({ detail, links, nodeById, onClose, onOpenDevice }: {
+  detail: { kind: "device" | "link"; id: string };
+  links: TopologyLink[]; nodeById: Record<string, TopologyNode | DraftNode>;
+  onClose: () => void; onOpenDevice: (source: string) => void;
+}) {
+  const nameOf = (id: string) => nodeById[id]?.display_name || nodeById[id]?.source_ip || "?";
+  // Each row: which link + which side is the clicked ("near") device.
+  type Row = { lk: TopologyLink; near: "a" | "b" };
+  const rows: Row[] =
+    detail.kind === "device"
+      ? links.flatMap((lk): Row[] =>
+          lk.a_node_id === detail.id ? [{ lk, near: "a" }]
+          : lk.b_node_id === detail.id ? [{ lk, near: "b" }]
+          : [])
+      : links.filter((lk) => lk.id === detail.id).map((lk): Row => ({ lk, near: "a" }));
+
+  const title = detail.kind === "device"
+    ? `Connections — ${nameOf(detail.id)}`
+    : "Cable detail";
+  const dot = (oper: string | null, support: boolean) =>
+    support ? "#a1a1aa" : oper === "up" ? "#10b981" : oper === "down" ? "#ef4444" : "#a1a1aa";
+
+  return (
+    <div className="mt-3 rounded-md border border-border">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+        <span className="text-sm font-semibold">🔌 {title}</span>
+        <div className="flex items-center gap-3">
+          {/* Open the clicked device's full detail (the old Devices-tab view). */}
+          {detail.kind === "device" && nodeById[detail.id]?.source_ip ? (
+            <button onClick={() => onOpenDevice(nodeById[detail.id].source_ip as string)}
+              className="text-xs text-primary hover:underline whitespace-nowrap" title="Open full device detail">
+              ↗ Open device detail
+            </button>
+          ) : null}
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground" title="Close">✕</button>
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <div className="px-3 py-4 text-xs text-muted-foreground">No cables connected to this device on the canvas.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-muted-foreground border-b border-border">
+              <tr className="text-left [&>th]:px-3 [&>th]:py-1.5 [&>th]:font-medium">
+                <th>Device A</th><th>Interface</th><th>Status</th><th>Traffic (↓IN / ↑OUT)</th>
+                <th>Connected device</th><th>Interface</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ lk, near }) => {
+                const a = linkEnd(lk, near), b = linkEnd(lk, near === "a" ? "b" : "a");
+                const nA = nodeById[a.nodeId], nB = nodeById[b.nodeId];
+                const aSup = !!nA?.support, bSup = !!nB?.support;
+                // Support (icon-only) ends have no interface, no oper state and no data —
+                // those cells read "—" rather than a slate dot or the other end's traffic.
+                const statusCell = (oper: string | null, support: boolean) =>
+                  support ? <span className="text-muted-foreground">—</span>
+                  : <span className="inline-block h-2.5 w-2.5 rounded-full align-middle"
+                      style={{ background: dot(oper, false) }} title={oper ?? "unknown"} />;
+                return (
+                  <tr key={lk.id} className="border-b border-border/50 last:border-0 [&>td]:px-3 [&>td]:py-1.5 align-middle">
+                    <td className="font-medium">{nameOf(a.nodeId)}</td>
+                    <td className="tabular-nums">{a.iff || "—"}</td>
+                    <td>{statusCell(a.oper, aSup)}</td>
+                    <td className="whitespace-nowrap">
+                      {aSup ? <span className="text-muted-foreground">—</span> : (
+                        <>
+                          <span className="text-blue-600 dark:text-blue-400">↓ {fmtRate(a.rx ?? lk.rx_mbps)}</span>
+                          {" / "}
+                          <span className="text-orange-600 dark:text-orange-400">↑ {fmtRate(a.tx ?? lk.tx_mbps)}</span>
+                        </>
+                      )}
+                    </td>
+                    <td className="font-medium">{nameOf(b.nodeId)}</td>
+                    <td className="tabular-nums">{b.iff || "—"}</td>
+                    <td>{statusCell(b.oper, bSup)}</td>
+                    <td>{nB?.source_ip ? (
+                      <button onClick={() => onOpenDevice(nB.source_ip as string)}
+                        className="text-primary hover:underline whitespace-nowrap" title="Open full device detail">↗ Open</button>
+                    ) : null}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -908,15 +1077,22 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
         </div>
         <div>
           <span className="text-xs text-muted-foreground">Line colour</span>
-          <div className="flex items-center gap-2 mt-1">
+          {/* Two ways to pick: preset swatches, or the custom colour well for any shade. */}
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {LINK_COLORS.map((c) => {
+              const active = (color ?? null) === c.value;
+              return (
+                <button key={c.label} type="button" title={c.label} onClick={() => setColor(c.value)}
+                  className={`h-7 w-7 rounded-full border transition hover:scale-110 ${
+                    active ? "ring-2 ring-foreground ring-offset-2 ring-offset-background border-transparent" : "border-border"
+                  }`}
+                  style={{ background: c.swatch }} />
+              );
+            })}
+            <span className="mx-1 h-6 w-px bg-border" aria-hidden />
             <input type="color" value={color || "#64748b"} onChange={(e) => setColor(e.target.value)}
-              className="h-7 w-10 rounded border border-border bg-background p-0.5" />
-            <span className="text-xs tabular-nums">{color || "default"}</span>
-            {color ? (
-              <button type="button" onClick={() => setColor(null)} className="text-xs text-muted-foreground hover:underline">
-                Reset to default
-              </button>
-            ) : null}
+              title="Custom colour" className="h-7 w-10 rounded border border-border bg-background p-0.5" />
+            <span className="text-xs tabular-nums text-muted-foreground">{color || "default"}</span>
           </div>
         </div>
       </div>
