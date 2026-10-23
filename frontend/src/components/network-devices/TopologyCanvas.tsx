@@ -12,6 +12,16 @@ const NODE_W = 120;
 const NODE_H = 56;
 const GRID = 20;
 
+// Preset link colours (each hex passes the backend _COLOR_RE). Default = null →
+// the line inherits the muted colour, shown here as the grey swatch.
+const LINK_COLORS: { label: string; value: string | null; swatch: string }[] = [
+  { label: "Default (grey)", value: null, swatch: "#64748b" },
+  { label: "Green", value: "#10b981", swatch: "#10b981" },
+  { label: "Red", value: "#ef4444", swatch: "#ef4444" },
+  { label: "Blue", value: "#3b82f6", swatch: "#3b82f6" },
+  { label: "Purple", value: "#8b5cf6", swatch: "#8b5cf6" },
+];
+
 type DraftNode = Omit<TopologyNode, "online"> & { online?: boolean | null };
 type DraftLink = TopologyLink;
 
@@ -957,14 +967,16 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
         <div>
           <span className="text-xs text-muted-foreground">Line colour</span>
           <div className="flex items-center gap-2 mt-1">
-            <input type="color" value={color || "#64748b"} onChange={(e) => setColor(e.target.value)}
-              className="h-7 w-10 rounded border border-border bg-background p-0.5" />
-            <span className="text-xs tabular-nums">{color || "default"}</span>
-            {color ? (
-              <button type="button" onClick={() => setColor(null)} className="text-xs text-muted-foreground hover:underline">
-                Reset to default
-              </button>
-            ) : null}
+            {LINK_COLORS.map((c) => {
+              const active = (color ?? null) === c.value;
+              return (
+                <button key={c.label} type="button" title={c.label} onClick={() => setColor(c.value)}
+                  className={`h-7 w-7 rounded-full border transition hover:scale-110 ${
+                    active ? "ring-2 ring-foreground ring-offset-2 ring-offset-background border-transparent" : "border-border"
+                  }`}
+                  style={{ background: c.swatch }} />
+              );
+            })}
           </div>
         </div>
       </div>
