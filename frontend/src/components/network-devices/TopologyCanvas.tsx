@@ -828,7 +828,16 @@ function LinkDetailTable({ detail, links, nodeById, onClose, onOpenDevice }: {
     <div className="mt-3 rounded-md border border-border">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <span className="text-sm font-semibold">🔌 {title}</span>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground" title="Close">✕</button>
+        <div className="flex items-center gap-3">
+          {/* Open the clicked device's full detail (the old Devices-tab view). */}
+          {detail.kind === "device" && nodeById[detail.id]?.source_ip ? (
+            <button onClick={() => onOpenDevice(nodeById[detail.id].source_ip as string)}
+              className="text-xs text-primary hover:underline whitespace-nowrap" title="Open full device detail">
+              ↗ Open device detail
+            </button>
+          ) : null}
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground" title="Close">✕</button>
+        </div>
       </div>
       {rows.length === 0 ? (
         <div className="px-3 py-4 text-xs text-muted-foreground">No cables connected to this device on the canvas.</div>
