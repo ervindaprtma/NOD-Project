@@ -966,7 +966,8 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
         </div>
         <div>
           <span className="text-xs text-muted-foreground">Line colour</span>
-          <div className="flex items-center gap-2 mt-1">
+          {/* Two ways to pick: preset swatches, or the custom colour well for any shade. */}
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
             {LINK_COLORS.map((c) => {
               const active = (color ?? null) === c.value;
               return (
@@ -977,6 +978,10 @@ function LinkModal({ nodes, initial, lockA, onClose, onSave }: {
                   style={{ background: c.swatch }} />
               );
             })}
+            <span className="mx-1 h-6 w-px bg-border" aria-hidden />
+            <input type="color" value={color || "#64748b"} onChange={(e) => setColor(e.target.value)}
+              title="Custom colour" className="h-7 w-10 rounded border border-border bg-background p-0.5" />
+            <span className="text-xs tabular-nums text-muted-foreground">{color || "default"}</span>
           </div>
         </div>
       </div>
