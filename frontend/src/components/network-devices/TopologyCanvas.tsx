@@ -43,6 +43,16 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const [editNode, setEditNode] = useState<DraftNode | null>(null);   // Edit Device modal
   const [linksForNode, setLinksForNode] = useState<string | null>(null); // Edit Links manager (node id)
   const [linkEdit, setLinkEdit] = useState<null | { initial?: DraftLink; lockA?: string }>(null); // LinkModal
+  // View toggles (per-viewer, persisted): link label = live traffic rate vs SNMP interface
+  // name (e.g. xge-0/0/1); link shape = straight vs curved. localStorage is per-browser only.
+  const [linkLabel, setLinkLabel] = useState<"speed" | "iface">(() => {
+    try { return localStorage.getItem("nod.topo.linkLabel") === "iface" ? "iface" : "speed"; } catch { return "speed"; }
+  });
+  const [curved, setCurved] = useState(() => {
+    try { return localStorage.getItem("nod.topo.curved") === "1"; } catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem("nod.topo.linkLabel", linkLabel); } catch { /* private mode */ } }, [linkLabel]);
+  useEffect(() => { try { localStorage.setItem("nod.topo.curved", curved ? "1" : "0"); } catch { /* private mode */ } }, [curved]);
 
   const updateNode = (id: string, patch: Partial<DraftNode>) =>
     setDraftNodes((p) => p.map((n) => (n.id === id ? { ...n, ...patch } : n)));
@@ -343,6 +353,19 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
             <button onClick={() => setZoom((z) => clampZoom(z * 1.1))} className="px-2 py-1 hover:bg-muted/50" title="Zoom in">+</button>
             <button onClick={fitZoom} className="px-2 py-1 hover:bg-muted/50 border-l border-border" title="Fit to screen">Fit</button>
           </div>
+          {/* Link display toggles (view mode): label = speed/interface, shape = straight/curved. */}
+          {!editing ? (
+            <>
+              <ToolbarBtn onClick={() => setLinkLabel((m) => (m === "speed" ? "iface" : "speed"))}
+                title="Link labels: live traffic speed or SNMP interface name">
+                {linkLabel === "speed" ? "🏷 Speed" : "🏷 Iface"}
+              </ToolbarBtn>
+              <ToolbarBtn onClick={() => setCurved((v) => !v)} primary={curved}
+                title="Link shape: straight or curved">
+                {curved ? "⌇ Curved" : "╱ Straight"}
+              </ToolbarBtn>
+            </>
+          ) : null}
           {/* Migration: export the whole map to JSON, or import one (superadmin → loads into edit). */}
           <ToolbarBtn onClick={exportJson}>⬇ Export</ToolbarBtn>
           {canEdit ? <ToolbarBtn onClick={() => fileRef.current?.click()}>⬆ Import</ToolbarBtn> : null}
@@ -413,21 +436,34 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                 const IN_OFF = 22, PERP_OFF = 13, sp = slot >= 0 ? 1 : -1;
                 const aLbl = { x: da.x + ux * IN_OFF + nx * PERP_OFF * sp, y: da.y + uy * IN_OFF + ny * PERP_OFF * sp };
                 const bLbl = { x: dbp.x - ux * IN_OFF + nx * PERP_OFF * sp, y: dbp.y - uy * IN_OFF + ny * PERP_OFF * sp };
+                // Curved mode: quadratic bézier bowed perpendicular from the midpoint; parallel
+                // links bow on their fan side so they stay separated. Straight mode: a plain line.
+                const bend = Math.min(70, vlen * 0.2) * (slot >= 0 ? 1 : -1);
+                const mx = (p1.x + p2.x) / 2 + nx * bend, my = (p1.y + p2.y) / 2 + ny * bend;
+                const d = curved
+                  ? `M ${p1.x} ${p1.y} Q ${mx} ${my} ${p2.x} ${p2.y}`
+                  : `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
                 return (
                   <g key={lk.id} className="cursor-pointer" onClick={() => setActiveLink(activeLink === lk.id ? null : lk.id)}>
-                    <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={lk.color || "currentColor"}
+                    <path d={d} fill="none" stroke={lk.color || "currentColor"}
                       className={lk.color ? "" : "text-muted-foreground"} strokeWidth={style.width} strokeDasharray={style.dash} />
                     <circle cx={da.x} cy={da.y} r={5} fill={dotColor(lkR.a_oper, a.support)}
                       stroke={a.support ? "#a1a1aa" : "none"} strokeDasharray={a.support ? "2 2" : undefined} />
                     <circle cx={dbp.x} cy={dbp.y} r={5} fill={dotColor(lkR.b_oper, b.support)}
                       stroke={b.support ? "#a1a1aa" : "none"} strokeDasharray={b.support ? "2 2" : undefined} />
-                    {/* Per-interface speed near each data end: ↓ IN blue, ↑ OUT orange
-                        (same colours as the Interface Bandwidth tab). Support ends have no rate. */}
-                    {!editing && lkR.a_rx_mbps != null ? (
+                    {/* Per end: either live traffic (↓ IN blue, ↑ OUT orange — support ends have
+                        no rate) or the SNMP interface name, driven by the label toggle. */}
+                    {!editing && linkLabel === "speed" && lkR.a_rx_mbps != null ? (
                       <LinkEndRate x={aLbl.x} y={aLbl.y} rx={lkR.a_rx_mbps} tx={lkR.a_tx_mbps ?? 0} />
                     ) : null}
-                    {!editing && lkR.b_rx_mbps != null ? (
+                    {!editing && linkLabel === "speed" && lkR.b_rx_mbps != null ? (
                       <LinkEndRate x={bLbl.x} y={bLbl.y} rx={lkR.b_rx_mbps} tx={lkR.b_tx_mbps ?? 0} />
+                    ) : null}
+                    {!editing && linkLabel === "iface" && lk.a_if_name ? (
+                      <LinkEndLabel x={aLbl.x} y={aLbl.y} text={lk.a_if_name} />
+                    ) : null}
+                    {!editing && linkLabel === "iface" && lk.b_if_name ? (
+                      <LinkEndLabel x={bLbl.x} y={bLbl.y} text={lk.b_if_name} />
                     ) : null}
                   </g>
                 );
@@ -669,6 +705,18 @@ function LinkEndRate({ x, y, rx, tx }: { x: number; y: number; rx: number; tx: n
       {/* Stacked, not inline — IN over OUT, so neither direction is cramped on the line. */}
       <tspan x={x} y={y} fill="#3b82f6">↓ {fmtRate(rx)}</tspan>
       <tspan x={x} y={y} dy={12} fill="#f97316">↑ {fmtRate(tx)}</tspan>
+    </text>
+  );
+}
+
+// SNMP interface-name label on a link end (if_name verbatim, e.g. "xge-0/0/1"). Same
+// background stroke as the rate label so it stays readable over the link.
+function LinkEndLabel({ x, y, text }: { x: number; y: number; text: string }) {
+  return (
+    <text x={x} y={y} textAnchor="middle" className="text-[10px] font-semibold"
+      fill="hsl(var(--foreground))" style={{ paintOrder: "stroke" }}
+      stroke="hsl(var(--background))" strokeWidth={3.5}>
+      {text}
     </text>
   );
 }
