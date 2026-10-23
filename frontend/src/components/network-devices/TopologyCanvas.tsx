@@ -845,21 +845,30 @@ function LinkDetailTable({ detail, links, nodeById, onClose, onOpenDevice }: {
               {rows.map(({ lk, near }) => {
                 const a = linkEnd(lk, near), b = linkEnd(lk, near === "a" ? "b" : "a");
                 const nA = nodeById[a.nodeId], nB = nodeById[b.nodeId];
+                const aSup = !!nA?.support, bSup = !!nB?.support;
+                // Support (icon-only) ends have no interface, no oper state and no data —
+                // those cells read "—" rather than a slate dot or the other end's traffic.
+                const statusCell = (oper: string | null, support: boolean) =>
+                  support ? <span className="text-muted-foreground">—</span>
+                  : <span className="inline-block h-2.5 w-2.5 rounded-full align-middle"
+                      style={{ background: dot(oper, false) }} title={oper ?? "unknown"} />;
                 return (
                   <tr key={lk.id} className="border-b border-border/50 last:border-0 [&>td]:px-3 [&>td]:py-1.5 align-middle">
                     <td className="font-medium">{nameOf(a.nodeId)}</td>
                     <td className="tabular-nums">{a.iff || "—"}</td>
-                    <td><span className="inline-block h-2.5 w-2.5 rounded-full align-middle"
-                      style={{ background: dot(a.oper, !!nA?.support) }} title={a.oper ?? "support"} /></td>
+                    <td>{statusCell(a.oper, aSup)}</td>
                     <td className="whitespace-nowrap">
-                      <span className="text-blue-600 dark:text-blue-400">↓ {fmtRate(a.rx ?? lk.rx_mbps)}</span>
-                      {" / "}
-                      <span className="text-orange-600 dark:text-orange-400">↑ {fmtRate(a.tx ?? lk.tx_mbps)}</span>
+                      {aSup ? <span className="text-muted-foreground">—</span> : (
+                        <>
+                          <span className="text-blue-600 dark:text-blue-400">↓ {fmtRate(a.rx ?? lk.rx_mbps)}</span>
+                          {" / "}
+                          <span className="text-orange-600 dark:text-orange-400">↑ {fmtRate(a.tx ?? lk.tx_mbps)}</span>
+                        </>
+                      )}
                     </td>
                     <td className="font-medium">{nameOf(b.nodeId)}</td>
                     <td className="tabular-nums">{b.iff || "—"}</td>
-                    <td><span className="inline-block h-2.5 w-2.5 rounded-full align-middle"
-                      style={{ background: dot(b.oper, !!nB?.support) }} title={b.oper ?? "support"} /></td>
+                    <td>{statusCell(b.oper, bSup)}</td>
                     <td>{nB?.source_ip ? (
                       <button onClick={() => onOpenDevice(nB.source_ip as string)}
                         className="text-primary hover:underline whitespace-nowrap" title="Open full device detail">↗ Open</button>
