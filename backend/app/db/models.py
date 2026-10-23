@@ -784,6 +784,10 @@ class TopologyLink(Base):
         String(16), nullable=True,
         comment="Optional per-link stroke colour (hex); NULL = default muted stroke",
     )
+    # Quadratic-Bézier control-point offset (canvas px) from the link midpoint.
+    # (0, 0) = straight line. Shared layout, saved with node positions.
+    curve_dx: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    curve_dy: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
 
 
 class DeviceOverride(Base):
