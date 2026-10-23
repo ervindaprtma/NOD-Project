@@ -329,10 +329,16 @@ async def health_check():
         "opensearch_ipsec": "ok",
     }
 
-    # Check DB — only this is critical for health
+    # Check DB liveness. Bounded so a saturated connection pool can't stall the
+    # probe past Docker's healthcheck timeout, and a checkout timeout is read as
+    # "alive but busy" (healthy), NOT "DB down" (503). A pool jammed by slow
+    # OpenSearch-bound requests means overloaded, not dead — draining a reachable
+    # backend from the LB only deepens the outage it's trying to escape.
     try:
         async with AsyncSessionLocal() as session:
-            await session.execute(text("SELECT 1"))
+            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=3)
+    except asyncio.TimeoutError:
+        status["db"] = "busy"
     except Exception:
         status["db"] = "error"
 
@@ -347,8 +353,9 @@ async def health_check():
         for key in ["opensearch_dc", "opensearch_drc", "opensearch_ipsec"]:
             status[key] = "unreachable"
 
-    # Healthy as long as DB is ok (OpenSearch is external dependency)
-    if status["db"] != "ok":
+    # Unhealthy only when the DB is genuinely unreachable. "busy" (pool saturated)
+    # and OpenSearch being down are not fatal — the process is alive and recovers.
+    if status["db"] == "error":
         return JSONResponse(content=status, status_code=503)
     return JSONResponse(content=status, status_code=200)
 
