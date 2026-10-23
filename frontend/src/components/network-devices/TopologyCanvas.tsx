@@ -43,6 +43,9 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
   const [draftNodes, setDraftNodes] = useState<DraftNode[]>([]);
   const [draftLinks, setDraftLinks] = useState<DraftLink[]>([]);
   const [activeLink, setActiveLink] = useState<string | null>(null);
+  // View-mode detail panel docked at the bottom: a clicked device (all its canvas cables)
+  // or a single clicked cable. Replaces jumping to the Devices tab on node click.
+  const [detail, setDetail] = useState<{ kind: "device" | "link"; id: string } | null>(null);
   const [modal, setModal] = useState<null | "device" | "text">(null);
   const [saving, setSaving] = useState(false);
   const [rotateMode, setRotateMode] = useState(false);  // toolbar toggle: drag a text node to rotate it
@@ -454,7 +457,9 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
                   ? `M ${p1.x} ${p1.y} Q ${mx} ${my} ${p2.x} ${p2.y}`
                   : `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
                 return (
-                  <g key={lk.id} className="cursor-pointer" onClick={() => setActiveLink(activeLink === lk.id ? null : lk.id)}>
+                  <g key={lk.id} className="cursor-pointer" onClick={() => editing
+                    ? setActiveLink(activeLink === lk.id ? null : lk.id)
+                    : setDetail((d) => d?.kind === "link" && d.id === lk.id ? null : { kind: "link", id: lk.id })}>
                     <path d={d} fill="none" stroke={lk.color || "currentColor"}
                       className={lk.color ? "" : "text-muted-foreground"} strokeWidth={style.width} strokeDasharray={style.dash} />
                     <circle cx={da.x} cy={da.y} r={5} fill={dotColor(lkR.a_oper, a.support)}
@@ -484,12 +489,12 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
               <div
                 key={n.id}
                 onPointerDown={(e) => onNodePointerDown(e, n as DraftNode)}
-                onClick={() => !editing && n.source_ip && onOpenDevice(n.source_ip)}
+                onClick={() => { if (!editing && n.icon_kind !== "text") setDetail((d) => d?.kind === "device" && d.id === n.id ? null : { kind: "device", id: n.id }); }}
                 onContextMenu={(e) => openCtx(e, n.id)}
                 title={n.display_name || n.source_ip || ""}
                 className={`absolute flex flex-col items-center justify-center text-center px-1 ${
-                  editing ? "cursor-move" : n.source_ip ? "cursor-pointer hover:opacity-80" : ""
-                } ${editing && selected.has(n.id) ? "rounded ring-2 ring-primary ring-offset-1 ring-offset-background" : ""}`}
+                  editing ? "cursor-move" : n.icon_kind !== "text" ? "cursor-pointer hover:opacity-80" : ""
+                } ${(editing && selected.has(n.id)) || (!editing && detail?.kind === "device" && detail.id === n.id) ? "rounded ring-2 ring-primary ring-offset-1 ring-offset-background" : ""}`}
                 style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H, touchAction: "none" }}
               >
                 {n.icon_kind === "text" ? (
@@ -551,12 +556,17 @@ export function TopologyCanvas({ onOpenDevice, refreshMs = 30_000 }: { onOpenDev
         </div>
       )}
 
-      {activeLink ? (() => {
+      {editing && activeLink ? (() => {
         const lk = links.find((l) => l.id === activeLink);
         if (!lk) return null;
         return <LinkPanel link={lk as TopologyLink} nodeById={nodeById} editing={editing}
           onClose={() => setActiveLink(null)} onDelete={() => { deleteLink(lk.id); setActiveLink(null); }} />;
       })() : null}
+
+      {!editing && detail ? (
+        <LinkDetailTable detail={detail} links={links as TopologyLink[]} nodeById={nodeById}
+          onClose={() => setDetail(null)} onOpenDevice={onOpenDevice} />
+      ) : null}
 
       {modal === "device" ? (
         <AddDeviceModal
@@ -778,6 +788,89 @@ function LinkPanel({ link, nodeById, editing, onClose, onDelete }: {
         ) : null}
       </div>
       {editing ? <button onClick={onDelete} className="mt-2 text-red-500 hover:underline">Delete link</button> : null}
+    </div>
+  );
+}
+
+// One end of a link, normalised so the clicked device is always "near".
+function linkEnd(lk: TopologyLink, side: "a" | "b") {
+  return side === "a"
+    ? { nodeId: lk.a_node_id, iff: lk.a_if_name, oper: lk.a_oper, rx: lk.a_rx_mbps, tx: lk.a_tx_mbps }
+    : { nodeId: lk.b_node_id, iff: lk.b_if_name, oper: lk.b_oper, rx: lk.b_rx_mbps, tx: lk.b_tx_mbps };
+}
+
+// Bottom detail table: for a clicked DEVICE, every canvas cable touching it (clicked device =
+// "near", the other end = "connected"); for a clicked LINK, that one cable. Status + live
+// traffic come straight off the link — no extra fetch. ↗ opens the full device detail.
+function LinkDetailTable({ detail, links, nodeById, onClose, onOpenDevice }: {
+  detail: { kind: "device" | "link"; id: string };
+  links: TopologyLink[]; nodeById: Record<string, TopologyNode | DraftNode>;
+  onClose: () => void; onOpenDevice: (source: string) => void;
+}) {
+  const nameOf = (id: string) => nodeById[id]?.display_name || nodeById[id]?.source_ip || "?";
+  // Each row: which link + which side is the clicked ("near") device.
+  type Row = { lk: TopologyLink; near: "a" | "b" };
+  const rows: Row[] =
+    detail.kind === "device"
+      ? links.flatMap((lk): Row[] =>
+          lk.a_node_id === detail.id ? [{ lk, near: "a" }]
+          : lk.b_node_id === detail.id ? [{ lk, near: "b" }]
+          : [])
+      : links.filter((lk) => lk.id === detail.id).map((lk): Row => ({ lk, near: "a" }));
+
+  const title = detail.kind === "device"
+    ? `Connections — ${nameOf(detail.id)}`
+    : "Cable detail";
+  const dot = (oper: string | null, support: boolean) =>
+    support ? "#a1a1aa" : oper === "up" ? "#10b981" : oper === "down" ? "#ef4444" : "#a1a1aa";
+
+  return (
+    <div className="mt-3 rounded-md border border-border">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+        <span className="text-sm font-semibold">🔌 {title}</span>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground" title="Close">✕</button>
+      </div>
+      {rows.length === 0 ? (
+        <div className="px-3 py-4 text-xs text-muted-foreground">No cables connected to this device on the canvas.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-muted-foreground border-b border-border">
+              <tr className="text-left [&>th]:px-3 [&>th]:py-1.5 [&>th]:font-medium">
+                <th>Device A</th><th>Interface</th><th>Status</th><th>Traffic (↓IN / ↑OUT)</th>
+                <th>Connected device</th><th>Interface</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ lk, near }) => {
+                const a = linkEnd(lk, near), b = linkEnd(lk, near === "a" ? "b" : "a");
+                const nA = nodeById[a.nodeId], nB = nodeById[b.nodeId];
+                return (
+                  <tr key={lk.id} className="border-b border-border/50 last:border-0 [&>td]:px-3 [&>td]:py-1.5 align-middle">
+                    <td className="font-medium">{nameOf(a.nodeId)}</td>
+                    <td className="tabular-nums">{a.iff || "—"}</td>
+                    <td><span className="inline-block h-2.5 w-2.5 rounded-full align-middle"
+                      style={{ background: dot(a.oper, !!nA?.support) }} title={a.oper ?? "support"} /></td>
+                    <td className="whitespace-nowrap">
+                      <span className="text-blue-600 dark:text-blue-400">↓ {fmtRate(a.rx ?? lk.rx_mbps)}</span>
+                      {" / "}
+                      <span className="text-orange-600 dark:text-orange-400">↑ {fmtRate(a.tx ?? lk.tx_mbps)}</span>
+                    </td>
+                    <td className="font-medium">{nameOf(b.nodeId)}</td>
+                    <td className="tabular-nums">{b.iff || "—"}</td>
+                    <td><span className="inline-block h-2.5 w-2.5 rounded-full align-middle"
+                      style={{ background: dot(b.oper, !!nB?.support) }} title={b.oper ?? "support"} /></td>
+                    <td>{nB?.source_ip ? (
+                      <button onClick={() => onOpenDevice(nB.source_ip as string)}
+                        className="text-primary hover:underline whitespace-nowrap" title="Open full device detail">↗ Open</button>
+                    ) : null}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
