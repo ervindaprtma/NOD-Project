@@ -55,7 +55,13 @@ class Settings(BaseSettings):
     # ── OpenSearch ─────────────────────────────────────────────
     OPENSEARCH_DC_URL: str = "http://10.80.150.108:9200"
     OPENSEARCH_DRC_URL: str = "http://10.90.150.108:9200"
+    # Comma-separated — one entry per IPsec host (e.g. DRC, DC). The fan-out queries every
+    # host listed; drop/add a host by editing this list.
     OPENSEARCH_IPSEC_URL: str = "http://10.90.150.108:9200"
+
+    @property
+    def ipsec_urls_list(self) -> List[str]:
+        return [u.strip() for u in self.OPENSEARCH_IPSEC_URL.split(",") if u.strip()]
     OPENSEARCH_USERNAME: str = ""
     OPENSEARCH_PASSWORD: str = ""
     OPENSEARCH_POOL_SIZE: int = 10

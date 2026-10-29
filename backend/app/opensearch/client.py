@@ -148,9 +148,22 @@ def get_drc_client() -> AsyncOpenSearch:
 
 
 @lru_cache()
+def _ipsec_host_clients() -> tuple:
+    """One client per host listed in OPENSEARCH_IPSEC_URL (comma-separated)."""
+    return tuple(
+        _build_client(url, cluster=f"opensearch-ipsec-{i}")
+        for i, url in enumerate(settings.ipsec_urls_list)
+    )
+
+
 def get_ipsec_client() -> AsyncOpenSearch:
-    """Client for ipsec-* index."""
-    return _build_client(settings.OPENSEARCH_IPSEC_URL, cluster="opensearch-ipsec")
+    """Primary IPsec host client (first entry in OPENSEARCH_IPSEC_URL)."""
+    return _ipsec_host_clients()[0]
+
+
+def ipsec_client_factories() -> list:
+    """IPsec lives across clusters: every host in OPENSEARCH_IPSEC_URL, plus the DC telegraf cluster."""
+    return [lambda c=c: c for c in _ipsec_host_clients()] + [get_dc_client]
 
 
 async def check_opensearch_health(client: AsyncOpenSearch) -> bool:

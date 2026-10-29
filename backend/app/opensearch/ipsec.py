@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from opensearchpy import AsyncOpenSearch
-from app.opensearch.client import get_dc_client, get_ipsec_client
+from app.opensearch.client import ipsec_client_factories
 from app.opensearch.query import safe_search
 from app.opensearch.sslvpn import (
     _BUCKET_MS,
@@ -77,7 +77,7 @@ async def ipsec_usage_summary(gte_ms: int = 0, lte_ms: int = 0) -> dict[str, Any
     the offending users, not just count them.
     """
     merged: dict[str, int] = {}
-    for get_client in (get_ipsec_client, get_dc_client):
+    for get_client in ipsec_client_factories():
         try:
             for user, val in (await _ipsec_usage_one(get_client(), gte_ms, lte_ms)).items():
                 merged[user] = max(merged.get(user, 0), val)
@@ -111,7 +111,7 @@ async def active_ipsec_users_count(
         return len(await _ipsec_usernames(client, gte_ms, lte_ms))
 
     names: set[str] = set()
-    for get_client in (get_ipsec_client, get_dc_client):
+    for get_client in ipsec_client_factories():
         try:
             names |= await _ipsec_usernames(get_client(), gte_ms, lte_ms)
         except Exception:  # a cluster without an ipsec-* index just contributes nothing
@@ -157,7 +157,7 @@ async def active_ipsec_users_count_timeline(
                 (await _ipsec_user_timeline_one(client, gte_ms, lte_ms, interval)).items()}
 
     merged: dict[int, set[str]] = {}
-    for get_client in (get_ipsec_client, get_dc_client):
+    for get_client in ipsec_client_factories():
         try:
             for ts, s in (await _ipsec_user_timeline_one(get_client(), gte_ms, lte_ms, interval)).items():
                 merged.setdefault(ts, set()).update(s)
@@ -247,7 +247,7 @@ async def active_ipsec_users_detail(
         return await _ipsec_detail_one(client, gte_ms, lte_ms)
 
     by_user: dict[str, dict] = {}
-    for get_client in (get_ipsec_client, get_dc_client):
+    for get_client in ipsec_client_factories():
         try:
             for u in await _ipsec_detail_one(get_client(), gte_ms, lte_ms):
                 prev = by_user.get(u["username"])
@@ -285,7 +285,7 @@ async def ipsec_session_history(
     m_times: dict[tuple[str, str], list[int]] = {}
     m_byb: dict[tuple[str, str], dict[int, tuple[int, int]]] = {}
     m_durs: dict[tuple[str, str], dict[int, int]] = {}
-    for get_client in (get_ipsec_client, get_dc_client):
+    for get_client in ipsec_client_factories():
         try:
             t2, b2, d2 = await _fetch(get_client())
             for k, v in t2.items():
