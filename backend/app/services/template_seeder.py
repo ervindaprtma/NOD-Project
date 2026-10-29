@@ -529,16 +529,22 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "name": "Device Reboot Monitor",
         "description": "Per-reboot events for a Device Reboot Monitor rule — which device "
                        "rebooted, how long it was unreachable, and the new uptime it came back with.",
-        "subject_template": "🔁 Device Rebooted: {{ device }}",
+        "subject_template": "🔁 Device Rebooted: {{ device }} — {{ site_name }}",
         "body_template": (
             "🔁 <b>DEVICE REBOOTED</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "🖥️ <b>Device:</b> {{ device|e }} ({{ device_ip }})\n"
             "🏢 <b>Site:</b> {{ site_name|e }}\n"
+            "🛠️ <b>Service:</b> Device Uptime\n"
+            "📌 <b>Alert:</b> {{ rule.name|e }}\n"
+            "🎯 <b>Device:</b> {{ device|e }} ({{ device_ip }})\n"
+            "⚠️ <b>Severity:</b> {{ severity|e }}\n"
             "🕐 <b>Rebooted at:</b> {{ reboot_at }}\n"
+            "🔔 <b>Notified:</b> {{ sent_at }}\n"
+            "━━━━━━━━━━━━━━━━━━\n"
             "⏱️ <b>Unreachable:</b> {{ downtime }}\n"
-            "⬆️ <b>Back up · new uptime:</b> {{ new_uptime }} (was {{ prev_uptime }})\n"
-            "━━━━━━━━━━━━━━━━━━"
+            "⬆️ <b>New uptime:</b> {{ new_uptime }} (was {{ prev_uptime }})\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ Check device power / uplink / SNMP"
         ),
         "line_template": None,
         "is_default": False,

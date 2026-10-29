@@ -2200,12 +2200,21 @@ async def _send_reboot_event(rule: AlertRule, device_key: str, info: dict) -> No
             logger.error("Reboot template render failed for rule %s: %s", rule.id, e)
     if body is None:
         h_e, ip_e, s_e = html.escape(hostname), html.escape(str(device_key)), html.escape(rule.site_name or "—")
-        body = (f"🔁 <b>Device Rebooted</b>\n"
-                f"🖥️ <b>Device:</b> {h_e} ({ip_e})\n"
+        n_e, sev_e = html.escape(rule.name or "—"), html.escape(rule.severity or "—")
+        body = (f"🔁 <b>DEVICE REBOOTED</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
                 f"🏢 <b>Site:</b> {s_e}\n"
+                f"🛠️ <b>Service:</b> Device Uptime\n"
+                f"📌 <b>Alert:</b> {n_e}\n"
+                f"🎯 <b>Device:</b> {h_e} ({ip_e})\n"
+                f"⚠️ <b>Severity:</b> {sev_e}\n"
                 f"🕐 <b>Rebooted at:</b> {ctx['reboot_at']}\n"
+                f"🔔 <b>Notified:</b> {ctx['sent_at']}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
                 f"⏱️ <b>Unreachable:</b> {ctx['downtime']}\n"
-                f"⬆️ <b>Back up · new uptime:</b> {ctx['new_uptime']} (was {ctx['prev_uptime']})")
+                f"⬆️ <b>New uptime:</b> {ctx['new_uptime']} (was {ctx['prev_uptime']})\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️ Check device power / uplink / SNMP")
     parse_mode = "HTML" if "<b>" in body else None
     subject = f"Device Rebooted: {hostname}"
     sent_results: dict[str, bool] = {}
