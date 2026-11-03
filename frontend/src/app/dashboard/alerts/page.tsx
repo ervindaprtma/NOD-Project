@@ -55,9 +55,16 @@ const DATA_SOURCES = [
 // interface_stats requires a canonical site (the interface picker keys off it) and a
 // window ≥ 2 min (the counter→rate derivative needs 2 histogram buckets).
 const SITES = ["Site_FGT-DC", "Site_FGT-DRC", "Site_FGT_Office"];
-// Device IP → canonical site (telemetry subnets), used to scope the interface-alert
-// device picker when editing an existing rule (site_name holds the device IP).
-function siteFromDeviceIp(ip: string): string {
+// Device IP → canonical site, used to scope the interface-alert device picker when editing
+// an existing rule (site_name holds the device IP). Asks each site's device list (the same
+// source the picker uses) — switches self-resolve their site from tag.site, so their IPs
+// don't follow the FGT subnets. The subnet guess is only the fallback for a device that's
+// gone silent >24h; a wrong guess makes the picker reset the rule to another site's device.
+async function siteFromDeviceIp(ip: string): Promise<string> {
+  const lists = await Promise.all(SITES.map((s) =>
+    apiFetch<{ data: { key: string }[] }>(`/api/v1/alerts/devices?site_name=${s}`).catch(() => null)));
+  const hit = SITES.find((_, i) => lists[i]?.data?.some((d) => d.key === ip));
+  if (hit) return hit;
   if (ip.startsWith("10.80.")) return "Site_FGT-DC";
   if (ip.startsWith("10.90.")) return "Site_FGT-DRC";
   if (ip.startsWith("10.70.")) return "Site_FGT_Office";
@@ -587,7 +594,13 @@ export default function AlertsPage() {
     setShowModal(true);
   }
 
-  function openEdit(rule: AlertRule) {
+  async function openEdit(rule: AlertRule) {
+    // interface_state/errors store the device IP in site_name — scope the picker to its site.
+    // Resolved BEFORE the modal opens: the picker's reset effect (gated on showModal) would
+    // otherwise swap site_name for the first device of the default site.
+    if (rule.data_source === "interface_state" || rule.data_source === "interface_errors") {
+      setIfaceSite(await siteFromDeviceIp(rule.site_name || ""));
+    }
     setEditingRule(rule);
     setForm({
       name: rule.name,
@@ -630,10 +643,6 @@ export default function AlertsPage() {
       site_name: rule.site_name || "",
       enabled: rule.enabled,
     });
-    // interface_state/errors store the device IP in site_name — scope the picker to its site.
-    if (rule.data_source === "interface_state" || rule.data_source === "interface_errors") {
-      setIfaceSite(siteFromDeviceIp(rule.site_name || ""));
-    }
     setTestResult(null);
     setShowModal(true);
   }
