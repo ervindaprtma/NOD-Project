@@ -19,8 +19,15 @@ from app.opensearch.sslvpn import (
 )
 
 
+# The collector writes username "unknown" for a tunnel whose user it hasn't joined yet —
+# one ~30s sample at tunnel setup (dur=0, the real name follows on the next poll) or at
+# teardown/rekey. Not a person: counting it shows a phantom user, and the session monitor
+# fires "Connected: unknown" then "Disconnected: unknown" one presence window later.
+_NOT_PLACEHOLDER_USER: dict = {"bool": {"must_not": [{"term": {"tag.username.keyword": "unknown"}}]}}
+
+
 def _ipsec_filters(gte_ms: int, lte_ms: int) -> list[dict]:
-    """Q-01: @timestamp range."""
+    """Q-01: @timestamp range, minus the collector's placeholder user."""
     return [
         {
             "range": {
@@ -30,7 +37,8 @@ def _ipsec_filters(gte_ms: int, lte_ms: int) -> list[dict]:
                     "format": "epoch_millis",
                 }
             }
-        }
+        },
+        _NOT_PLACEHOLDER_USER,
     ]
 
 
@@ -272,7 +280,7 @@ async def ipsec_session_history(
     never collides. Matches active_ipsec_users_count/_detail coverage."""
     async def _fetch(c: AsyncOpenSearch):
         return await fetch_session_buckets(
-            c, "ipsec-*", [], gte_ms, lte_ms,
+            c, "ipsec-*", [_NOT_PLACEHOLDER_USER], gte_ms, lte_ms,
             "ipsec_normalized.bytes_in", "ipsec_normalized.bytes_out",
             bucket=bucket, dur_field="ipsec_normalized.session_duration_seconds",
         )
