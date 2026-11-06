@@ -774,13 +774,13 @@ export default function AlertsPage() {
     finally { setBulkBusy(false); }
   }
 
-  async function bulkDisable() {
-    const targets = rules.filter((r) => selectedIds.has(r.id) && r.enabled);
+  async function bulkSetEnabled(enabled: boolean) {
+    const targets = rules.filter((r) => selectedIds.has(r.id) && r.enabled !== enabled);
     if (targets.length === 0) return;
     setBulkBusy(true);
     try {
       await Promise.all(targets.map((r) =>
-        apiFetch(`/api/v1/alerts/rules/${r.id}`, { method: "PUT", body: JSON.stringify({ enabled: false }) })));
+        apiFetch(`/api/v1/alerts/rules/${r.id}`, { method: "PUT", body: JSON.stringify({ enabled }) })));
       mutate("/api/v1/alerts/rules");
     } catch (e: unknown) { alert(`Failed: ${(e as Error).message}`); }
     finally { setBulkBusy(false); }
@@ -1004,14 +1004,21 @@ export default function AlertsPage() {
         </div>
       )}
 
-      {/* Bulk-action toolbar (admin). Export/Import always available; Disable/Delete act on the selection. */}
+      {/* Bulk-action toolbar (admin). Export/Import always available; Enable/Disable/Delete act on the selection. */}
       {canManageAlerts ? (
         <div className="flex flex-wrap items-center gap-2 mb-2">
           <span className="text-xs text-muted-foreground mr-1">
             {selectedIds.size > 0 ? `${selectedIds.size} selected` : "No rows selected"}
           </span>
           <button
-            onClick={bulkDisable}
+            onClick={() => bulkSetEnabled(true)}
+            disabled={bulkBusy || selectedIds.size === 0}
+            className="px-2.5 py-1 text-xs rounded border bg-background hover:bg-muted disabled:opacity-40"
+          >
+            Enable
+          </button>
+          <button
+            onClick={() => bulkSetEnabled(false)}
             disabled={bulkBusy || selectedIds.size === 0}
             className="px-2.5 py-1 text-xs rounded border bg-background hover:bg-muted disabled:opacity-40"
           >

@@ -58,7 +58,8 @@ class AlertRuleCreate(BaseModel):
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
-    target_key: Optional[str] = Field(default=None, max_length=255)  # interface_stats ifIndex
+    # interface_stats ifIndex, or an iface rule's comma list of if_names (183-port TOR ≈ 4k chars)
+    target_key: Optional[str] = Field(default=None, max_length=8000)
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
     kind: str = Field(default="single", pattern=r"^(single|composite|session|reboot|iface)$")
@@ -83,7 +84,8 @@ class AlertRuleUpdate(BaseModel):
     notification_template_id: Optional[str] = None
     template_id: Optional[str] = None
     site_name: Optional[str] = Field(default=None, max_length=128)
-    target_key: Optional[str] = Field(default=None, max_length=255)  # interface_stats ifIndex
+    # interface_stats ifIndex, or an iface rule's comma list of if_names (183-port TOR ≈ 4k chars)
+    target_key: Optional[str] = Field(default=None, max_length=8000)
     link_max_mbps: Optional[float] = Field(default=None, ge=0)  # interface_stats %-of-max mode
     appid_filter: Optional[AppidFilter] = None  # appid_flow app/protocol/port scoping
     kind: Optional[str] = Field(default=None, pattern=r"^(single|composite|session|reboot|iface)$")
