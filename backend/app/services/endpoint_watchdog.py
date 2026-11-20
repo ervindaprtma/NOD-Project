@@ -11,12 +11,18 @@ Status per source:
   healthy — reachable and newest doc within the freshness budget
   stale   — reachable but newest doc older than the budget (SNMP: collector likely stalled;
             NetFlow: could just be a quiet window)
-  no_data — reachable, index exists, but the filter matches no documents at all
+  no_data — reachable, but the filter matches no documents in the last 24h
   down    — the trial query errored or timed out (cluster unreachable / index missing)
 
 Paging: only `down` pages ops by default (never false-fires on quiet traffic). SNMP `stale`
 also pages when OPENSEARCH_HEALTH_ALERT_ON_STALE is on. Everything shows on the System
 Health tab with the newest-doc age.
+
+Fast-fail: when every source on a cluster is `down` in a cycle, the cluster is flagged
+unreachable and dashboard queries to it return a degraded skeleton immediately (UI shows
+"data unavailable") instead of hanging into frontend/nginx timeouts. Cleared on the next
+cycle where any of its sources answers. The health check is notification-only — it never
+takes the backend or its pages down.
 
 State is in-memory (process-local, matches the in-process scheduler).
 """
@@ -31,7 +37,7 @@ from datetime import datetime, timezone
 from app.core.config import get_settings
 from app.opensearch._common import FLOW_INDEX
 from app.opensearch.client import get_dc_client, get_drc_client
-from app.opensearch.query import safe_search
+from app.opensearch.query import safe_search, set_cluster_reachable
 from app.opensearch.traffic_flow import SITE_SOURCE_IPS
 
 logger = logging.getLogger("nod.watchdog")
@@ -92,16 +98,19 @@ def get_state() -> dict:
 async def _last_data(src: dict, timeout_s: float) -> tuple[bool, int | None]:
     """Trial-get: (reachable, newest_doc_epoch_ms|None). safe_search never raises — it
     returns a skeleton with _timed_out/_error on failure, which we read as unreachable."""
+    # Q-01: bounded window keeps the probe cheap, so a timeout means "cluster sick", not
+    # "probe sorted the whole index". lte now+5m tolerates DRC clock skew (docs ahead of us).
+    time_range = {"range": {"@timestamp": {"gte": "now-1d", "lte": "now+5m"}}}
     body = {
         "size": 1,
-        "query": {"bool": {"filter": src["filter"]}},
+        "query": {"bool": {"filter": [time_range, *src["filter"]]}},
         "sort": [{"@timestamp": {"order": "desc"}}],
         "_source": False,
         "docvalue_fields": [{"field": "@timestamp", "format": "epoch_millis"}],
     }
     try:
         resp = await safe_search(src["client"](), src["index"], body,
-                                 use_cache=False, timeout_s=int(timeout_s))
+                                 use_cache=False, timeout_s=int(timeout_s), probe=True)
     except Exception:
         return False, None
     if resp.get("_timed_out") or resp.get("_error"):
@@ -159,6 +168,14 @@ async def probe_endpoints() -> None:
     now_ms = int(time.time() * 1000)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     results = await asyncio.gather(*(_last_data(src, timeout_s) for src in _SOURCES))
+
+    # Cluster is unreachable only if ALL its sources failed — one missing index must not
+    # blank every panel on an otherwise healthy cluster.
+    cluster_ok: dict = {}
+    for src, (reachable, _) in zip(_SOURCES, results):
+        cluster_ok[src["client"]] = cluster_ok.get(src["client"], False) or reachable
+    for get_client, ok in cluster_ok.items():
+        set_cluster_reachable(get_client(), ok)
 
     for src, (reachable, last_ms) in zip(_SOURCES, results):
         name, kind = src["name"], src["kind"]
