@@ -7,26 +7,34 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
+import bcrypt
 import jwt
 from cryptography.fernet import Fernet
-from passlib.context import CryptContext
 
 from app.core.config import get_settings
 
 settings = get_settings()
 
 # bcrypt cost factor >= 12 (per NFR 7.4)
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_BCRYPT_ROUNDS = 12
+
+
+def _pw_bytes(password: str) -> bytes:
+    # bcrypt only uses the first 72 bytes. passlib (used before) truncated silently, so
+    # truncate identically: existing >72-byte passwords keep verifying, and bcrypt>=5
+    # (which raises on >72 bytes instead of truncating) stays safe.
+    return password.encode("utf-8")[:72]
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    verified: bool = _pwd_context.verify(plain_password, hashed_password)
-    return verified
+    try:
+        return bcrypt.checkpw(_pw_bytes(plain_password), hashed_password.encode("utf-8"))
+    except ValueError:  # malformed / non-bcrypt hash in the DB
+        return False
 
 
 def hash_password(password: str) -> str:
-    hashed: str = _pwd_context.hash(password)
-    return hashed
+    return bcrypt.hashpw(_pw_bytes(password), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode("ascii")
 
 
 def create_access_token(
