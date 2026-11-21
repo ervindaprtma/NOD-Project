@@ -18,12 +18,13 @@ import asyncio
 import hashlib
 import json
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 import logging
 from typing import Any, Callable, Iterator, Optional
 
 from opensearchpy import AsyncOpenSearch
+from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError
 
 from app.core.config import get_settings
 
@@ -86,12 +87,32 @@ _DEFAULT_DRC_CONCURRENCY = 4
 _CACHE_TTL_SECONDS = 30
 _CACHE_MAX_ENTRIES = 256
 
+# Clusters seen unreachable (e.g. under maintenance) — flagged by the endpoint watchdog,
+# or immediately by any dashboard query that hits a connection error/timeout.
+# safe_search skips them instantly with a degraded skeleton instead of letting every panel
+# wait out client timeout + retries (~90s) — which outlasts the frontend (30s) and nginx
+# timeouts and surfaces as "Request timed out" / 504. The watchdog's probes bypass this
+# and clear it on the first successful probe.
+_unreachable_clusters: set[str] = set()
+
 
 def _client_id(client: AsyncOpenSearch) -> str:
     try:
         return json.dumps(client.transport.hosts, sort_keys=True)
     except Exception:
         return str(id(client))
+
+
+def set_cluster_reachable(client: AsyncOpenSearch, reachable: bool) -> None:
+    """Called by the endpoint watchdog after each probe cycle."""
+    cid = _client_id(client)
+    if reachable:
+        if cid in _unreachable_clusters:
+            _unreachable_clusters.discard(cid)
+            logger.warning("OpenSearch cluster reachable again — resuming queries: %s", cid)
+    elif cid not in _unreachable_clusters:
+        _unreachable_clusters.add(cid)
+        logger.error("OpenSearch cluster unreachable — fast-failing its queries: %s", cid)
 
 
 def _get_cache(client: AsyncOpenSearch) -> dict[str, tuple[float, Any]]:
@@ -345,12 +366,14 @@ async def safe_search(
     body: dict,
     use_cache: bool = True,
     timeout_s: int | None = None,
+    probe: bool = False,
 ) -> dict[str, Any]:
     """Execute an OpenSearch search query with:
     - Per-cluster concurrency limit (2 for DC, 4 for DRC) to prevent circuit breaker
     - Per-query timeout (asyncio.wait_for)
     - Optional in-memory caching (default 30s TTL)
     - Skeleton response on timeout/error
+    - Instant degraded skeleton while the watchdog reports the cluster unreachable
 
     Args:
         client: AsyncOpenSearch client
@@ -358,6 +381,8 @@ async def safe_search(
         body: Query body dict
         use_cache: If True, cache results for 30s (default)
         timeout_s: Query timeout in seconds (default from config)
+        probe: Watchdog health probe — skips the unreachable fast-fail (so recovery is
+            detected) and the concurrency queue (so it isn't stuck behind hung queries)
 
     Returns:
         Search response dict with aggregations/hits keys always present
@@ -374,9 +399,22 @@ async def safe_search(
         if cached is not None:
             return cached
 
+    def _unreachable() -> dict[str, Any] | None:
+        if probe or _client_id(client) not in _unreachable_clusters:
+            return None
+        _record_degraded("cluster_unreachable: endpoint down or under maintenance")
+        return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []},
+                "_error": "cluster_unreachable"}
+
+    if (skel := _unreachable()) is not None:
+        return skel
+
     # Acquire per-cluster semaphore to prevent overwhelming the endpoint
-    sem = _get_semaphore(client)
+    sem = nullcontext() if probe else _get_semaphore(client)
     async with sem:
+        # Re-check: the cluster may have been flagged while we queued behind hung queries.
+        if (skel := _unreachable()) is not None:
+            return skel
         max_retries = 2  # retry up to 2x for transient circuit breaker errors
         for attempt in range(max_retries + 1):
             try:
@@ -428,6 +466,8 @@ async def safe_search(
                 logger = logging.getLogger("nod.opensearch")
                 logger.error(f"OpenSearch query timeout after {timeout_s}s — client={_client_id(client)} index={index}")
                 _record_degraded(f"timeout after {timeout_s}s")
+                if not probe:
+                    set_cluster_reachable(client, False)
                 return {"aggregations": {}, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "_timed_out": True}
             except Exception as e:
                 err_str = str(e)
@@ -444,6 +484,11 @@ async def safe_search(
                 import logging
                 logger = logging.getLogger("nod.opensearch")
                 logger.error(f"OpenSearch query error: {type(e).__name__}: {e}")
+                # Connection refused / no route / client timeout (after its own retries):
+                # trip now so queued and sibling queries fail fast instead of each waiting
+                # ~90s (the 185s→504 case). The watchdog's next good probe clears it.
+                if not probe and isinstance(e, OpenSearchConnectionError):
+                    set_cluster_reachable(client, False)
                 _record_degraded(
                     "circuit_breaker: cluster out of memory" if is_circuit_breaker
                     else f"query_error: {type(e).__name__}"
