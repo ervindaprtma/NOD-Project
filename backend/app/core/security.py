@@ -27,14 +27,17 @@ def _pw_bytes(password: str) -> bytes:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    # Typed locals: CI runs mypy without deps installed, so bcrypt resolves to Any.
     try:
-        return bcrypt.checkpw(_pw_bytes(plain_password), hashed_password.encode("utf-8"))
+        verified: bool = bcrypt.checkpw(_pw_bytes(plain_password), hashed_password.encode("utf-8"))
     except ValueError:  # malformed / non-bcrypt hash in the DB
         return False
+    return verified
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(_pw_bytes(password), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode("ascii")
+    hashed: bytes = bcrypt.hashpw(_pw_bytes(password), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS))
+    return hashed.decode("ascii")
 
 
 def create_access_token(
