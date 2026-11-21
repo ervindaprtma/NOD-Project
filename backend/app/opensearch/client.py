@@ -8,6 +8,7 @@ Cluster naming:
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from functools import lru_cache
 from typing import Any
@@ -166,28 +167,21 @@ def ipsec_client_factories() -> list:
     return [lambda c=c: c for c in _ipsec_host_clients()] + [get_dc_client]
 
 
-async def check_opensearch_health(client: AsyncOpenSearch) -> bool:
-    """Ping an OpenSearch cluster. Returns True if healthy."""
+async def check_opensearch_health(client_factory, timeout_s: float) -> bool:
+    """Ping an OpenSearch cluster with its own timeout. Returns True if healthy."""
     try:
-        result: bool = await client.ping()
+        result: bool = await asyncio.wait_for(client_factory().ping(), timeout=timeout_s)
         return result
     except Exception:
         return False
 
 
-async def check_all_clusters() -> dict[str, bool]:
-    """Check health of all configured OpenSearch clusters."""
-    results = {}
-    try:
-        results["opensearch_dc"] = await check_opensearch_health(get_dc_client())
-    except Exception:
-        results["opensearch_dc"] = False
-    try:
-        results["opensearch_drc"] = await check_opensearch_health(get_drc_client())
-    except Exception:
-        results["opensearch_drc"] = False
-    try:
-        results["opensearch_ipsec"] = await check_opensearch_health(get_ipsec_client())
-    except Exception:
-        results["opensearch_ipsec"] = False
-    return results
+async def check_all_clusters(timeout_s: float = 4) -> dict[str, bool]:
+    """Ping all configured clusters concurrently, each with its own timeout, so one hung
+    cluster (e.g. DRC under maintenance) can't mask a healthy one as unreachable."""
+    names = ("opensearch_dc", "opensearch_drc", "opensearch_ipsec")
+    oks = await asyncio.gather(*(
+        check_opensearch_health(f, timeout_s)
+        for f in (get_dc_client, get_drc_client, get_ipsec_client)
+    ))
+    return dict(zip(names, oks))
