@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     # ── Timeframe defaults ─────────────────────────────────────
     DEFAULT_REFRESH_INTERVAL_SECONDS: int = 60
 
+    # ── Ping Monitor: global "degraded" thresholds (page colouring only) ──
+    PING_WARN_LOSS_PCT: float = 10.0
+    PING_WARN_LATENCY_MS: float = 100.0
+
     # ── Rate limiting (P0 security) ──────────────────────────
     RATE_LIMIT_DEFAULT_REQUESTS: int = 120
     RATE_LIMIT_DEFAULT_WINDOW: str = "minute"

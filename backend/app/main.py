@@ -28,6 +28,7 @@ from app.api import (
     network_devices,
     notifications,
     overview,
+    ping,
     raw_data,
     reports,
     resources,
@@ -294,6 +295,7 @@ app.include_router(ha.router)
 app.include_router(interface_stats.router)
 app.include_router(device_uptime.router)
 app.include_router(network_devices.router)
+app.include_router(ping.router)
 app.include_router(topology.router)
 app.include_router(resources.router)
 app.include_router(vpn.router)
