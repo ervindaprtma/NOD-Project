@@ -50,6 +50,7 @@ const DATA_SOURCES = [
   { value: "device_uptime", label: "Device Availability" },
   { value: "interface_state", label: "Interface Up/Down" },
   { value: "interface_errors", label: "Interface Errors" },
+  { value: "ping", label: "Ping" },
 ];
 
 // interface_stats requires a canonical site (the interface picker keys off it) and a
@@ -73,6 +74,9 @@ async function siteFromDeviceIp(ip: string): Promise<string> {
 const IFACE_MIN_WINDOW = 2;
 // device_uptime: ≥5 min so a dropped 30s poll or two can't trip a false "down" (§11.2).
 const DEVICE_MIN_WINDOW = 5;
+// Ping: ≥ 4 probes at the 30 s poll; only DC/DRC run a ping collector (no Office cluster).
+const PING_MIN_WINDOW = 2;
+const PING_SITES = ["Site_FGT-DC", "Site_FGT-DRC"];
 
 // Controlled numeric input that keeps its own string state so it can be cleared/edited
 // freely (empty, mid-typing, leading zeros) instead of a plain `value={number}` that snaps
@@ -456,6 +460,30 @@ export default function AlertsPage() {
 
   const deviceWindowTooShort = isDevice && form.evaluation_window_minutes < DEVICE_MIN_WINDOW;
 
+  // Ping: site (DC/DRC → cluster) + curated target (→ target_key = url, "*" = every monitored
+  // target, one alert per target). Same snap-to-valid-site pattern as device_uptime.
+  const isPing = form.data_source === "ping";
+  const { data: pingTargetData } = useSWR<{ data: { key: string; label: string; expected_down: boolean }[] }>(
+    showModal && isPing && PING_SITES.includes(form.site_name)
+      ? `/api/v1/alerts/ping-targets?site_name=${form.site_name}`
+      : null,
+    swrFetcher
+  );
+  const pingTargets = pingTargetData?.data || [];
+  useEffect(() => {
+    if (!showModal || !isPing) return;
+    if (!PING_SITES.includes(form.site_name)) {
+      setForm((prev) => ({ ...prev, site_name: PING_SITES[0], target_key: "*" }));
+    } else if (!form.target_key) {
+      setForm((prev) => ({ ...prev, target_key: "*" }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPing, form.site_name, form.target_key, showModal]);
+  const pingWindowTooShort = isPing && form.evaluation_window_minutes < PING_MIN_WINDOW;
+  // Ping reachability is a Down/Up state (1 = no reply in the window, 0 = replying).
+  const isPingReach = isPing && form.metric_field === "unreachable";
+  const pingWantsUp = form.condition === "==" && form.threshold_value === 0;
+
   // interface_state / interface_errors: the engine keys on the DEVICE (source_ip stored in
   // site_name) + an if_name (target_key). So this is a site → device → interface cascade:
   // the canonical site only scopes the device list (local state), the chosen device IP goes
@@ -652,7 +680,7 @@ export default function AlertsPage() {
     // target_key applies to interface_stats (required) and device_uptime (optional; blank =
     // any device / site-level). Cleared for every other source. Empty string → null.
     // session rules carry the username glob in target_key.
-    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla" || isIfaceState || isSession || isReboot;
+    const keepsTargetKey = form.data_source === "interface_stats" || form.data_source === "device_uptime" || form.data_source === "sdwan_sla" || isIfaceState || isSession || isReboot || isPing;
     // link_max_mbps only rides along with interface throughput's %-of-max mode.
     const keepsLinkMax = form.data_source === "interface_stats" && form.metric_field === "iface.throughput_mbps";
 
@@ -1338,10 +1366,10 @@ export default function AlertsPage() {
                   ) : (
                     <select
                       value={SITES.includes(form.site_name) ? form.site_name : SITES[0]}
-                      onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: "" })}
+                      onChange={(e) => setForm({ ...form, site_name: e.target.value, target_key: isPing ? "*" : "" })}
                       className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
                     >
-                      {SITES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      {(isPing ? PING_SITES : SITES).map((s) => <option key={s} value={s}>{s}</option>)}
                     </select>
                   )}
                 </div>
@@ -1597,6 +1625,26 @@ export default function AlertsPage() {
                 </p>
               )}
 
+              {/* Ping target picker (ping only) → target_key = url, "*" = every monitored target */}
+              {isPing && (
+                <div>
+                  <label className="text-xs font-medium">Target</label>
+                  <select
+                    value={form.target_key || "*"}
+                    onChange={(e) => setForm({ ...form, target_key: e.target.value })}
+                    className="w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1"
+                  >
+                    <option value="*">Any monitored target</option>
+                    {pingTargets.map((t) => (
+                      <option key={t.key} value={t.key}>{t.label}{t.expected_down ? " — expected down" : ""}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    “Any” alerts per target (one message each); expected-down DR links are skipped. Manage targets on the Ping Monitor page.
+                  </p>
+                </div>
+              )}
+
               {/* interface_state / interface_errors: device (→ site_name = IP) + interface (→ target_key) */}
               {isIfaceState && (
                 <div className="space-y-3">
@@ -1696,6 +1744,33 @@ export default function AlertsPage() {
                   </div>
                   <p className="text-[10px] text-muted-foreground mt-1">
                     Fires when the link is {sdwanWantsUp ? "Up (status = 0)" : "Down (status ≥ 1)"} — debounced by the sustain window.
+                  </p>
+                </div>
+              ) : isPingReach ? (
+                <div>
+                  <label className="text-xs font-medium">Alert when target is</label>
+                  <div className="flex mt-1 rounded-md border overflow-hidden w-fit">
+                    {([["Down", "==", 1], ["Up", "==", 0]] as const).map(([lbl, cond, thr]) => {
+                      const active = lbl === "Up" ? pingWantsUp : !pingWantsUp;
+                      return (
+                        <button
+                          key={lbl}
+                          type="button"
+                          onClick={() => setForm({ ...form, aggregation: "max", condition: cond, threshold_value: thr })}
+                          className={
+                            "px-4 py-1.5 text-sm " +
+                            (active
+                              ? (lbl === "Down" ? "bg-red-600 text-white" : "bg-emerald-600 text-white")
+                              : "bg-background hover:bg-muted")
+                          }
+                        >
+                          {lbl === "Down" ? "🔴 Down" : "🟢 Up"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Fires when the target is {pingWantsUp ? "replying" : "not answering any ping in the window"} — debounced by the sustain window.
                   </p>
                 </div>
               ) : isIfaceOperStatus ? (
@@ -1957,7 +2032,7 @@ export default function AlertsPage() {
                           <select value={c.data_source} onChange={(e) => setClauseSource(i, e.target.value)} className="px-2 py-1 text-xs rounded-md border bg-background">
                             {/* interface_state/errors need a device-IP in site_name (per-rule), which a
                                 shared-site composite clause can't express — single rules only. */}
-                            {DATA_SOURCES.filter((s) => s.value !== "interface_state" && s.value !== "interface_errors").map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                            {DATA_SOURCES.filter((s) => s.value !== "interface_state" && s.value !== "interface_errors" && s.value !== "ping").map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                           </select>
                           <select value={c.metric_field} onChange={(e) => setClauseMetric(i, e.target.value)} className="px-2 py-1 text-xs rounded-md border bg-background">
                             {cf.length === 0 && <option value="">Loading…</option>}
@@ -2002,15 +2077,15 @@ export default function AlertsPage() {
                 <div>
                   <label className="text-xs font-medium">Eval Window (min)</label>
                   <NumberField
-                    min={isIface ? IFACE_MIN_WINDOW : isDevice ? DEVICE_MIN_WINDOW : isIfaceState ? DEVICE_MIN_WINDOW_IFACE : 1}
+                    min={isIface ? IFACE_MIN_WINDOW : isDevice ? DEVICE_MIN_WINDOW : isIfaceState ? DEVICE_MIN_WINDOW_IFACE : isPing ? PING_MIN_WINDOW : 1}
                     value={form.evaluation_window_minutes}
                     onValueChange={(n) => setForm({ ...form, evaluation_window_minutes: n })}
                     className={cn(
                       "w-full px-3 py-1.5 text-sm rounded-md border bg-background mt-1",
-                      (windowInvalid || ifaceWindowTooShort || deviceWindowTooShort || ifaceStateWindowTooShort) && "border-red-400"
+                      (windowInvalid || ifaceWindowTooShort || deviceWindowTooShort || ifaceStateWindowTooShort || pingWindowTooShort) && "border-red-400"
                     )}
                   />
-                  {windowInvalid && !ifaceWindowTooShort && !deviceWindowTooShort && !ifaceStateWindowTooShort && (
+                  {windowInvalid && !ifaceWindowTooShort && !deviceWindowTooShort && !ifaceStateWindowTooShort && !pingWindowTooShort && (
                     <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
                       Eval window must be at least 1 minute.
                     </p>
@@ -2018,6 +2093,11 @@ export default function AlertsPage() {
                   {ifaceWindowTooShort && (
                     <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
                       Interface bandwidth needs ≥ {IFACE_MIN_WINDOW} min (rate derivative).
+                    </p>
+                  )}
+                  {pingWindowTooShort && (
+                    <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
+                      Ping needs ≥ {PING_MIN_WINDOW} min (a few probes, so one lost ping can&apos;t fire).
                     </p>
                   )}
                   {deviceWindowTooShort && (
@@ -2139,7 +2219,7 @@ export default function AlertsPage() {
                 </button>
                 <button
                   onClick={saveRule}
-                  disabled={saving || !form.name || windowInvalid || ifaceWindowTooShort || deviceWindowTooShort || ifaceStateWindowTooShort || (isIface && !form.target_key) || (isIfaceState && !form.site_name) || compositeInvalid}
+                  disabled={saving || !form.name || windowInvalid || ifaceWindowTooShort || deviceWindowTooShort || ifaceStateWindowTooShort || pingWindowTooShort || (isIface && !form.target_key) || (isIfaceState && !form.site_name) || compositeInvalid}
                   className="px-4 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : editingRule ? "Update" : "Create"}

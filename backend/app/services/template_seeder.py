@@ -244,6 +244,88 @@ SEED_TEMPLATES: list[dict] = [
         "is_default": True,
         "sort_order": 9,
     },
+    # Ping Monitor (data_source="ping", plans/2026-11-24_ping-monitor-alert-design.md §5).
+    # site_name = Site_FGT-DC / Site_FGT-DRC (→ cluster); target_key = url picked per rule,
+    # "*" = every monitored target with one alert + message per target. Timing matches the
+    # other seeds (window 5, sustained 3); every field stays editable in the rule modal.
+    {
+        "name": "Ping Target Down",
+        "category": "availability",
+        "icon": "📡",
+        "description": "Alert when a monitored ping target stops answering — every probe in the window "
+                       "failed. Pick a target, or leave 'Any monitored target' to watch the whole site "
+                       "(one alert per target; expected-down DR links are skipped). Uses the "
+                       "'Ping Reachability' message.",
+        "body_template": "Ping Down: {{ name }}\n{% if target_name %}Target: {{ target_name }}\n{% endif %}"
+                         "No reply for the whole window\nSite: {{ site_name }}",
+        "underlying_kind": "single",
+        "locked_fields": {
+            "data_source": "ping",
+            "metric_field": "unreachable",
+            "target_key": "*",
+            "aggregation": "max",
+            "condition": "==",
+            "threshold_value": 1.0,
+            "evaluation_window_minutes": 5,
+            "sustained_for_minutes": 3,
+            "severity": "CRITICAL",
+        },
+        "exposed_fields": ["name", "site_name", "notify_channels"],
+        "is_default": True,
+        "sort_order": 10,
+    },
+    {
+        "name": "Ping Packet Loss",
+        "category": "performance",
+        "icon": "📉",
+        "description": "Alert when average packet loss to a ping target stays above the limit. "
+                       "Pick a target or 'Any monitored target' (alerts per target at the site). "
+                       "Uses the 'Ping Quality' message.",
+        "body_template": "Ping Packet Loss: {{ name }}\n{% if target_name %}Target: {{ target_name }}\n{% endif %}"
+                         "Packet loss: {{ metric_value|round(1) }}%  (limit {{ condition }} {{ threshold }}%)\n"
+                         "Site: {{ site_name }}",
+        "underlying_kind": "single",
+        "locked_fields": {
+            "data_source": "ping",
+            "metric_field": "percent_packet_loss",
+            "target_key": "*",
+            "aggregation": "avg",
+            "condition": ">",
+            "threshold_value": 10.0,
+            "evaluation_window_minutes": 5,
+            "sustained_for_minutes": 3,
+            "severity": "WARNING",
+        },
+        "exposed_fields": ["name", "site_name", "threshold_value", "notify_channels"],
+        "is_default": True,
+        "sort_order": 11,
+    },
+    {
+        "name": "Ping High Latency",
+        "category": "performance",
+        "icon": "🐢",
+        "description": "Alert when average round-trip latency to a ping target stays above the limit. "
+                       "Probes with no reply are ignored (use Ping Target Down for outages). "
+                       "Uses the 'Ping Quality' message.",
+        "body_template": "Ping High Latency: {{ name }}\n{% if target_name %}Target: {{ target_name }}\n{% endif %}"
+                         "Latency: {{ metric_value|round(1) }} ms  (limit {{ condition }} {{ threshold }} ms)\n"
+                         "Site: {{ site_name }}",
+        "underlying_kind": "single",
+        "locked_fields": {
+            "data_source": "ping",
+            "metric_field": "average_response_ms",
+            "target_key": "*",
+            "aggregation": "avg",
+            "condition": ">",
+            "threshold_value": 100.0,
+            "evaluation_window_minutes": 5,
+            "sustained_for_minutes": 3,
+            "severity": "WARNING",
+        },
+        "exposed_fields": ["name", "site_name", "threshold_value", "notify_channels"],
+        "is_default": True,
+        "sort_order": 12,
+    },
 ]
 
 
@@ -429,6 +511,39 @@ def _vpn_lines(count_label: str) -> tuple[str, str]:
 _SSL_FIRE, _SSL_RES = _vpn_lines("Active Users")
 _IPSEC_FIRE, _IPSEC_RES = _vpn_lines("Active Tunnels")
 
+def _ping_reach_body() -> str:
+    """Ping Reachability (DOWN / RECOVERED). Target line shows "Name (url)" when they differ."""
+    tline = ("{% if target_name %}🎯 <b>Target:</b> {{ target_name|e }}"
+             "{% if ping_url is defined and ping_url and ping_url != target_name %} ({{ ping_url|e }}){% endif %}\n{% endif %}")
+    head = ("━━━━━━━━━━━━━━━━━━\n"
+            "🏢 <b>Site:</b> {{ rule.site_name|e }}\n"
+            "🛠️ <b>Service:</b> Ping\n"
+            "📌 <b>Alert:</b> {{ rule.name|e }}\n" + tline)
+    return (
+        "{% if event == 'resolved' %}✅ <b>PING RECOVERED</b>\n" + head +
+        "📅 <b>Resolved:</b> {{ sent_at }}\n"
+        "⏱️ <b>Was firing since:</b> {{ fired_at }}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🟢 Replying again"
+        "{% if ping_loss_pct is defined and ping_loss_pct is not none %} — loss {{ ping_loss_pct|round(1) }}%{% endif %}"
+        "{% if ping_avg_ms is defined and ping_avg_ms is not none %}, latency {{ ping_avg_ms|round(1) }} ms{% endif %}\n"
+        "Status : NORMAL\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🎉 Target reachable again."
+        "{% else %}🔴 <b>PING DOWN</b>\n" + head +
+        "⚠️ <b>Severity:</b> {{ rule.severity|e }}\n"
+        "📅 <b>Firing since:</b> {{ fired_at }}\n"
+        "🔔 <b>Notified:</b> {{ sent_at }}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🔴 <b>Packet loss:</b> <b>100%</b> — no ICMP reply in the window\n"
+        "{% if ping_last_ok_at is defined and ping_last_ok_at %}🕐 <b>Last reply:</b> {{ ping_last_ok_at }}\n{% endif %}"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ Check WAN uplink / upstream path / target host{% endif %}"
+    )
+
+
+_PING_REACH_BODY = _ping_reach_body()
+
 SEED_NOTIFICATION_TEMPLATES: list[dict] = [
     {
         "name": "Default Alert",
@@ -608,6 +723,31 @@ SEED_NOTIFICATION_TEMPLATES: list[dict] = [
         "is_default": False,
         "is_user_created": False,
     },
+    # Ping Monitor — "Ping Reachability" (DOWN / RECOVERED) for unreachable rules. Same
+    # Grafana layout as Device Reboot Monitor; custom body (not _grafana_tpl) because an outage
+    # must read DOWN, not DEGRADED. ping_* vars are None-safe (preview + non-ping contexts).
+    {
+        "name": "Ping Reachability",
+        "description": "Ping target outage for a Ping Target Down rule — DOWN when every probe in the "
+                       "window failed, RECOVERED when it answers again (fire + resolve, WIB, Telegram).",
+        "subject_template": "{% if event == 'resolved' %}✅ Ping Recovered: {{ target_name|e }}"
+                            "{% else %}🔴 Ping Down: {{ target_name|e }}{% endif %} — {{ rule.site_name|e }}",
+        "body_template": _PING_REACH_BODY,
+        "line_template": _PING_REACH_BODY,
+        "is_default": False,
+        "is_user_created": False,
+    },
+    # Ping Monitor — "Ping Quality" (DEGRADED / RECOVERED) for packet-loss and latency rules;
+    # metric_label / metric_unit say which one fired.
+    _grafana_tpl("Ping Quality", "📶", "PING QUALITY", "Ping",
+        "<b>{{ metric_label }}:</b> <b>{{ metric_value|round(1) }}{% if metric_unit %} {{ metric_unit }}{% endif %}</b>"
+        " (limit " + _L + "{% if metric_unit %} {{ metric_unit }}{% endif %})"
+        "{% if ping_url is defined and ping_url %}\n🌐 <b>URL:</b> {{ ping_url|e }}{% endif %}"
+        "{% if ping_loss_pct is defined and ping_loss_pct is not none %}\n📊 <b>Now:</b> loss {{ ping_loss_pct|round(1) }}%"
+        "{% if ping_avg_ms is defined and ping_avg_ms is not none %} · latency {{ ping_avg_ms|round(1) }} ms{% endif %}{% endif %}",
+        "<b>{{ metric_label }}:</b> {{ metric_value|round(1) }}{% if metric_unit %} {{ metric_unit }}{% endif %}"
+        " (limit " + _L + "{% if metric_unit %} {{ metric_unit }}{% endif %})",
+        "⚠️ Check link congestion / ISP / path to target", "🎉 Ping quality back to normal."),
 ]
 
 
@@ -1203,6 +1343,48 @@ SEED_FIELD_CATALOG: list[dict] = [
         "valid_conditions": [">", ">="],
         "example_threshold": 100,
     },
+    # ping — Ping Monitor (plans/2026-11-24_ping-monitor-alert-design.md §3). site_name =
+    # Site_FGT-DC / Site_FGT-DRC; target_key = tag.url, "*"/blank = every monitored target
+    # (one alert per target). Collector-error probes (result_code 2) never count.
+    {
+        "data_source": "ping",
+        "field_key": "unreachable",
+        "display_name": "Ping Reachability",
+        "description": "1 when the target answered NO ping in the whole window (all probes failed). "
+                       "Use == 1 for Down. Blank/'*' target = every monitored target at the site, "
+                       "alerting per target (expected-down DR links are skipped). Pair with a "
+                       "sustained-for window to dampen flaps.",
+        "unit": "state",
+        "category": "state",
+        "valid_aggregations": ["max"],
+        "valid_conditions": ["==", ">="],
+        "example_threshold": 1,
+    },
+    {
+        "data_source": "ping",
+        "field_key": "percent_packet_loss",
+        "display_name": "Ping Packet Loss",
+        "description": "Average (or peak) packet loss % over the window. Use > N. Blank/'*' = every "
+                       "monitored target at the site, alerting per target.",
+        "unit": "%",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 10,
+    },
+    {
+        "data_source": "ping",
+        "field_key": "average_response_ms",
+        "display_name": "Ping Latency",
+        "description": "Average (or peak) round-trip latency in ms. Probes with no reply are ignored "
+                       "— use Ping Reachability for outages. Blank/'*' = every monitored target at "
+                       "the site, alerting per target.",
+        "unit": "ms",
+        "category": "state",
+        "valid_aggregations": ["avg", "max"],
+        "valid_conditions": [">", ">="],
+        "example_threshold": 100,
+    },
 ]
 
 
@@ -1234,7 +1416,7 @@ async def seed_field_catalog() -> int:
         # vpn_ssl / vpn_ipsec (count metrics — keep them aligned with the templates that
         # reference the keys, so a stale row from an older catalog can't diverge).
         managed = {"appid_flow", "ha_resource", "interface_stats", "device_uptime", "sdwan_sla",
-                   "vpn_ssl", "vpn_ipsec", "interface_state", "interface_errors"}
+                   "vpn_ssl", "vpn_ipsec", "interface_state", "interface_errors", "ping"}
         await db.execute(
             delete(AlertFieldCatalog).where(AlertFieldCatalog.data_source.in_(managed))
         )

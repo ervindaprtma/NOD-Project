@@ -725,6 +725,18 @@ async def test_alert_rule(
                 source_ip=rule.site_name or "", gte_ms=gte_ms, lte_ms=lte_ms
             )
             metric_value = _extract_interface_errors(rule.target_key, errs) if isinstance(errs, dict) else 0.0
+        elif rule.data_source == "ping":
+            # Same group read + extractor the engine uses. "*" → the worst monitored target
+            # (every ping metric is higher-is-worse); no probes → 0 (engine would hold).
+            from app.services.alert_engine import _extract_ping, _ping_group
+            group = await _ping_group(rule.site_name, gte_ms, lte_ms) or {}
+            if (rule.target_key or "*") == "*":
+                vals = [_extract_ping(rule.metric_field, rule.aggregation, m)
+                        for m in group.values() if not m.get("expected_down")]
+                metric_value = max((v for v in vals if v is not None), default=0.0)
+            else:
+                v = _extract_ping(rule.metric_field, rule.aggregation, group.get(rule.target_key or ""))
+                metric_value = v if v is not None else 0.0
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -897,6 +909,36 @@ async def get_device_interfaces(
         {"key": i["if_name"],
          "label": f"{i['if_name']} — {i['description']}" if i.get("description") else i["if_name"]}
         for i in ifaces
+    ])
+
+
+@router.get("/ping-targets")
+async def get_ping_targets(
+    site_name: str,
+    current_user: User = Depends(require_role("viewer")),
+) -> APIResponse[list[dict]]:
+    """Curated ping targets of a site's cluster for the rule builder (→ target_key = url).
+
+    Enabled targets only; expected-down ones are listed last and flagged so the builder can
+    mark them. The "*" (any monitored target) option is added by the builder.
+    """
+    from app.db.models import PingTarget
+    from app.db.session import AsyncSessionLocal
+    from app.opensearch.ping import SITE_CLUSTER
+
+    cluster = SITE_CLUSTER.get(site_name)
+    if cluster is None:
+        return APIResponse.ok(data=[])
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(PingTarget).where(PingTarget.cluster == cluster, PingTarget.enabled == True)  # noqa: E712
+            .order_by(PingTarget.expected_down, PingTarget.display_name, PingTarget.url)
+        )).scalars().all()
+    return APIResponse.ok(data=[
+        {"key": r.url,
+         "label": f"{r.display_name} ({r.url})" if r.display_name else r.url,
+         "expected_down": r.expected_down}
+        for r in rows
     ])
 
 
