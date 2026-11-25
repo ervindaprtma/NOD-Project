@@ -17,13 +17,15 @@ import re
 import time as _time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, text
 
 from app.core.config import get_settings
-from app.db.models import AlertLog, AlertRule, AlertState, MaintenanceWindow, NotificationTemplate
+from app.db.models import (
+    AlertLog, AlertRule, AlertState, MaintenanceWindow, NotificationTemplate, PingTarget,
+)
 from app.db.session import AsyncSessionLocal, engine
 from app.opensearch.query import degradation_scope
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -199,6 +201,9 @@ def sample_render_ctx(
         "from_state": "up", "to_state": "down", "from_label": "UP", "to_label": "DOWN",
         "device_name": "SW-CORE-01", "site": "Site_FGT-DC", "if_desc": "Uplink to DC core",
         "change_reason": "Potential physical-link or misconfiguration issue — check the cable.",
+        # Ping Monitor (data_source="ping"): the probed url + current reading of that target.
+        "ping_url": "google.com", "ping_loss_pct": 100.0, "ping_avg_ms": None,
+        "ping_last_ok_at": "01 Jan 2026 11:57:00 WIB",
     }
 
 
@@ -352,6 +357,11 @@ async def _run_group_query(
                 result = await nd_qb.alert_interface_errors(
                     source_ip=site_name or "", gte_ms=gte_ms, lte_ms=lte_ms
                 )
+
+            elif data_source == "ping":
+                # {url: metrics+name+expected_down} for every enabled curated target of the
+                # site's cluster. All ping rules for a (site, window) share this one query.
+                result = await _ping_group(site_name, gte_ms, lte_ms)
 
             else:
                 logger.warning("Unsupported data_source for group query: %s", data_source)
@@ -553,6 +563,66 @@ def _extract_device_uptime(
     return None
 
 
+# ── Ping Monitor (data_source="ping") ───────────────────────────
+# site_name = canonical site (Site_FGT-DC / Site_FGT-DRC → cluster), target_key = tag.url
+# or "*" (every enabled, not expected-down target — one alert lifecycle per target).
+
+
+async def _ping_group(site_name: str | None, gte_ms: int, lte_ms: int) -> dict | None:
+    """Window metrics for every enabled curated target of the site's cluster, keyed by url.
+
+    A curated target with no probe docs in the window is still present (empty metrics →
+    the extractor returns None → that target holds). Unknown site → None (rule holds).
+    """
+    from app.opensearch import ping as ping_qb
+
+    cluster = ping_qb.SITE_CLUSTER.get(site_name or "")
+    if cluster is None:
+        return None
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(PingTarget.url, PingTarget.display_name, PingTarget.expected_down)
+            .where(PingTarget.cluster == cluster, PingTarget.enabled == True)  # noqa: E712
+        )).all()
+    if not rows:
+        return {}
+    live = await ping_qb.ping_live({cluster: [r.url for r in rows]}, gte_ms, lte_ms)
+    out: dict[str, dict] = {}
+    for r in rows:
+        m = live.get((cluster, r.url), {})
+        out[r.url] = {**m, "name": r.display_name or m.get("target_name") or r.url,
+                      "expected_down": r.expected_down}
+    return out
+
+
+def _extract_ping(metric_field: str | None, aggregation: str | None, m: dict | None) -> float | None:
+    """One target's value for a ping rule, or None (= no probes in the window → hold).
+
+    unreachable: 1.0 when EVERY probe in the window failed (a single lost probe never counts).
+    percent_packet_loss / average_response_ms: avg, or the window peak for aggregation=max.
+    Latency is None when every probe failed — the rule holds; outages are unreachable's job.
+    """
+    if not m or not m.get("samples"):
+        return None
+    if metric_field == "unreachable":
+        return 1.0 if m.get("availability_pct") == 0 else 0.0
+    if metric_field == "percent_packet_loss":
+        v = m.get("max_loss_pct") if aggregation == "max" else m.get("loss_pct")
+    elif metric_field == "average_response_ms":
+        v = m.get("max_ms") if aggregation == "max" else m.get("avg_ms")
+    else:
+        return None
+    return float(v) if v is not None else None
+
+
+def _ping_ctx(url: str, m: dict | None) -> dict:
+    """Template vars for one ping target (ping_url / loss / latency / last reply)."""
+    m = m or {}
+    last_ok = m.get("last_ok_ms")
+    return {"url": url, "loss_pct": m.get("loss_pct"), "avg_ms": m.get("avg_ms"),
+            "last_ok_at": _fmt_wib(last_ok) if last_ok else None}
+
+
 def _extract_per_rule_value(
     rule: AlertRule,
     group_result: float | list[Any] | dict[Any, Any] | None,
@@ -625,6 +695,12 @@ def _extract_per_rule_value(
                 return _extract_interface_errors(rule.target_key, group_result)
             return 0.0
 
+        if rule.data_source == "ping":
+            if isinstance(group_result, dict):
+                return _extract_ping(rule.metric_field, rule.aggregation,
+                                     group_result.get(rule.target_key or ""))
+            return None
+
         return None
 
     except Exception as e:
@@ -675,10 +751,20 @@ _METRIC_UNIT_HINTS = (
 )
 
 
+# Exact names for fields whose generic title-case reads badly ("Average Response Ms").
+_METRIC_LABEL_EXACT = {
+    "percent_packet_loss": ("Packet Loss", "%"),
+    "average_response_ms": ("Latency", "ms"),
+    "unreachable": ("Reachability", "state"),
+}
+
+
 def _metric_label_unit(metric_field: str) -> tuple[str, str]:
     """('avg_packet_loss') → ('Packet Loss', '%'). Strips the aggregation prefix, maps a unit
     by substring, and title-cases the rest. Unit '' when unknown (StrictUndefined-safe: the
     key is always present, just empty)."""
+    if metric_field in _METRIC_LABEL_EXACT:
+        return _METRIC_LABEL_EXACT[metric_field]
     base = re.sub(r"^(avg|max|min|sum|count)_", "", (metric_field or "").strip())
     unit = next((u for key, u in _METRIC_UNIT_HINTS if key in base), "")
     label = base.replace("_", " ").replace(".", " ").strip().title() or "Metric"
@@ -729,6 +815,11 @@ def _resolve_target_name(
         return str(target_key)  # fall back to the IP
     if data_source in ("interface_state", "interface_errors"):
         return "all interfaces" if target_key == "*" else str(target_key)  # target_key = if_name
+    if data_source == "ping":
+        if target_key == "*":
+            return "all targets"
+        m = group_result.get(target_key) if isinstance(group_result, dict) else None
+        return (m or {}).get("name") or str(target_key)
     return None
 
 
@@ -1167,6 +1258,163 @@ async def _mark_held(rule: AlertRule, db: AsyncSession) -> None:
             pass
 
 
+class _PingTargetView:
+    """Per-target stand-in for a ping "*" rule in the notify queue.
+
+    _flush_batch_notify renders one block per queue entry from rule attributes; this view
+    overrides only the target identity (target_key, _target_name, _ping vars) and the
+    history row to stamp (_alert_log_id), delegating every other attribute to the rule.
+    """
+
+    def __init__(self, rule: AlertRule, url: str, m: dict, log_id: str | None):
+        self._rule = rule
+        self.target_key = url
+        self._target_name = m.get("name") or url
+        self._ping = _ping_ctx(url, m)
+        self._alert_log_id = log_id
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._rule, name)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat()
+
+
+def _from_iso(v: str | None) -> datetime | None:
+    return datetime.fromisoformat(v) if v else None
+
+
+async def _evaluate_ping_multi(
+    rule: AlertRule, group: dict, db: AsyncSession,
+    notify_queue: list[tuple[AlertRule, float, str, datetime]],
+) -> None:
+    """Ping rule with target_key "*": an independent PENDING → FIRING → RESOLVED lifecycle
+    per target (plans/2026-11-24_ping-monitor-alert-design.md §4.1), so each target sends
+    its own DOWN / RECOVERED message and gets its own Alert History row.
+
+    Sub-states live in AlertState.session_state ({url: {...}}, ISO timestamps) — the same
+    column the session/iface monitors use, so no migration. Timing rules mirror
+    _advance_state_machine: fire after sustained_for, resolve after the same clear time,
+    re-notify on the rule's cadence. A target with no probes this tick holds. A target that
+    is removed / disabled / marked expected-down is dropped without a recovery message (it
+    stopped being monitored, it didn't recover); its open history row is closed.
+    """
+    state = (await db.execute(select(AlertState).where(AlertState.rule_id == rule.id))).scalar_one_or_none()
+    if not state:
+        state = AlertState(rule_id=rule.id, state="INACTIVE")
+        db.add(state)
+    now = datetime.now(timezone.utc)
+    prev_rule_state = state.state
+    old: dict = dict(state.session_state or {})
+    subs: dict[str, dict] = {}
+    cluster_tag = rule.site_name or ""
+    interval_min = rule.renotify_interval_minutes
+    if interval_min is None:
+        interval_min = settings.ALERT_RENOTIFY_INTERVAL_MINUTES
+
+    async def _close_log(log_id: str | None, snapshot_extra: dict) -> None:
+        row = await db.get(AlertLog, log_id) if log_id else None
+        if row is not None and not row.resolved_at:
+            row.resolved_at = now
+            row.rule_snapshot = {**(row.rule_snapshot or {}), **snapshot_extra}
+
+    for url, m in group.items():
+        if m.get("expected_down"):
+            continue
+        sub = dict(old.get(url) or {"state": "INACTIVE"})
+        val = _extract_ping(rule.metric_field, rule.aggregation, m)
+        if val is None:  # no probes this tick → hold this target
+            subs[url] = sub
+            continue
+        sub["last_value"] = val
+        met = _check_condition(val, rule.condition, rule.threshold_value)
+        st = sub.get("state", "INACTIVE")
+
+        if met:
+            sub.pop("clear_since", None)
+            if st in ("INACTIVE", "RESOLVED"):
+                sub.update(state="PENDING", pending_since=_iso(now))
+            elif st == "PENDING":
+                since = _from_iso(sub.get("pending_since")) or now
+                if (now - since).total_seconds() / 60 >= rule.sustained_for_minutes:
+                    name = m.get("name") or url
+                    log = AlertLog(
+                        rule_id=rule.id, rule_name=rule.name, severity=rule.severity,
+                        metric_value_at_firing=val, notified_channels=rule.notify_channels,
+                        fired_at=now,
+                        event_code=_event_code(rule.id, now, val, {"metric_field": f"ping:{cluster_tag}:{url}"}),
+                        rule_snapshot={
+                            "name": rule.name, "metric_field": rule.metric_field,
+                            "aggregation": rule.aggregation, "condition": rule.condition,
+                            "threshold_value": rule.threshold_value, "site_name": rule.site_name,
+                            "target_name": name, "target_key": url,
+                            "_code_key": f"ping:{cluster_tag}:{url}",
+                            "clauses": [{"metric_field": rule.metric_field, "target_key": url,
+                                         "value": val, "threshold_value": rule.threshold_value,
+                                         "condition": rule.condition, "breached": True}],
+                        },
+                    )
+                    db.add(log)
+                    await db.flush()
+                    sub.update(state="FIRING", fired_at=_iso(now), notified_at=_iso(now), log_id=log.id)
+                    sub.pop("pending_since", None)
+                    state.last_fired_at = now
+                    notify_queue.append((cast(AlertRule, _PingTargetView(rule, url, m, log.id)), val, "firing", now))
+                    await sse_broadcast("alert", rule_id=rule.id, rule_name=f"{rule.name} — {name}",
+                                        severity=rule.severity, metric_value=val, fired_at=now.isoformat())
+            elif st == "FIRING":
+                last = _from_iso(sub.get("notified_at"))
+                if last and interval_min > 0 and (now - last).total_seconds() >= interval_min * 60:
+                    sub["notified_at"] = _iso(now)
+                    fired = _from_iso(sub.get("fired_at")) or now
+                    notify_queue.append((cast(AlertRule, _PingTargetView(rule, url, m, sub.get("log_id"))),
+                                         val, "firing", fired))
+        else:
+            if st == "PENDING":
+                sub = {"state": "INACTIVE", "last_value": val}
+            elif st == "FIRING":
+                clear = _from_iso(sub.get("clear_since"))
+                if rule.sustained_for_minutes > 0 and clear is None:
+                    sub["clear_since"] = _iso(now)
+                elif rule.sustained_for_minutes <= 0 or (now - clear).total_seconds() / 60 >= rule.sustained_for_minutes:  # type: ignore[operator]
+                    fired = _from_iso(sub.get("fired_at")) or now
+                    await _close_log(sub.get("log_id"), {
+                        "resolved_value": val,
+                        "resolved_clauses": [{"metric_field": rule.metric_field, "target_key": url,
+                                              "value": val, "threshold_value": rule.threshold_value,
+                                              "condition": rule.condition, "breached": False}],
+                    })
+                    notify_queue.append((cast(AlertRule, _PingTargetView(rule, url, m, sub.get("log_id"))),
+                                         val, "resolved", fired))
+                    await sse_broadcast("resolved", rule_id=rule.id, rule_name=f"{rule.name} — {m.get('name') or url}",
+                                        severity=rule.severity, resolved_at=now.isoformat())
+                    sub = {"state": "RESOLVED", "last_value": val}
+        subs[url] = sub
+
+    # Targets no longer monitored: close any open history row, no recovery message.
+    for url, sub in old.items():
+        if url not in subs and sub.get("state") == "FIRING":
+            await _close_log(sub.get("log_id"), {"resolved_reason": "target no longer monitored"})
+
+    firing = sum(1 for x in subs.values() if x.get("state") == "FIRING")
+    pending = sum(1 for x in subs.values() if x.get("state") == "PENDING")
+    if firing:
+        state.state = "FIRING"
+    elif pending:
+        state.state = "PENDING"
+    else:
+        state.state = "RESOLVED" if prev_rule_state == "FIRING" else "INACTIVE"
+    state.session_state = subs  # new dict → JSONB change is detected
+    state.last_value = float(firing)
+    state.last_evaluated_at = now
+    state.last_read_degraded = False
+    state.pending_since = None
+    if state.state != prev_rule_state:
+        state.last_state_change_at = now
+    await db.commit()
+
+
 async def _evaluate_composite_rule(
     rule: AlertRule, group_cache: dict | None = None
 ) -> tuple[float | None, bool, dict | None]:
@@ -1342,15 +1590,36 @@ async def _stamp_sent_payloads(
                     "results": sent_results,
                     "sent_at": sent_at,
                 }
-                row = (await db.execute(
-                    select(AlertLog).where(AlertLog.rule_id == rule.id)
-                    .order_by(AlertLog.fired_at.desc()).limit(1)
-                )).scalar_one_or_none()
+                # Ping per-target entries know their own history row; others use the latest.
+                log_id = getattr(rule, "_alert_log_id", None)
+                if log_id:
+                    row = await db.get(AlertLog, log_id)
+                else:
+                    row = (await db.execute(
+                        select(AlertLog).where(AlertLog.rule_id == rule.id)
+                        .order_by(AlertLog.fired_at.desc()).limit(1)
+                    )).scalar_one_or_none()
                 if row is not None:
                     row.sent_payloads = {**(row.sent_payloads or {}), key: payload}
             await db.commit()
     except Exception as e:
         logger.warning("sent_payloads stamp failed: %s", e)
+
+
+async def _dispatch_notifications(notify_queue: list[tuple[AlertRule, float, str, datetime]]) -> None:
+    """Send this tick's notifications.
+
+    Ping alerts go out as ONE message per target (decided 2026-11-25): each entry is
+    flushed on its own, so two targets going down in the same tick are two Telegram
+    messages, not two blocks in one. Every other source keeps the P7 grouped digest.
+    Both paths share _flush_batch_notify (templates, per-topic routing, history stamp).
+    """
+    ping = [e for e in notify_queue if e[0].data_source == "ping"]
+    grouped = [e for e in notify_queue if e[0].data_source != "ping"]
+    if grouped:
+        await _flush_batch_notify(grouped)
+    for entry in ping:
+        await _flush_batch_notify([entry])
 
 
 async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, datetime]]) -> None:
@@ -1457,6 +1726,7 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
         # Friendly target name (interface / SD-WAN link / device / appid filter) from eval time.
         target_name = getattr(rule, "_target_name", None)
         eff_target_key = drv.get("target_key") if drv else rule.target_key
+        _ping: dict = getattr(rule, "_ping", None) or {}
         # appid_flow scoping, broken out so a template can show app / protocol / port separately.
         appid_f = _appid_filter_for(rule) or {}
         filter_app = appid_f.get("app")
@@ -1657,6 +1927,11 @@ async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, da
                 "vpn_over_users_text": vpn_over_users_text,
                 "metric_mb": metric_mb,
                 "threshold_mb": threshold_mb,
+                # Ping target reading (None for non-ping rules):
+                "ping_url": _ping.get("url"),
+                "ping_loss_pct": _ping.get("loss_pct"),
+                "ping_avg_ms": _ping.get("avg_ms"),
+                "ping_last_ok_at": _ping.get("last_ok_at"),
                 "data_source": rule.data_source,
                 "aggregation": rule.aggregation,
                 "fired_at": fired_str,
@@ -2562,6 +2837,13 @@ async def _run_evaluation_cycle() -> None:
                 try:
                     key = _group_key(rule)
                     group_result = group_cache.get(key)
+                    # Ping "*" = every monitored target, one lifecycle + message per target.
+                    if rule.data_source == "ping" and (rule.target_key or "*") == "*":
+                        if not isinstance(group_result, dict):
+                            await _mark_held(rule, db)
+                        else:
+                            await _evaluate_ping_multi(rule, group_result, db, notify_queue)
+                        continue
                     scan = _scan_descriptor_for(rule)
                     metric_value = _extract_per_rule_value(rule, group_result)
                     if metric_value is None:
@@ -2583,6 +2865,9 @@ async def _run_evaluation_cycle() -> None:
                     else:
                         rule._target_name = _resolve_target_name(
                             rule.data_source, rule.site_name, rule.target_key, group_result)
+                    # Ping: the target's url + current reading for the notification template.
+                    if rule.data_source == "ping" and isinstance(group_result, dict):
+                        rule._ping = _ping_ctx(rule.target_key or "", group_result.get(rule.target_key or ""))
                     # VPN usage summary {count,total_bytes,top_user_bytes} for the notification.
                     rule._vpn_usage = (
                         group_result if rule.data_source in ("vpn_ssl", "vpn_ipsec")
@@ -2637,9 +2922,9 @@ async def _run_evaluation_cycle() -> None:
                     logger.error("Error evaluating composite rule %s (%s): %s", rule.id, rule.name, e)
                     await db.rollback()
 
-            # ── 3. Flush batched notifications (P7 grouping) ──
+            # ── 3. Flush notifications (P7 grouping; ping = one message per target) ──
             if notify_queue:
-                await _flush_batch_notify(notify_queue)
+                await _dispatch_notifications(notify_queue)
 
             # ── 4. VPN session monitors (event-on-change, sent inline per event) ──
             for rule in session_rules:

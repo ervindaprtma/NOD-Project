@@ -800,3 +800,49 @@ class DeviceOverride(Base):
     source_ip: Mapped[str] = mapped_column(String(45), primary_key=True)
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     iface_overrides: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Ping Monitor (plans/2026-10-21_ping-monitor.md §2)
+# Curated ICMP targets. Live metrics come from telegraf measurement=ping in
+# OpenSearch at request time; this table only stores which (cluster, url) pairs
+# are monitored plus admin display metadata.
+# ─────────────────────────────────────────────────────────────────
+
+
+class PingTarget(Base):
+    """A curated ping target. Identity = (url, cluster); both fixed after create."""
+    __tablename__ = "ping_targets"
+    __table_args__ = (UniqueConstraint("url", "cluster", name="uq_ping_targets_url_cluster"),)
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=_new_uuid
+    )
+    url: Mapped[str] = mapped_column(
+        String(253), nullable=False, comment="telegraf tag.url (IP or DNS name)"
+    )
+    cluster: Mapped[str] = mapped_column(
+        String(8), nullable=False, comment="OpenSearch cluster that reports it: dc | drc"
+    )
+    display_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, comment="Admin-set name; NULL = tag.target_name / url"
+    )
+    group_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="internal", comment="internal | internet | dr"
+    )
+    expected_down: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+        comment="Inactive DR link: shown slate, excluded from incident counts",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    created_by: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), onupdate=_utcnow, nullable=False
+    )
