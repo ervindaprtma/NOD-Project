@@ -1606,6 +1606,22 @@ async def _stamp_sent_payloads(
         logger.warning("sent_payloads stamp failed: %s", e)
 
 
+async def _dispatch_notifications(notify_queue: list[tuple[AlertRule, float, str, datetime]]) -> None:
+    """Send this tick's notifications.
+
+    Ping alerts go out as ONE message per target (decided 2026-11-25): each entry is
+    flushed on its own, so two targets going down in the same tick are two Telegram
+    messages, not two blocks in one. Every other source keeps the P7 grouped digest.
+    Both paths share _flush_batch_notify (templates, per-topic routing, history stamp).
+    """
+    ping = [e for e in notify_queue if e[0].data_source == "ping"]
+    grouped = [e for e in notify_queue if e[0].data_source != "ping"]
+    if grouped:
+        await _flush_batch_notify(grouped)
+    for entry in ping:
+        await _flush_batch_notify([entry])
+
+
 async def _flush_batch_notify(notify_queue: list[tuple[AlertRule, float, str, datetime]]) -> None:
     """Send batched notifications — one grouped message per channel (P7).
 
@@ -2906,9 +2922,9 @@ async def _run_evaluation_cycle() -> None:
                     logger.error("Error evaluating composite rule %s (%s): %s", rule.id, rule.name, e)
                     await db.rollback()
 
-            # ── 3. Flush batched notifications (P7 grouping) ──
+            # ── 3. Flush notifications (P7 grouping; ping = one message per target) ──
             if notify_queue:
-                await _flush_batch_notify(notify_queue)
+                await _dispatch_notifications(notify_queue)
 
             # ── 4. VPN session monitors (event-on-change, sent inline per event) ──
             for rule in session_rules:
